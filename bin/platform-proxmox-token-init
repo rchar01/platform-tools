@@ -1,0 +1,563 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+info() { printf '[INFO] %s\n' "$*"; }
+ok() { printf '[OK] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+die() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-proxmox-token-init [options]
+
+Bootstrap the Proxmox API user and token expected by platform OpenTofu runs.
+
+Run locally on a Proxmox host, or use --ssh to run the Proxmox pveum work over
+SSH from an operator workstation.
+
+Automatic token-file writing requires jq on the Proxmox host so the one-time
+token secret can be parsed safely from pveum JSON output.
+
+Options:
+  --ssh <user@host>          SSH target for the Proxmox host.
+  --write-token-file <path>  Write a newly generated token line to this
+                             local file with mode 600. Refuses to overwrite
+                             a non-empty file unless --force is set.
+  --force                    Allow --write-token-file to overwrite a
+                             non-empty local token file.
+  --check                    Check local and Proxmox host prerequisites
+                             without creating users, tokens, or ACLs.
+  --proxmox-user <userid>    Proxmox API user ID. Default: tofu@pve
+  --user <userid>            Alias for --proxmox-user.
+  --token-id <id>            Proxmox token ID. Default: platform
+  --role <role>              Initial role to grant. Default: Administrator
+  --path <acl-path>          ACL path to grant. Default: /
+  --comment <text>           User comment. Default: OpenTofu automation user
+  -h, --help                 Show this help.
+
+Proxmox only shows a token secret when the token is created. If the token
+already exists, this tool cannot recover the existing secret.
+USAGE
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+expand_path() {
+  case $1 in
+    \~) printf '%s\n' "$HOME" ;;
+    \~/*) printf '%s/%s\n' "$HOME" "${1:2}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+resolve_self_path() {
+  case ${BASH_SOURCE[0]} in
+    */*)
+      [[ -r "${BASH_SOURCE[0]}" ]] || return 1
+      printf '%s\n' "${BASH_SOURCE[0]}"
+      ;;
+    *)
+      command -v -- "${BASH_SOURCE[0]}" 2>/dev/null || return 1
+      ;;
+  esac
+}
+
+quote_remote_command() {
+  printf '%q ' "$@"
+}
+
+sanitize_remote_output() {
+  local line
+
+  while IFS= read -r line; do
+    case $line in
+      PLATFORM_PROXMOX_TOKEN_LINE=*)
+        printf '%s\n' 'PLATFORM_PROXMOX_TOKEN_LINE=<redacted>'
+        ;;
+      *)
+        printf '%s\n' "$line"
+        ;;
+    esac
+  done
+}
+
+write_token_file() {
+  local path=$1
+  local token_line=$2
+  local dir
+
+  path=$(expand_path "$path")
+  dir=$(dirname -- "$path")
+
+  if [[ -s "$path" && "$FORCE" != 'true' ]]; then
+    die "Refusing to overwrite non-empty token file: $path. Use --force to replace it."
+  fi
+
+  if [[ "$dir" != '.' ]]; then
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+  fi
+  umask 077
+  printf '%s\n' "$token_line" >"$path"
+  chmod 600 "$path"
+  ok "Wrote token to $path"
+}
+
+preflight_token_file() {
+  local path=$1
+  local dir
+
+  path=$(expand_path "$path")
+  dir=$(dirname -- "$path")
+
+  if [[ -s "$path" && "$FORCE" != 'true' ]]; then
+    die "Refusing to overwrite non-empty token file before creating a new Proxmox token: $path. Use --force to replace it."
+  fi
+
+  if [[ "$dir" != '.' ]]; then
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+  fi
+}
+
+extract_token_line() {
+  local line
+
+  while IFS= read -r line; do
+    case $line in
+      PLATFORM_PROXMOX_TOKEN_LINE=*)
+        printf '%s\n' "${line#PLATFORM_PROXMOX_TOKEN_LINE=}"
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+validate_generated_token() {
+  local full_token=$1
+  local secret=$2
+  local expected_token="${PROXMOX_USER}!${TOKEN_ID}"
+
+  if [[ "$full_token" != "$expected_token" ]]; then
+    die "Generated Proxmox token ID mismatch; expected ${expected_token}, got ${full_token}"
+  fi
+
+  if [[ ! "$secret" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    die "Generated Proxmox token secret has unexpected shape; refusing to use it. Expected UUID-shaped secret with 36 characters; actual length: ${#secret} characters."
+  fi
+}
+
+check_error() {
+  printf '[ERROR] %s\n' "$*" >&2
+  MISSING=1
+}
+
+check_local_command() {
+  local command_name=$1
+
+  if command_exists "$command_name"; then
+    ok "Local command available: $command_name"
+  else
+    check_error "Local command missing: $command_name"
+  fi
+}
+
+check_local_token_file() {
+  local path=$1
+  local dir existing_dir
+
+  path=$(expand_path "$path")
+  dir=$(dirname -- "$path")
+
+  if [[ -s "$path" && "$FORCE" != 'true' ]]; then
+    check_error "Local token file is non-empty and would not be overwritten without --force: $path"
+    return 0
+  fi
+
+  if [[ -e "$path" && ! -w "$path" ]]; then
+    check_error "Local token file is not writable: $path"
+    return 0
+  fi
+
+  if [[ "$dir" == '.' ]]; then
+    existing_dir='.'
+  else
+    existing_dir=$dir
+    while [[ ! -d "$existing_dir" && "$existing_dir" != '/' && "$existing_dir" != '.' ]]; do
+      existing_dir=$(dirname -- "$existing_dir")
+    done
+  fi
+
+  if [[ -d "$existing_dir" && -w "$existing_dir" ]]; then
+    ok "Local token file target is writable: $path"
+  else
+    check_error "Local token file parent is not writable: $path"
+  fi
+}
+
+check_local_proxmox_requirements() {
+  if [[ -d /etc/pve ]]; then
+    ok 'Local Proxmox marker found: /etc/pve'
+  else
+    check_error 'Local Proxmox marker missing: /etc/pve'
+  fi
+
+  check_local_command pveum
+
+  if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+    check_local_command jq
+  fi
+}
+
+check_remote_proxmox_requirements() {
+  local require_jq remote_cmd
+
+  command_exists ssh || die 'ssh is required for --ssh'
+  require_jq='false'
+  if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+    require_jq='true'
+  fi
+
+  info "Checking SSH access and Proxmox prerequisites on $SSH_TARGET"
+  remote_cmd=$(quote_remote_command bash -s -- "$require_jq")
+
+  # remote_cmd is intentionally assembled and shell-quoted on the client side.
+  # shellcheck disable=SC2029
+  if ssh "$SSH_TARGET" "$remote_cmd" <<'REMOTE_CHECK'
+set -u
+require_jq=${1:-false}
+missing=0
+
+ok() { printf '[OK] Remote %s\n' "$*"; }
+error() { printf '[ERROR] Remote %s\n' "$*" >&2; missing=1; }
+
+check_command() {
+  if command -v "$1" >/dev/null 2>&1; then
+    ok "command available: $1"
+  else
+    error "command missing: $1"
+  fi
+}
+
+if test -d /etc/pve; then
+  ok 'Proxmox marker found: /etc/pve'
+else
+  error 'Proxmox marker missing: /etc/pve'
+fi
+
+check_command bash
+check_command pveum
+
+if [ "$require_jq" = 'true' ]; then
+  check_command jq
+fi
+
+exit "$missing"
+REMOTE_CHECK
+  then
+    ok "Remote prerequisite check passed on $SSH_TARGET"
+  else
+    check_error "Remote prerequisite check failed on $SSH_TARGET"
+  fi
+}
+
+run_checks() {
+  MISSING=0
+
+  if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+    info 'Check mode: automatic token-file workflow'
+    info 'Remote jq is required because --write-token-file needs parsed pveum JSON output'
+  else
+    info 'Check mode: manual token output workflow'
+    info 'Remote jq is optional because the generated token can be copied from pveum output'
+  fi
+
+  if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+    check_local_token_file "$WRITE_TOKEN_FILE"
+  fi
+
+  if [[ -n "$SSH_TARGET" ]]; then
+    check_local_command ssh
+    check_remote_proxmox_requirements
+  else
+    check_local_proxmox_requirements
+  fi
+
+  if [[ "$MISSING" -ne 0 ]]; then
+    die 'One or more Proxmox token prerequisites are missing'
+  fi
+
+  ok 'Proxmox token prerequisite check complete'
+}
+
+run_over_ssh() {
+  local self_path remote_cmd remote_output status token_line
+  local -a remote_args
+
+  command_exists ssh || die 'ssh is required for --ssh'
+  self_path=$(resolve_self_path) || die 'Could not locate this script to stream it over SSH'
+
+  remote_args=(
+    --proxmox-user "$PROXMOX_USER"
+    --token-id "$TOKEN_ID"
+    --role "$ROLE"
+    --path "$ACL_PATH"
+    --comment "$COMMENT"
+  )
+
+  if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+    preflight_token_file "$WRITE_TOKEN_FILE"
+    remote_args+=(--emit-token-line)
+  fi
+
+  remote_cmd=$(quote_remote_command bash -s -- "${remote_args[@]}")
+
+  if [[ -z "$WRITE_TOKEN_FILE" ]]; then
+    info "Running Proxmox token bootstrap over SSH: $SSH_TARGET"
+    # remote_cmd is intentionally assembled and shell-quoted on the client side.
+    # shellcheck disable=SC2029
+    ssh "$SSH_TARGET" "$remote_cmd" <"$self_path"
+    return 0
+  fi
+
+  info "Running Proxmox token bootstrap over SSH: $SSH_TARGET"
+  set +e
+  # remote_cmd is intentionally assembled and shell-quoted on the client side.
+  # shellcheck disable=SC2029
+  remote_output=$(ssh "$SSH_TARGET" "$remote_cmd" <"$self_path" 2>&1)
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    printf '%s\n' "$remote_output" | sanitize_remote_output >&2
+    die "Remote Proxmox token bootstrap failed on $SSH_TARGET"
+  fi
+
+  token_line=$(printf '%s\n' "$remote_output" | extract_token_line || true)
+
+  if [[ -z "$token_line" ]]; then
+    printf '%s\n' "$remote_output" | sanitize_remote_output
+    warn "Nothing was written to $WRITE_TOKEN_FILE. The token may already exist, or the remote host could not emit the generated secret."
+    return 0
+  fi
+
+  write_token_file "$WRITE_TOKEN_FILE" "$token_line"
+}
+
+PROXMOX_USER='tofu@pve'
+TOKEN_ID='platform'
+ROLE='Administrator'
+ACL_PATH='/'
+COMMENT='OpenTofu automation user'
+PRIVSEP='0'
+SSH_TARGET=''
+WRITE_TOKEN_FILE=''
+FORCE='false'
+CHECK_ONLY='false'
+EMIT_TOKEN_LINE='false'
+GENERATED_TOKEN_LINE=''
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --ssh)
+      [[ $# -ge 2 ]] || die '--ssh requires a value'
+      SSH_TARGET=$2
+      shift 2
+      ;;
+    --write-token-file)
+      [[ $# -ge 2 ]] || die '--write-token-file requires a value'
+      WRITE_TOKEN_FILE=$2
+      shift 2
+      ;;
+    --force)
+      FORCE='true'
+      shift
+      ;;
+    --check)
+      CHECK_ONLY='true'
+      shift
+      ;;
+    --proxmox-user|--user)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      PROXMOX_USER=$2
+      shift 2
+      ;;
+    --token-id)
+      [[ $# -ge 2 ]] || die '--token-id requires a value'
+      TOKEN_ID=$2
+      shift 2
+      ;;
+    --role)
+      [[ $# -ge 2 ]] || die '--role requires a value'
+      ROLE=$2
+      shift 2
+      ;;
+    --path)
+      [[ $# -ge 2 ]] || die '--path requires a value'
+      ACL_PATH=$2
+      shift 2
+      ;;
+    --comment)
+      [[ $# -ge 2 ]] || die '--comment requires a value'
+      COMMENT=$2
+      shift 2
+      ;;
+    --emit-token-line)
+      EMIT_TOKEN_LINE='true'
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$PROXMOX_USER" ]] || die '--proxmox-user cannot be empty'
+[[ -n "$TOKEN_ID" ]] || die '--token-id cannot be empty'
+[[ -n "$ROLE" ]] || die '--role cannot be empty'
+[[ -n "$ACL_PATH" ]] || die '--path cannot be empty'
+
+if [[ "$CHECK_ONLY" == 'true' ]]; then
+  run_checks
+  exit 0
+fi
+
+if [[ -n "$SSH_TARGET" ]]; then
+  run_over_ssh
+  exit 0
+fi
+
+if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+  preflight_token_file "$WRITE_TOKEN_FILE"
+fi
+
+command_exists pveum || die 'pveum is required; run this on a Proxmox host, or use --ssh from an operator workstation'
+
+user_exists() {
+  local output
+
+  if command_exists jq && output=$(pveum user list --output-format json 2>/dev/null); then
+    if printf '%s\n' "$output" | jq -e --arg user "$PROXMOX_USER" '.[] | select(.userid == $user)' >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  output=$(pveum user list 2>/dev/null || true)
+  awk -v user="$PROXMOX_USER" 'index($0, user) { found = 1 } END { exit found ? 0 : 1 }' <<<"$output"
+}
+
+token_exists() {
+  local output
+
+  if command_exists jq && output=$(pveum user token list "$PROXMOX_USER" --output-format json 2>/dev/null); then
+    if printf '%s\n' "$output" | jq -e --arg token "$TOKEN_ID" '.[] | select((.tokenid? == $token) or (.id? == $token) or (."token-id"? == $token))' >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  output=$(pveum user token list "$PROXMOX_USER" 2>/dev/null || true)
+  awk -v token="$TOKEN_ID" 'index($0, token) { found = 1 } END { exit found ? 0 : 1 }' <<<"$output"
+}
+
+ensure_user() {
+  if user_exists; then
+    ok "User already exists: $PROXMOX_USER"
+    return 0
+  fi
+
+  info "Creating Proxmox user: $PROXMOX_USER"
+  pveum user add "$PROXMOX_USER" --comment "$COMMENT"
+  ok "Created user: $PROXMOX_USER"
+}
+
+create_token() {
+  local output full_token value
+
+  info "Creating Proxmox token: ${PROXMOX_USER}!${TOKEN_ID}"
+
+  if ! command_exists jq; then
+    if [[ "$EMIT_TOKEN_LINE" == 'true' || -n "$WRITE_TOKEN_FILE" ]]; then
+      die 'jq is required when capturing the generated token line automatically'
+    fi
+
+    pveum user token add "$PROXMOX_USER" "$TOKEN_ID" --privsep "$PRIVSEP"
+    ok "Created token: ${PROXMOX_USER}!${TOKEN_ID}"
+    warn 'Install jq before running this helper if you want it to write the token file automatically.'
+    return 0
+  fi
+
+  if ! output=$(pveum user token add "$PROXMOX_USER" "$TOKEN_ID" --privsep "$PRIVSEP" --output-format json 2>&1); then
+    printf '%s\n' "$output" >&2
+    die "Failed to create token: ${PROXMOX_USER}!${TOKEN_ID}"
+  fi
+
+  full_token=$(printf '%s\n' "$output" | jq -r '."full-tokenid" // empty' 2>/dev/null || true)
+  value=$(printf '%s\n' "$output" | jq -r '.value // empty' 2>/dev/null || true)
+
+  if [[ -z "$full_token" || -z "$value" ]]; then
+    warn 'Created the token, but could not parse the generated secret from pveum JSON output.'
+    warn 'Refusing to print raw pveum output because it may contain the one-time token secret.'
+    return 0
+  fi
+
+  validate_generated_token "$full_token" "$value"
+  GENERATED_TOKEN_LINE="${full_token}=${value}"
+  ok "Created token: $full_token"
+
+  if [[ "$EMIT_TOKEN_LINE" == 'true' ]]; then
+    printf 'PLATFORM_PROXMOX_TOKEN_LINE=%s\n' "$GENERATED_TOKEN_LINE"
+    return 0
+  fi
+
+  if [[ -z "$WRITE_TOKEN_FILE" ]]; then
+    printf '\nGenerated token line:\n\n'
+    printf '  %s\n' "$GENERATED_TOKEN_LINE"
+  fi
+}
+
+ensure_acl() {
+  info "Granting ${ROLE} on ${ACL_PATH} to ${PROXMOX_USER}"
+  pveum aclmod "$ACL_PATH" -user "$PROXMOX_USER" -role "$ROLE"
+  ok "Granted ${ROLE} on ${ACL_PATH} to ${PROXMOX_USER}"
+}
+
+ensure_user
+
+if token_exists; then
+  warn "Token ${PROXMOX_USER}!${TOKEN_ID} already exists. Proxmox cannot show the existing secret."
+  warn 'Delete and recreate the token if you lost the token secret.'
+else
+  create_token
+fi
+
+ensure_acl
+
+if [[ -n "$WRITE_TOKEN_FILE" ]]; then
+  if [[ -n "$GENERATED_TOKEN_LINE" ]]; then
+    write_token_file "$WRITE_TOKEN_FILE" "$GENERATED_TOKEN_LINE"
+  else
+    warn "Nothing was written to $WRITE_TOKEN_FILE. Proxmox did not provide a newly generated token secret."
+  fi
+else
+  cat <<EOF
+
+Next step:
+
+  Copy the generated token line into:
+
+    ~/.config/platform-infrastructure/infra/proxmox.token
+
+The file should contain one raw line like:
+
+  ${PROXMOX_USER}!${TOKEN_ID}=TOKEN_SECRET
+
+EOF
+fi

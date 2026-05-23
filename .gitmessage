@@ -1,0 +1,66 @@
+
+
+# ==================================================
+# Installed by git-tools (v1.2.2)
+# Managed file: safe to replace by running bin/git-tools again.
+# ==================================================
+#
+# <type>(<scope>)!: <subject>
+#
+# <body>
+#
+# <footer>
+#
+# --------------------------------------------------
+# SUBJECT
+# - Imperative mood
+# - Use recommended verbs (see list below)
+# - Full header/title max 68 characters
+# - Subject text max 50 characters
+# - Capitalize first letter
+# - No trailing period
+#
+# BREAKING CHANGES
+# - Add "!" after type or scope for incompatible changes
+# - Describe migration in footer:
+#   BREAKING CHANGE: <details>
+#
+# BODY
+# - Explain WHY this change is needed
+# - Describe impact, risks, trade-offs
+# - Wrap at 72 characters
+#
+# FOOTER (optional)
+# - BREAKING CHANGE: <details>
+# - Closes: #issue
+# - Refs: #issue / PR
+# - Co-authored-by: Name <email>
+#
+# --------------------------------------------------
+# TYPES
+# feat:     new feature
+# fix:      bug fix
+# refactor: restructure without behavior change
+# perf:     performance improvement
+# docs:     documentation only
+# test:     tests
+# build:    build system / dependencies
+# ci:       CI/CD changes
+# chore:    maintenance
+# style:    formatting only
+# revert:   revert commit
+#
+# --------------------------------------------------
+# RECOMMENDED VERBS
+# add remove fix update improve refactor simplify
+# rename migrate revert bump pin enable disable
+# configure provision optimize
+#
+# --------------------------------------------------
+# One commit = one logical change
+#
+#
+# ==================================================
+# Git status appears below.
+# ==================================================
+#

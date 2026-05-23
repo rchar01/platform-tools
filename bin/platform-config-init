@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+info() { printf '[INFO] %s\n' "$*"; }
+ok() { printf '[OK] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+die() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-config-init [options]
+
+Create the local platform secret namespace outside Git.
+
+Options:
+  --config-dir <path>  Config directory to create.
+                       Default: ${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure
+  -h, --help           Show this help.
+
+Created layout:
+  README.md
+  infra/
+  config/
+
+Existing README.md is not overwritten. Directories are chmod 700 and README.md is
+chmod 600.
+USAGE
+}
+
+expand_path() {
+  case $1 in
+    \~) printf '%s\n' "$HOME" ;;
+    \~/*) printf '%s/%s\n' "$HOME" "${1:2}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+default_config_dir() {
+  printf '%s/platform-infrastructure\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+write_if_missing() {
+  local path=$1
+  local content_name=$2
+
+  if [[ -e "$path" ]]; then
+    chmod 600 "$path"
+    info "Kept existing file: $path"
+    return 0
+  fi
+
+  "$content_name" >"$path"
+  chmod 600 "$path"
+  ok "Created $path"
+}
+
+ensure_secret_dir() {
+  local path=$1
+
+  mkdir -p "$path"
+  chmod 700 "$path"
+  ok "Namespace directory ready: $path"
+}
+
+content_readme() {
+  cat <<'EOF'
+# Platform Infrastructure Local Config
+
+This directory stores local platform secret material that must stay outside Git.
+
+Shared namespaces:
+
+- `infra/`: OpenTofu and infrastructure bootstrap secrets, for example tokens.
+- `config/`: Ansible and service secrets, for example certs, keys, kubeconfigs, and passwords.
+
+This initializer creates only the shared root namespaces. Each downstream platform project or helper owns its concrete secret subdirectories and files.
+
+Common environment variable:
+
+```bash
+export PLATFORM_INFRASTRUCTURE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/config"
+```
+
+Usage example:
+
+```bash
+tofu plan -var-file=../../../platform-private/infra/production.tfvars
+```
+
+Store the Proxmox token as one raw line in `infra/proxmox.token`. Do not export the token into the shell session unless a downstream tool explicitly requires it.
+
+Do not commit real values from this directory into any `platform-*` repository.
+
+Private but non-secret operator config belongs in private Git, for example `platform-private`.
+EOF
+}
+
+CONFIG_DIR=$(default_config_dir)
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --config-dir)
+      [[ $# -ge 2 ]] || die '--config-dir requires a value'
+      CONFIG_DIR=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+CONFIG_DIR=$(expand_path "$CONFIG_DIR")
+
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+ok "Config directory ready: $CONFIG_DIR"
+
+ensure_secret_dir "$CONFIG_DIR/config"
+ensure_secret_dir "$CONFIG_DIR/infra"
+
+write_if_missing "$CONFIG_DIR/README.md" content_readme
+
+for legacy_path in \
+  "$CONFIG_DIR/proxmox-token" \
+  "$CONFIG_DIR/codeberg.env" \
+  "$CONFIG_DIR/ansible.env" \
+  "$CONFIG_DIR/backup.env" \
+  "$CONFIG_DIR/proxmox.env"; do
+  if [[ -e "$legacy_path" ]]; then
+    warn "Legacy path exists and was left unchanged: $legacy_path"
+  fi
+done
+
+cat <<EOF
+
+Next steps:
+
+  1. Let each downstream project/helper create its own files under:
+
+        $CONFIG_DIR
+
+  2. Write the Proxmox token through the Proxmox helper when needed:
+
+        platform-proxmox-token-init --write-token-file "$CONFIG_DIR/infra/proxmox.token" --ssh root@<proxmox-ip>
+
+  3. Run the downstream platform command, for example:
+
+       tofu plan -var-file=../../../platform-private/infra/production.tfvars
+
+EOF

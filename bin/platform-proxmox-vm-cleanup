@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+info() { printf '[INFO] %s\n' "$*"; }
+ok() { printf '[OK] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+die() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-proxmox-vm-cleanup --vmid <vmid> [options]
+
+Safely stop and destroy exactly one Proxmox VM by VMID.
+
+Run locally on a Proxmox host, or use --ssh to run the Proxmox qm work over
+SSH from an operator workstation.
+
+Options:
+  --vmid <vmid>           Required numeric Proxmox VMID to destroy.
+  --ssh <user@host>       SSH target for the Proxmox host.
+  --identity-file <path>  SSH private key for --ssh.
+  --name <vm-name>        Optional safety guard; abort unless qm config name
+                          matches this exact value.
+  --yes                   Skip the interactive VMID confirmation prompt.
+  -h, --help              Show this help.
+
+This tool never cleans by name, pattern, tag, range, or state. It only destroys
+the single VMID provided by --vmid.
+USAGE
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+expand_path() {
+  case $1 in
+    \~) printf '%s\n' "$HOME" ;;
+    \~/*) printf '%s/%s\n' "$HOME" "${1:2}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+resolve_self_path() {
+  case ${BASH_SOURCE[0]} in
+    */*)
+      [[ -r "${BASH_SOURCE[0]}" ]] || return 1
+      printf '%s\n' "${BASH_SOURCE[0]}"
+      ;;
+    *)
+      command -v -- "${BASH_SOURCE[0]}" 2>/dev/null || return 1
+      ;;
+  esac
+}
+
+quote_remote_command() {
+  printf '%q ' "$@"
+}
+
+validate_vmid() {
+  [[ -n "$VMID" ]] || die '--vmid is required'
+  [[ "$VMID" =~ ^[0-9]+$ ]] || die "--vmid must be numeric: $VMID"
+}
+
+confirm_cleanup() {
+  local confirmation
+
+  if [[ "$ASSUME_YES" == 'true' ]]; then
+    return 0
+  fi
+
+  printf 'Type VMID %s to destroy: ' "$VMID"
+  read -r confirmation
+  if [[ "$confirmation" != "$VMID" ]]; then
+    die 'Confirmation did not match; cleanup aborted'
+  fi
+}
+
+require_proxmox_host() {
+  command_exists qm || die 'qm is required; run on a Proxmox host, or use --ssh from an operator workstation'
+}
+
+vm_exists() {
+  qm status "$VMID" >/dev/null 2>&1
+}
+
+vm_name() {
+  qm config "$VMID" | awk -F ': ' '$1 == "name" { print $2; exit }'
+}
+
+check_name_guard() {
+  local actual_name
+
+  [[ -n "$EXPECTED_NAME" ]] || return 0
+
+  actual_name=$(vm_name)
+  [[ -n "$actual_name" ]] || die "VMID ${VMID} has no name in qm config"
+  if [[ "$actual_name" != "$EXPECTED_NAME" ]]; then
+    die "VMID ${VMID} name mismatch: expected '${EXPECTED_NAME}', got '${actual_name}'"
+  fi
+}
+
+print_target() {
+  info "Checking VMID ${VMID}"
+  vm_exists || die "VMID ${VMID} does not exist"
+
+  check_name_guard
+
+
+  warn "Target for cleanup: VMID ${VMID}"
+  qm config "$VMID"
+}
+
+destroy_supports_unreferenced_disks() {
+  local output
+
+  output=$(qm destroy 2>&1 || true)
+  [[ "$output" == *--destroy-unreferenced-disks* ]]
+}
+
+stop_if_running() {
+  if qm status "$VMID" | grep -Eq '^status:[[:space:]]+running$'; then
+    warn "Force-stopping running VMID ${VMID} before destroy"
+    qm stop "$VMID"
+  fi
+}
+
+destroy_vm() {
+  stop_if_running
+
+  warn "Destroying VMID ${VMID} with purge enabled"
+  if destroy_supports_unreferenced_disks; then
+    qm destroy "$VMID" --purge --destroy-unreferenced-disks 1
+  else
+    warn 'qm destroy does not support --destroy-unreferenced-disks on this Proxmox version; using --purge only'
+    qm destroy "$VMID" --purge
+  fi
+
+  ok "Destroyed VMID ${VMID}"
+}
+
+run_local() {
+  require_proxmox_host
+  print_target
+
+  if [[ "$REMOTE_INSPECT" == 'true' ]]; then
+    return 0
+  fi
+
+  confirm_cleanup
+  destroy_vm
+}
+
+run_remote() {
+  local mode=$1
+  local self_path remote_cmd
+  local -a ssh_args
+  local -a remote_args
+
+  command_exists ssh || die 'ssh is required for --ssh'
+  self_path=$(resolve_self_path) || die 'Could not locate this script to stream it over SSH'
+  ssh_args=()
+
+  if [[ -n "$IDENTITY_FILE" ]]; then
+    IDENTITY_FILE=$(expand_path "$IDENTITY_FILE")
+    [[ -f "$IDENTITY_FILE" ]] || die "SSH identity file not found: $IDENTITY_FILE"
+    ssh_args=(-i "$IDENTITY_FILE" -o IdentitiesOnly=yes)
+  fi
+
+  remote_args=(--vmid "$VMID")
+  if [[ -n "$EXPECTED_NAME" ]]; then
+    remote_args+=(--name "$EXPECTED_NAME")
+  fi
+
+  case $mode in
+    inspect) remote_args+=(--remote-inspect) ;;
+    destroy) remote_args+=(--remote-destroy) ;;
+    *) die "Unknown remote mode: $mode" ;;
+  esac
+
+  remote_cmd=$(quote_remote_command bash -s -- "${remote_args[@]}")
+
+  # remote_cmd is intentionally assembled and shell-quoted on the client side.
+  # shellcheck disable=SC2029
+  ssh "${ssh_args[@]}" "$SSH_TARGET" "$remote_cmd" <"$self_path"
+}
+
+run_over_ssh() {
+  info "Inspecting VMID ${VMID} on ${SSH_TARGET}"
+  run_remote inspect
+  confirm_cleanup
+  info "Destroying VMID ${VMID} on ${SSH_TARGET}"
+  run_remote destroy
+}
+
+VMID=''
+SSH_TARGET=''
+IDENTITY_FILE=''
+EXPECTED_NAME=''
+ASSUME_YES='false'
+REMOTE_INSPECT='false'
+REMOTE_DESTROY='false'
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --vmid)
+      [[ $# -ge 2 ]] || die '--vmid requires a value'
+      VMID=$2
+      shift 2
+      ;;
+    --ssh)
+      [[ $# -ge 2 ]] || die '--ssh requires a value'
+      SSH_TARGET=$2
+      shift 2
+      ;;
+    --identity-file)
+      [[ $# -ge 2 ]] || die '--identity-file requires a value'
+      IDENTITY_FILE=$2
+      shift 2
+      ;;
+    --name)
+      [[ $# -ge 2 ]] || die '--name requires a value'
+      EXPECTED_NAME=$2
+      shift 2
+      ;;
+    --yes)
+      ASSUME_YES='true'
+      shift
+      ;;
+    --remote-inspect)
+      REMOTE_INSPECT='true'
+      shift
+      ;;
+    --remote-destroy)
+      REMOTE_DESTROY='true'
+      ASSUME_YES='true'
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+validate_vmid
+
+if [[ "$REMOTE_INSPECT" == 'true' || "$REMOTE_DESTROY" == 'true' ]]; then
+  [[ -z "$SSH_TARGET" ]] || die '--ssh cannot be combined with internal remote modes'
+  run_local
+  exit 0
+fi
+
+if [[ -n "$SSH_TARGET" ]]; then
+  run_over_ssh
+else
+  run_local
+fi

@@ -1,0 +1,703 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Rocky Linux VM environment collector
+# Purpose:
+#   Collect enough system/application configuration to recreate a similar
+#   platform VM in a target Proxmox environment.
+#
+# Safety:
+#   - Redacts many common secrets by default.
+#   - Does NOT collect private keys, kube secrets, token files, SSH host keys,
+#     user shell histories, database dumps, container volumes, or registry data.
+#   - Kubernetes Secrets are not collected.
+#
+# Usage:
+#   sudo ./vm-env-collect.sh
+#
+# Optional:
+#   INCLUDE_SENSITIVE=1 sudo ./vm-env-collect.sh
+#   COLLECT_ENV=1 sudo ./vm-env-collect.sh
+#
+# Even with INCLUDE_SENSITIVE=1, review the archive before moving it outside
+# your company environment.
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-env-collect [options]
+
+Collect Rocky Linux VM facts into /tmp/vm-env-collect/.
+
+Options:
+  -h, --help  Show this help.
+
+Environment:
+  INCLUDE_SENSITIVE=1  Disable default redaction of obvious secrets.
+  COLLECT_ENV=1        Include the raw process environment. Disabled by default.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf '[ERROR] Unknown argument: %s\n' "$1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+SCRIPT_VERSION="1.0.0"
+RUN_TS="$(date +%Y%m%d-%H%M%S)"
+HOST_SHORT="$(hostname -s 2>/dev/null || echo unknown-host)"
+BASE_DIR="/tmp/vm-env-collect"
+OUT_DIR="${BASE_DIR}/rocky-vm-collect-${HOST_SHORT}-${RUN_TS}"
+ARCHIVE="${OUT_DIR}.tar.gz"
+INCLUDE_SENSITIVE="${INCLUDE_SENSITIVE:-0}"
+COLLECT_ENV="${COLLECT_ENV:-0}"
+
+case $INCLUDE_SENSITIVE in
+  0|1) ;;
+  *) printf '[ERROR] INCLUDE_SENSITIVE must be 0 or 1\n' >&2; exit 2 ;;
+esac
+
+case $COLLECT_ENV in
+  0|1) ;;
+  *) printf '[ERROR] COLLECT_ENV must be 0 or 1\n' >&2; exit 2 ;;
+esac
+
+mkdir -p "$OUT_DIR"/{system,network,storage,packages,services,security,containers,kubernetes,gitlab-runner,zot,configs,logs,meta}
+
+umask 077
+
+log() {
+  printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$OUT_DIR/meta/collector.log" >&2
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+run_cmd() {
+  local outfile="$1"
+  shift
+
+  {
+    echo "# Command: $*"
+    echo "# Timestamp: $(date --iso-8601=seconds)"
+    echo
+    "$@" 2>&1 || true
+  } > "$outfile"
+}
+
+copy_if_exists() {
+  local src="$1"
+  local dst_dir="$2"
+
+  if [[ -e "$src" ]]; then
+    mkdir -p "$dst_dir"
+    cp -a "$src" "$dst_dir/" 2>/dev/null || true
+  fi
+}
+
+copy_glob_if_exists() {
+  local pattern="$1"
+  local dst_dir="$2"
+
+  mkdir -p "$dst_dir"
+  compgen -G "$pattern" >/dev/null || return 0
+
+  # shellcheck disable=SC2086
+  cp -a $pattern "$dst_dir/" 2>/dev/null || true
+}
+
+redact_file_in_place() {
+  local file="$1"
+
+  [[ -f "$file" ]] || return 0
+
+  if [[ "$INCLUDE_SENSITIVE" == "1" ]]; then
+    return 0
+  fi
+
+  sed -Ei \
+    -e 's/(password[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(passwd[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(secret[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(token[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(api[_-]?key[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(access[_-]?key[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(secret[_-]?key[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    -e 's/(authorization:[[:space:]]*Bearer[[:space:]]+).*/\1<REDACTED>/Ig' \
+    -e 's/(client-secret[[:space:]]*[:=][[:space:]]*)[^[:space:]'\''"]+/\1<REDACTED>/Ig' \
+    "$file" 2>/dev/null || true
+}
+
+redact_tree() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+
+  find "$dir" -type f \
+    ! -name '*.db' \
+    ! -name '*.sqlite' \
+    ! -name '*.sqlite3' \
+    -size -10M \
+    -print0 2>/dev/null |
+    while IFS= read -r -d '' file; do
+      if file "$file" 2>/dev/null | grep -qiE 'text|json|yaml|xml|ini|shell|configuration|empty'; then
+        redact_file_in_place "$file"
+      fi
+    done
+}
+
+safe_copy_config_file() {
+  local src="$1"
+  local dst="$2"
+
+  [[ -f "$src" ]] || return 0
+
+  mkdir -p "$(dirname "$dst")"
+  cp -a "$src" "$dst" 2>/dev/null || true
+  redact_file_in_place "$dst"
+}
+
+write_note() {
+  local file="$1"
+  shift
+  {
+    echo "# Note"
+    echo "$*"
+  } > "$file"
+}
+
+if [[ "${EUID}" -ne 0 ]]; then
+  log "WARNING: not running as root. Some information will be incomplete."
+fi
+
+log "Starting Rocky VM environment collection"
+log "Output directory: $OUT_DIR"
+log "Sensitive collection enabled: $INCLUDE_SENSITIVE"
+
+###############################################################################
+# Metadata
+###############################################################################
+
+cat > "$OUT_DIR/meta/README.txt" <<EOF
+Rocky Linux VM environment collection
+
+Collector version: $SCRIPT_VERSION
+Hostname: $HOST_SHORT
+Timestamp: $RUN_TS
+Sensitive data included: $INCLUDE_SENSITIVE
+Environment collection enabled: $COLLECT_ENV
+
+This archive is intended as a rebuild reference for target platform environments.
+Review before sharing or moving outside the source environment.
+EOF
+
+if [[ "$COLLECT_ENV" == "1" ]]; then
+  run_cmd "$OUT_DIR/meta/collector-env.txt" env
+else
+  write_note "$OUT_DIR/meta/collector-env.txt" 'Environment collection skipped by default. Rerun with COLLECT_ENV=1 only after confirming the shell environment does not contain secrets.'
+fi
+run_cmd "$OUT_DIR/meta/date.txt" date --iso-8601=seconds
+
+###############################################################################
+# System identity and OS
+###############################################################################
+
+log "Collecting system identity and OS details"
+
+run_cmd "$OUT_DIR/system/hostnamectl.txt" hostnamectl
+run_cmd "$OUT_DIR/system/uname.txt" uname -a
+run_cmd "$OUT_DIR/system/os-release.txt" cat /etc/os-release
+run_cmd "$OUT_DIR/system/machine-id-status.txt" bash -c 'ls -l /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/uptime.txt" uptime
+run_cmd "$OUT_DIR/system/timedatectl.txt" timedatectl
+run_cmd "$OUT_DIR/system/localectl.txt" localectl
+run_cmd "$OUT_DIR/system/loginctl.txt" loginctl list-sessions
+run_cmd "$OUT_DIR/system/users-passwd.txt" getent passwd
+run_cmd "$OUT_DIR/system/groups.txt" getent group
+run_cmd "$OUT_DIR/system/sudoers-list.txt" bash -c 'ls -la /etc/sudoers /etc/sudoers.d 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/limits.txt" bash -c 'cat /etc/security/limits.conf /etc/security/limits.d/* 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/environment-files.txt" bash -c 'cat /etc/environment /etc/profile /etc/bashrc /etc/profile.d/* 2>/dev/null || true'
+
+safe_copy_config_file /etc/hostname "$OUT_DIR/configs/etc/hostname"
+safe_copy_config_file /etc/hosts "$OUT_DIR/configs/etc/hosts"
+safe_copy_config_file /etc/resolv.conf "$OUT_DIR/configs/etc/resolv.conf"
+safe_copy_config_file /etc/nsswitch.conf "$OUT_DIR/configs/etc/nsswitch.conf"
+safe_copy_config_file /etc/chrony.conf "$OUT_DIR/configs/etc/chrony.conf"
+
+copy_glob_if_exists "/etc/chrony.d/*" "$OUT_DIR/configs/etc/chrony.d"
+
+###############################################################################
+# Hardware / VM profile
+###############################################################################
+
+log "Collecting VM hardware profile"
+
+run_cmd "$OUT_DIR/system/cpu-lscpu.txt" lscpu
+run_cmd "$OUT_DIR/system/memory-free.txt" free -h
+run_cmd "$OUT_DIR/system/memory-proc-meminfo.txt" cat /proc/meminfo
+run_cmd "$OUT_DIR/system/pci.txt" bash -c 'lspci -nn 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/usb.txt" bash -c 'lsusb 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/dmidecode-summary.txt" bash -c 'dmidecode -t system -t bios -t processor -t memory 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/qemu-guest-agent.txt" bash -c 'systemctl status qemu-guest-agent --no-pager 2>/dev/null || true'
+
+###############################################################################
+# Storage, partitions, mounts
+###############################################################################
+
+log "Collecting storage, partition, filesystem, and mount details"
+
+run_cmd "$OUT_DIR/storage/lsblk.txt" lsblk -a -o NAME,KNAME,PATH,MAJ:MIN,FSTYPE,FSVER,LABEL,UUID,PARTUUID,PARTLABEL,SIZE,TYPE,MOUNTPOINTS,MODEL,SERIAL
+run_cmd "$OUT_DIR/storage/blkid.txt" blkid
+run_cmd "$OUT_DIR/storage/df.txt" df -hT
+run_cmd "$OUT_DIR/storage/findmnt.txt" findmnt --real
+run_cmd "$OUT_DIR/storage/fstab.txt" bash -c 'cat /etc/fstab 2>/dev/null || true'
+run_cmd "$OUT_DIR/storage/mounts.txt" cat /proc/mounts
+run_cmd "$OUT_DIR/storage/swaps.txt" swapon --show
+run_cmd "$OUT_DIR/storage/mdadm.txt" bash -c 'cat /proc/mdstat 2>/dev/null; mdadm --detail --scan 2>/dev/null || true'
+run_cmd "$OUT_DIR/storage/lvm-pvs.txt" bash -c 'pvs -a -o+pv_used 2>/dev/null || true'
+run_cmd "$OUT_DIR/storage/lvm-vgs.txt" bash -c 'vgs -a -o+vg_uuid 2>/dev/null || true'
+run_cmd "$OUT_DIR/storage/lvm-lvs.txt" bash -c 'lvs -a -o+devices,segtype,lv_uuid 2>/dev/null || true'
+# shellcheck disable=SC2016
+run_cmd "$OUT_DIR/storage/xfs-info.txt" bash -c 'for m in $(findmnt -rn -t xfs -o TARGET); do echo "## $m"; xfs_info "$m" 2>/dev/null || true; done'
+run_cmd "$OUT_DIR/storage/btrfs.txt" bash -c 'btrfs filesystem show 2>/dev/null || true; btrfs subvolume list / 2>/dev/null || true'
+run_cmd "$OUT_DIR/storage/zfs.txt" bash -c 'zpool list 2>/dev/null || true; zfs list 2>/dev/null || true'
+
+safe_copy_config_file /etc/fstab "$OUT_DIR/configs/etc/fstab"
+copy_glob_if_exists "/etc/multipath*" "$OUT_DIR/configs/etc"
+
+###############################################################################
+# Network
+###############################################################################
+
+log "Collecting network configuration"
+
+run_cmd "$OUT_DIR/network/ip-address.txt" ip address show
+run_cmd "$OUT_DIR/network/ip-route.txt" ip route show table all
+run_cmd "$OUT_DIR/network/ip-rule.txt" ip rule show
+run_cmd "$OUT_DIR/network/ss-listening.txt" ss -tulpen
+run_cmd "$OUT_DIR/network/nmcli-devices.txt" bash -c 'nmcli device status 2>/dev/null || true'
+run_cmd "$OUT_DIR/network/nmcli-connections.txt" bash -c 'nmcli -f all connection show 2>/dev/null || true'
+run_cmd "$OUT_DIR/network/nmcli-active.txt" bash -c 'nmcli -f all connection show --active 2>/dev/null || true'
+run_cmd "$OUT_DIR/network/dns.txt" bash -c 'resolvectl status 2>/dev/null || systemd-resolve --status 2>/dev/null || cat /etc/resolv.conf'
+run_cmd "$OUT_DIR/network/hosts.txt" bash -c 'cat /etc/hosts 2>/dev/null || true'
+run_cmd "$OUT_DIR/network/networkmanager-files-list.txt" bash -c 'find /etc/NetworkManager -maxdepth 4 -type f -print 2>/dev/null || true'
+
+copy_if_exists /etc/NetworkManager "$OUT_DIR/configs/etc"
+copy_if_exists /etc/sysconfig/network-scripts "$OUT_DIR/configs/etc/sysconfig"
+copy_if_exists /etc/systemd/network "$OUT_DIR/configs/etc/systemd"
+
+redact_tree "$OUT_DIR/configs/etc/NetworkManager"
+redact_tree "$OUT_DIR/configs/etc/sysconfig/network-scripts"
+redact_tree "$OUT_DIR/configs/etc/systemd/network"
+
+###############################################################################
+# Packages, repositories, modules, language runtimes
+###############################################################################
+
+log "Collecting package and repository information"
+
+run_cmd "$OUT_DIR/packages/rpm-qa.txt" rpm -qa --qf '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}|%{INSTALLTIME:date}\n'
+run_cmd "$OUT_DIR/packages/rpm-qa-simple.txt" rpm -qa
+run_cmd "$OUT_DIR/packages/dnf-repolist.txt" dnf repolist -v
+run_cmd "$OUT_DIR/packages/dnf-history.txt" dnf history
+run_cmd "$OUT_DIR/packages/dnf-modules.txt" bash -c 'dnf module list --enabled 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/dnf-leaves.txt" bash -c 'dnf repoquery --userinstalled 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/flatpak.txt" bash -c 'flatpak list 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/snap.txt" bash -c 'snap list 2>/dev/null || true'
+
+copy_if_exists /etc/yum.repos.d "$OUT_DIR/configs/etc"
+copy_if_exists /etc/dnf "$OUT_DIR/configs/etc"
+
+redact_tree "$OUT_DIR/configs/etc/yum.repos.d"
+redact_tree "$OUT_DIR/configs/etc/dnf"
+
+for bin in python python3 pip pip3 node npm yarn pnpm go java javac mvn gradle ruby gem php composer rustc cargo terraform ansible helm kubectl crictl ctr nerdctl docker podman buildah skopeo git; do
+  if have "$bin"; then
+    run_cmd "$OUT_DIR/packages/version-${bin}.txt" "$bin" --version
+  fi
+done
+
+run_cmd "$OUT_DIR/packages/python-packages.txt" bash -c 'python3 -m pip list --format=freeze 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/npm-global.txt" bash -c 'npm list -g --depth=0 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/gem-list.txt" bash -c 'gem list 2>/dev/null || true'
+
+###############################################################################
+# Services, timers, systemd units
+###############################################################################
+
+log "Collecting systemd services and timers"
+
+run_cmd "$OUT_DIR/services/systemctl-running.txt" systemctl --type=service --state=running --no-pager
+run_cmd "$OUT_DIR/services/systemctl-enabled.txt" systemctl list-unit-files --state=enabled --no-pager
+run_cmd "$OUT_DIR/services/systemctl-all-services.txt" systemctl list-units --type=service --all --no-pager
+run_cmd "$OUT_DIR/services/systemctl-timers.txt" systemctl list-timers --all --no-pager
+run_cmd "$OUT_DIR/services/failed-units.txt" systemctl --failed --no-pager
+run_cmd "$OUT_DIR/services/custom-unit-files.txt" bash -c 'find /etc/systemd/system -type f -o -type l 2>/dev/null | sort'
+
+copy_if_exists /etc/systemd/system "$OUT_DIR/configs/etc/systemd"
+redact_tree "$OUT_DIR/configs/etc/systemd"
+
+###############################################################################
+# Security: SELinux, firewall, SSH, PAM, audit
+###############################################################################
+
+log "Collecting security posture"
+
+run_cmd "$OUT_DIR/security/selinux-status.txt" bash -c 'getenforce 2>/dev/null || true; sestatus 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/selinux-booleans.txt" bash -c 'semanage boolean -l 2>/dev/null || getsebool -a 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/firewalld-state.txt" bash -c 'firewall-cmd --state 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/firewalld-all-zones.txt" bash -c 'firewall-cmd --list-all-zones 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/nft-ruleset.txt" bash -c 'nft list ruleset 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/iptables-save.txt" bash -c 'iptables-save 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/sshd-effective.txt" bash -c 'sshd -T 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/audit-rules.txt" bash -c 'auditctl -l 2>/dev/null || true'
+run_cmd "$OUT_DIR/security/fail2ban.txt" bash -c 'fail2ban-client status 2>/dev/null || true'
+
+safe_copy_config_file /etc/selinux/config "$OUT_DIR/configs/etc/selinux/config"
+copy_if_exists /etc/firewalld "$OUT_DIR/configs/etc"
+copy_if_exists /etc/ssh/sshd_config.d "$OUT_DIR/configs/etc/ssh"
+safe_copy_config_file /etc/ssh/sshd_config "$OUT_DIR/configs/etc/ssh/sshd_config"
+copy_if_exists /etc/audit "$OUT_DIR/configs/etc"
+copy_if_exists /etc/fail2ban "$OUT_DIR/configs/etc"
+
+redact_tree "$OUT_DIR/configs/etc/firewalld"
+redact_tree "$OUT_DIR/configs/etc/ssh"
+redact_tree "$OUT_DIR/configs/etc/audit"
+redact_tree "$OUT_DIR/configs/etc/fail2ban"
+
+# Explicitly remove private/host keys if copied accidentally.
+find "$OUT_DIR" -type f \( \
+  -name 'ssh_host_*_key' -o \
+  -name 'id_rsa' -o \
+  -name 'id_dsa' -o \
+  -name 'id_ecdsa' -o \
+  -name 'id_ed25519' -o \
+  -name '*.pem' -o \
+  -name '*.key' \
+\) -delete 2>/dev/null || true
+
+###############################################################################
+# Cron and scheduled jobs
+###############################################################################
+
+log "Collecting cron and scheduled jobs"
+
+run_cmd "$OUT_DIR/services/crontab-root.txt" bash -c 'crontab -l 2>/dev/null || true'
+run_cmd "$OUT_DIR/services/cron-files-list.txt" bash -c 'find /etc/cron* /var/spool/cron -maxdepth 3 -type f -print 2>/dev/null || true'
+
+copy_glob_if_exists "/etc/cron.d/*" "$OUT_DIR/configs/etc/cron.d"
+copy_glob_if_exists "/etc/cron.daily/*" "$OUT_DIR/configs/etc/cron.daily"
+copy_glob_if_exists "/etc/cron.hourly/*" "$OUT_DIR/configs/etc/cron.hourly"
+copy_glob_if_exists "/etc/cron.weekly/*" "$OUT_DIR/configs/etc/cron.weekly"
+copy_glob_if_exists "/etc/cron.monthly/*" "$OUT_DIR/configs/etc/cron.monthly"
+copy_if_exists /var/spool/cron "$OUT_DIR/configs/var/spool"
+
+redact_tree "$OUT_DIR/configs/etc/cron.d"
+redact_tree "$OUT_DIR/configs/etc/cron.daily"
+redact_tree "$OUT_DIR/configs/etc/cron.hourly"
+redact_tree "$OUT_DIR/configs/etc/cron.weekly"
+redact_tree "$OUT_DIR/configs/etc/cron.monthly"
+redact_tree "$OUT_DIR/configs/var/spool/cron"
+
+###############################################################################
+# Containers: containerd, Docker, Podman, CRI-O
+###############################################################################
+
+log "Collecting container runtime configuration"
+
+run_cmd "$OUT_DIR/containers/runtime-processes.txt" bash -c 'ps aux | grep -E "containerd|dockerd|podman|crio|kubelet" | grep -v grep || true'
+run_cmd "$OUT_DIR/containers/containerd-version.txt" bash -c 'containerd --version 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/crictl-info.txt" bash -c 'crictl info 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/crictl-ps.txt" bash -c 'crictl ps -a 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/crictl-images.txt" bash -c 'crictl images 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/ctr-namespaces.txt" bash -c 'ctr namespaces list 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/docker-version.txt" bash -c 'docker version 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/docker-info.txt" bash -c 'docker info 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/docker-ps.txt" bash -c 'docker ps -a --no-trunc 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/docker-images.txt" bash -c 'docker images --digests 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/podman-info.txt" bash -c 'podman info 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/podman-ps.txt" bash -c 'podman ps -a --no-trunc 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/podman-images.txt" bash -c 'podman images --digests 2>/dev/null || true'
+run_cmd "$OUT_DIR/containers/crio-status.txt" bash -c 'crio --version 2>/dev/null || true'
+
+copy_if_exists /etc/containerd "$OUT_DIR/configs/etc"
+copy_if_exists /etc/docker "$OUT_DIR/configs/etc"
+copy_if_exists /etc/containers "$OUT_DIR/configs/etc"
+copy_if_exists /etc/crictl.yaml "$OUT_DIR/configs/etc"
+copy_if_exists /etc/crio "$OUT_DIR/configs/etc"
+
+redact_tree "$OUT_DIR/configs/etc/containerd"
+redact_tree "$OUT_DIR/configs/etc/docker"
+redact_tree "$OUT_DIR/configs/etc/containers"
+redact_tree "$OUT_DIR/configs/etc/crio"
+redact_file_in_place "$OUT_DIR/configs/etc/crictl.yaml"
+
+###############################################################################
+# Kubernetes nodes / control-plane
+###############################################################################
+
+log "Collecting Kubernetes node and cluster-adjacent configuration"
+
+run_cmd "$OUT_DIR/kubernetes/kubelet-status.txt" bash -c 'systemctl status kubelet --no-pager 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubelet-version.txt" bash -c 'kubelet --version 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubeadm-version.txt" bash -c 'kubeadm version -o yaml 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubectl-version.txt" bash -c 'kubectl version --client=true --output=yaml 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubelet-unit.txt" bash -c 'systemctl cat kubelet 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubelet-flags.txt" bash -c 'cat /var/lib/kubelet/kubeadm-flags.env /etc/sysconfig/kubelet 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubelet-config.yaml" bash -c 'cat /var/lib/kubelet/config.yaml 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/kubeadm-config-files.txt" bash -c 'find /etc/kubernetes -maxdepth 3 -type f -print 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/cni-files.txt" bash -c 'find /etc/cni /opt/cni -maxdepth 4 -type f -print 2>/dev/null || true'
+run_cmd "$OUT_DIR/kubernetes/k8s-processes.txt" bash -c 'ps aux | grep -E "kube|etcd|calico|flannel|cilium|containerd|crio" | grep -v grep || true'
+
+copy_if_exists /etc/cni "$OUT_DIR/configs/etc"
+copy_if_exists /opt/cni/bin "$OUT_DIR/configs/opt/cni"
+
+# Copy selected Kubernetes config but avoid certs and private keys.
+mkdir -p "$OUT_DIR/configs/etc/kubernetes"
+if [[ -d /etc/kubernetes ]]; then
+  find /etc/kubernetes -maxdepth 3 -type f \
+    ! -name '*.key' \
+    ! -name '*.crt' \
+    ! -name '*.csr' \
+    ! -name '*.pem' \
+    ! -path '*/pki/*' \
+    -print0 2>/dev/null |
+    while IFS= read -r -d '' f; do
+      rel="${f#/etc/kubernetes/}"
+      mkdir -p "$OUT_DIR/configs/etc/kubernetes/$(dirname "$rel")"
+      cp -a "$f" "$OUT_DIR/configs/etc/kubernetes/$rel" 2>/dev/null || true
+    done
+fi
+
+redact_tree "$OUT_DIR/configs/etc/kubernetes"
+redact_tree "$OUT_DIR/configs/etc/cni"
+
+# Kubernetes API inventory, if kubectl is configured and authorized.
+if have kubectl; then
+  run_cmd "$OUT_DIR/kubernetes/kubectl-current-context.txt" bash -c 'kubectl config current-context 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/kubectl-cluster-info.txt" bash -c 'kubectl cluster-info 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/nodes-wide.txt" bash -c 'kubectl get nodes -o wide 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/namespaces.txt" bash -c 'kubectl get namespaces -o wide 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/storageclasses.txt" bash -c 'kubectl get storageclass -o yaml 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/persistentvolumes.txt" bash -c 'kubectl get pv -o yaml 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/persistentvolumeclaims-all.txt" bash -c 'kubectl get pvc -A -o wide 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/ingressclasses.txt" bash -c 'kubectl get ingressclass -o yaml 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/crds.txt" bash -c 'kubectl get crd -o name 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/all-resources-wide.txt" bash -c 'kubectl get all -A -o wide 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/workloads-yaml-no-secrets.txt" bash -c '
+    kubectl get deploy,sts,ds,job,cronjob,svc,ingress,configmap,serviceaccount,role,rolebinding,clusterrole,clusterrolebinding,networkpolicy,pdb,hpa -A -o yaml 2>/dev/null || true
+  '
+  run_cmd "$OUT_DIR/kubernetes/helm-releases.txt" bash -c 'helm list -A 2>/dev/null || true'
+  run_cmd "$OUT_DIR/kubernetes/helm-releases-json.txt" bash -c 'helm list -A -o json 2>/dev/null || true'
+else
+  write_note "$OUT_DIR/kubernetes/no-kubectl.txt" "kubectl not found."
+fi
+
+redact_tree "$OUT_DIR/kubernetes"
+
+###############################################################################
+# GitLab Runner VMs
+###############################################################################
+
+log "Collecting GitLab Runner configuration"
+
+run_cmd "$OUT_DIR/gitlab-runner/status.txt" bash -c 'systemctl status gitlab-runner --no-pager 2>/dev/null || true'
+run_cmd "$OUT_DIR/gitlab-runner/version.txt" bash -c 'gitlab-runner --version 2>/dev/null || true'
+run_cmd "$OUT_DIR/gitlab-runner/list.txt" bash -c 'gitlab-runner list 2>/dev/null || true'
+run_cmd "$OUT_DIR/gitlab-runner/verify.txt" bash -c 'gitlab-runner verify 2>/dev/null || true'
+run_cmd "$OUT_DIR/gitlab-runner/unit.txt" bash -c 'systemctl cat gitlab-runner 2>/dev/null || true'
+
+safe_copy_config_file /etc/gitlab-runner/config.toml "$OUT_DIR/gitlab-runner/config.toml"
+copy_if_exists /etc/gitlab-runner "$OUT_DIR/configs/etc"
+
+redact_tree "$OUT_DIR/gitlab-runner"
+redact_tree "$OUT_DIR/configs/etc/gitlab-runner"
+
+###############################################################################
+# Zot registry VMs
+###############################################################################
+
+log "Collecting Zot registry configuration"
+
+run_cmd "$OUT_DIR/zot/processes.txt" bash -c 'ps aux | grep -i "[z]ot" || true'
+run_cmd "$OUT_DIR/zot/status.txt" bash -c 'systemctl status zot --no-pager 2>/dev/null || true'
+run_cmd "$OUT_DIR/zot/unit.txt" bash -c 'systemctl cat zot 2>/dev/null || true'
+run_cmd "$OUT_DIR/zot/listening-ports.txt" bash -c 'ss -tulpen | grep -i zot || true'
+run_cmd "$OUT_DIR/zot/files-list.txt" bash -c 'find /etc /opt /usr/local /var/lib -maxdepth 4 \( -iname "*zot*" -o -path "*/zot/*" \) -print 2>/dev/null || true'
+
+copy_if_exists /etc/zot "$OUT_DIR/configs/etc"
+copy_if_exists /opt/zot "$OUT_DIR/configs/opt"
+copy_if_exists /usr/local/etc/zot "$OUT_DIR/configs/usr/local/etc"
+
+# Do not copy registry image blobs/data by default.
+write_note "$OUT_DIR/zot/registry-data-note.txt" \
+  "Registry image data under /var/lib/zot or equivalent is intentionally not copied. The config and service shape are collected only."
+
+redact_tree "$OUT_DIR/zot"
+redact_tree "$OUT_DIR/configs/etc/zot"
+redact_tree "$OUT_DIR/configs/opt/zot"
+redact_tree "$OUT_DIR/configs/usr/local/etc/zot"
+
+###############################################################################
+# Common app/config directories useful for bastion/dev/tooling VMs
+###############################################################################
+
+log "Collecting common application configuration"
+
+for d in \
+  /etc/nginx \
+  /etc/httpd \
+  /etc/haproxy \
+  /etc/keepalived \
+  /etc/squid \
+  /etc/rsyslog.conf \
+  /etc/rsyslog.d \
+  /etc/logrotate.conf \
+  /etc/logrotate.d \
+  /etc/postfix \
+  /etc/chrony.d \
+  /etc/sysctl.conf \
+  /etc/sysctl.d \
+  /etc/modprobe.d \
+  /etc/modules-load.d \
+  /etc/profile.d \
+  /etc/bash_completion.d
+do
+  if [[ -e "$d" ]]; then
+    copy_if_exists "$d" "$OUT_DIR/configs$(dirname "$d")"
+  fi
+done
+
+run_cmd "$OUT_DIR/system/sysctl-all.txt" sysctl -a
+run_cmd "$OUT_DIR/system/kernel-modules.txt" lsmod
+run_cmd "$OUT_DIR/system/kernel-cmdline.txt" cat /proc/cmdline
+run_cmd "$OUT_DIR/system/sysctl-files.txt" bash -c 'cat /etc/sysctl.conf /etc/sysctl.d/* 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/modprobe-files.txt" bash -c 'cat /etc/modprobe.d/* /etc/modules-load.d/* 2>/dev/null || true'
+
+redact_tree "$OUT_DIR/configs"
+
+###############################################################################
+# Git / developer / bastion hints
+###############################################################################
+
+log "Collecting developer and bastion hints"
+
+run_cmd "$OUT_DIR/system/home-dirs.txt" bash -c 'find /home -maxdepth 2 -mindepth 1 -type d -printf "%M %u %g %p\n" 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/authorized-keys-presence.txt" bash -c 'find /root /home -maxdepth 3 -name authorized_keys -printf "%M %u %g %p\n" 2>/dev/null || true'
+run_cmd "$OUT_DIR/system/ssh-config-presence.txt" bash -c 'find /root /home -maxdepth 4 \( -name config -o -name known_hosts \) -path "*/.ssh/*" -printf "%M %u %g %p\n" 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/git-config-system.txt" bash -c 'git config --system --list 2>/dev/null || true'
+run_cmd "$OUT_DIR/packages/git-config-global-root.txt" bash -c 'git config --global --list 2>/dev/null || true'
+
+write_note "$OUT_DIR/system/ssh-note.txt" \
+  "SSH private keys, known_hosts contents, shell histories, and authorized_keys contents are intentionally not copied. Only presence/path metadata is collected."
+
+###############################################################################
+# Logs: small diagnostic summaries only
+###############################################################################
+
+log "Collecting recent diagnostic logs"
+
+run_cmd "$OUT_DIR/logs/journal-boot-errors.txt" bash -c 'journalctl -b -p warning..alert --no-pager -n 500 2>/dev/null || true'
+run_cmd "$OUT_DIR/logs/dmesg.txt" bash -c 'dmesg -T 2>/dev/null | tail -n 500 || true'
+run_cmd "$OUT_DIR/logs/kubelet-recent.txt" bash -c 'journalctl -u kubelet --no-pager -n 300 2>/dev/null || true'
+run_cmd "$OUT_DIR/logs/containerd-recent.txt" bash -c 'journalctl -u containerd --no-pager -n 300 2>/dev/null || true'
+run_cmd "$OUT_DIR/logs/docker-recent.txt" bash -c 'journalctl -u docker --no-pager -n 300 2>/dev/null || true'
+run_cmd "$OUT_DIR/logs/gitlab-runner-recent.txt" bash -c 'journalctl -u gitlab-runner --no-pager -n 300 2>/dev/null || true'
+run_cmd "$OUT_DIR/logs/zot-recent.txt" bash -c 'journalctl -u zot --no-pager -n 300 2>/dev/null || true'
+
+redact_tree "$OUT_DIR/logs"
+
+###############################################################################
+# Summary report
+###############################################################################
+
+log "Creating summary"
+
+{
+  echo "# VM Rebuild Summary"
+  echo
+  echo "Generated: $(date --iso-8601=seconds)"
+  echo "Host: $(hostname -f 2>/dev/null || hostname)"
+  echo "Collector version: $SCRIPT_VERSION"
+  echo
+  echo "## OS"
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    echo "- OS: ${PRETTY_NAME:-unknown}"
+  fi
+  echo "- Kernel: $(uname -r)"
+  echo "- Architecture: $(uname -m)"
+  echo
+  echo "## CPU / Memory"
+  echo "- CPUs: $(nproc 2>/dev/null || echo unknown)"
+  echo "- Memory:"
+  free -h | sed 's/^/  /'
+  echo
+  echo "## Disks"
+  lsblk -o NAME,SIZE,FSTYPE,TYPE,MOUNTPOINTS | sed 's/^/  /'
+  echo
+  echo "## Network"
+  ip -brief addr | sed 's/^/  /'
+  echo
+  echo "## Listening ports"
+  ss -tulpen 2>/dev/null | sed 's/^/  /'
+  echo
+  echo "## Enabled services"
+  systemctl list-unit-files --state=enabled --no-pager 2>/dev/null | sed 's/^/  /'
+  echo
+  echo "## Container/Kubernetes indicators"
+  for svc in kubelet containerd docker crio podman gitlab-runner zot; do
+    if systemctl list-unit-files "$svc.service" >/dev/null 2>&1; then
+      state="$(systemctl is-active "$svc" 2>/dev/null || true)"
+      enabled="$(systemctl is-enabled "$svc" 2>/dev/null || true)"
+      echo "- $svc: active=$state enabled=$enabled"
+    fi
+  done
+} > "$OUT_DIR/SUMMARY.md"
+
+redact_file_in_place "$OUT_DIR/SUMMARY.md"
+
+###############################################################################
+# Final archive
+###############################################################################
+
+log "Final redaction pass"
+redact_tree "$OUT_DIR"
+
+log "Creating archive: $ARCHIVE"
+tar -C "$BASE_DIR" -czf "$ARCHIVE" "$(basename "$OUT_DIR")"
+
+sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+log "Done"
+log "Archive: $ARCHIVE"
+log "Checksum: ${ARCHIVE}.sha256"
+
+cat <<EOF
+
+Created:
+
+  $ARCHIVE
+  ${ARCHIVE}.sha256
+
+Next steps:
+
+  1. Copy the archive somewhere safe.
+  2. Inspect SUMMARY.md first.
+  3. Use packages/rpm-qa-simple.txt, services/systemctl-enabled.txt,
+     storage/lsblk.txt, network/nmcli-connections.txt, and configs/
+     to recreate the VM shape.
+  4. For Kubernetes nodes, inspect kubernetes/ and containers/.
+  5. For GitLab runners, inspect gitlab-runner/config.toml.
+  6. For Zot, inspect zot/ and configs/etc/zot if present.
+
+EOF

@@ -1,0 +1,159 @@
+# platform-tools
+
+<div align="center">
+  <img src="assets/brand/platform-tools-forge-avatar-transparent-512.png" width="256" alt="platform-tools logo">
+</div>
+
+Helper scripts for platform project repositories.
+
+Canonical repository: <https://codeberg.org/rch/platform-tools>
+
+All shared platform helper tools live in this repository. The platform repositories are split by responsibility so provisioning, configuration, deployment, runtime tooling, private operator config, template building, and shared helpers can evolve independently.
+
+## Platform Repositories
+
+| Repository | Purpose |
+| --- | --- |
+| `platform-config` | Configures operating systems and services with Ansible. |
+| `platform-deployments` | Owns Helm chart source plus deployment values and overlays. |
+| `platform-infra` | Provisions Proxmox VMs with OpenTofu and exposes handoff outputs. |
+| `platform-k8s-bastion` | Provides runtime commands and libraries for Kubernetes bastion hosts. |
+| `platform-private` | Stores private environment-specific operator config; secrets still stay outside Git. |
+| `platform-template-builder` | Builds reusable Proxmox VM templates from upstream Linux cloud images. |
+| `platform-tools` | Provides shared helper scripts used by the platform project repositories. |
+
+## Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `platform-ssh-init` | Create purpose-specific SSH identities and optional SSH config blocks. |
+| `vm-env-collect` | Collect Rocky Linux VM facts for rebuild planning. |
+| `platform-config-init` | Create the local outside-Git secret namespace under `~/.config/platform-infrastructure/`. |
+| `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
+| `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
+
+## Install
+
+Clone the canonical tools repository and install maintained CLI helpers into `~/.local/bin`:
+
+```bash
+git clone https://codeberg.org/rch/platform-tools
+cd platform-tools
+make install
+```
+
+Use another install directory when needed:
+
+```bash
+make install INSTALL_DIR="$PWD/.tools/bin"
+```
+
+Ensure the install directory is on `PATH` when using tools by command name.
+
+## Verify
+
+Run syntax checks for maintained scripts:
+
+```bash
+make verify
+```
+
+Run ShellCheck when it is available:
+
+```bash
+make shellcheck
+```
+
+## Quick Usage
+
+Create a purpose-specific SSH key directly:
+
+```bash
+platform-ssh-init \
+  --key-path ~/.ssh/platform-example_ed25519 \
+  --comment "platform example" \
+  --print-public-key
+```
+
+Or use a config file from private operator config:
+
+```bash
+platform-ssh-init ../platform-private/infra/ssh/production-cloud-init.env --print-public-key
+```
+
+Collect facts from a Rocky Linux VM:
+
+```bash
+sudo vm-env-collect
+```
+
+Create the outside-Git local secret namespace:
+
+```bash
+platform-config-init
+```
+
+Bootstrap the Proxmox API token identity over SSH:
+
+```bash
+platform-proxmox-token-init \
+  --ssh root@<proxmox-ip> \
+  --proxmox-user tofu@pve \
+  --token-id platform \
+  --role Administrator \
+  --path / \
+  --write-token-file ~/.config/platform-infrastructure/infra/proxmox.token
+```
+
+Check Proxmox token bootstrap prerequisites first:
+
+```bash
+platform-proxmox-token-init --ssh root@<proxmox-ip> --write-token-file ~/.config/platform-infrastructure/infra/proxmox.token --check
+```
+
+Clean up one Proxmox VM by VMID after verifying the printed target:
+
+```bash
+platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --vmid 9900
+```
+
+Add a name guard and non-interactive confirmation for automation:
+
+```bash
+platform-proxmox-vm-cleanup \
+  --ssh root@<proxmox-ip> \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
+  --vmid 9900 \
+  --name platform-template-smoke-9900 \
+  --yes
+```
+
+If running directly from a checkout before install:
+
+```bash
+sudo ./bin/vm-env-collect
+./bin/platform-config-init
+./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
+./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
+```
+
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
+| `docs/vm-env-collector.md` | Rocky VM collector usage, output structure, and safety notes. |
+| `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
+| `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
+| `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
+| `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |
+| `docs/handoffs/tofu-ansible-handoff.md` | Example OpenTofu/Ansible handoff from a collected VM report. |
+| `assets/brand/` | Project brand assets for release metadata and forge profiles. |
+
+## Security
+
+Do not commit real VM collection output, generated archives, SSH keys, private `.env` files, token files, or copied production configuration.
+
+Collected VM reports are rebuild references. They can contain hostnames, usernames, IPs, logs, package repositories, service names, and other environment details even when obvious secrets are redacted. Raw process environments are skipped by default; only enable environment capture intentionally.
+
+Local collector reports belong under `reports/vm-env-collect/`. The `reports/` directory is committed with `.gitkeep`, but report contents are ignored by Git.

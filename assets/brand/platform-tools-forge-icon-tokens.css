@@ -1,0 +1,120 @@
+:root {
+  /*
+    Icon composition guidelines
+
+    These rules define how project icons should be composed across the system.
+    They are intended for 512x512px forge/app-style icons, but the same ratios
+    can be scaled to other square icon sizes.
+
+    Canvas
+    - Use a square canvas.
+    - Default canvas size: 512x512px.
+    - Use a plain, quiet background with no texture, scene, badge, or outer frame.
+    - Preferred background color: #F6F6F7.
+    - The icon should be optically centered, not mathematically centered if the
+      shape has uneven visual weight.
+
+    Icon scale
+    - The full visible icon silhouette should occupy approximately 78–82% of
+      the canvas width.
+    - The full visible icon silhouette should occupy approximately 78–82% of
+      the canvas height.
+    - Minimum outer margin: 48px on a 512x512px canvas.
+    - Preferred margin range: 48–64px.
+    - No part of the icon should touch or visually crowd the canvas edge.
+    - Avoid excessive empty background around the icon; the mark should feel
+      large, clear, and immediately readable.
+
+    Positioning
+    - Center the combined silhouette of all icon elements on the canvas.
+    - When a secondary element extends to one side, shift the primary element
+      slightly in the opposite direction to keep the total composition balanced.
+    - When an element adds weight at the lower-right, place the main form
+      slightly up and left so the complete silhouette feels centered.
+    - Keep the visual center of mass close to the center of the canvas.
+    - Use optical alignment over strict geometric alignment.
+
+    Shape system
+    - Use 2–3 primary visual elements only.
+    - Prefer one dominant base form plus one smaller supporting/action form.
+    - Use large, simple shapes that remain recognizable below 64px.
+    - Avoid decorative details, tiny UI controls, guide lines, stacked clutter,
+      fine patterns, or dense internal structure.
+    - Rounded corners should be used consistently.
+    - Forms should feel precise, calm, and tool-like.
+
+    Stroke system
+    - Use bold, rounded strokes for legibility.
+    - Stroke color should usually be #3C3C43.
+    - Strokes should be visually consistent across the icon.
+    - For a 512x512px canvas, main strokes should generally feel equivalent to
+      about 18–26px.
+    - Supporting internal strokes may be slightly thinner, but should not become
+      fragile at small sizes.
+    - Avoid hairline strokes.
+
+    Color system
+    - Use neutral fills for the main forms.
+    - Use accent colors sparingly for functional emphasis only.
+    - Preferred dark outline/text color: #3C3C43.
+    - Preferred background: #F6F6F7.
+    - Preferred neutral fills: #F6F6F7, #ECE9E2, #D8D5CE.
+    - Preferred primary accent: #B7D54F.
+    - Preferred muted accent: #9AA75D.
+    - Preferred deep accent: #7C8448.
+    - Accent color should usually cover no more than 15–25% of the icon area.
+    - Do not let the lime accent dominate the entire mark.
+
+    Depth and effects
+    - Prefer flat vector geometry.
+    - Use little to no shadow.
+    - If depth is needed, use very subtle tonal fills rather than heavy effects.
+    - Avoid gradients, glow, glassmorphism, texture, and complex shadows unless
+      the specific icon family explicitly requires them.
+
+    Readability
+    - The icon must be understandable at 512px, 256px, 128px, and 64px.
+    - The core metaphor should still be recognizable at 32px, even if secondary
+      meaning is reduced.
+    - Remove details that do not survive downscaling.
+    - Favor silhouette clarity over illustrative complexity.
+
+    General visual tone
+    - Minimal developer-tool aesthetic.
+    - Clean vector construction.
+    - High contrast but low visual noise.
+    - Calm neutral base with selective lime emphasis.
+    - Suitable for project logos, forge icons, builder tools, automation tools,
+      infrastructure tools, and technical product surfaces.
+  */
+
+  /* Backgrounds */
+  --color-bg-primary: #F6F6F7;
+  --color-bg-secondary: #ECE9E2;
+  --color-surface: #D8D5CE;
+  --color-surface-soft: #C2BAB4;
+
+  /* Text */
+  --color-text-primary: #3C3C43;
+  --color-text-secondary: #5E5D57;
+  --color-text-muted: #8A877F;
+
+  /* Borders */
+  --color-border: #ACA9A1;
+  --color-divider: #C4B9B4;
+
+  /* Accent */
+  --color-accent-primary: #B7D54F;
+  --color-accent-hover: #C5DC6B;
+  --color-accent-active: #9AA75D;
+  --color-accent-deep: #7C8448;
+
+  /* Dark UI */
+  --color-dark-surface: #48473C;
+  --color-near-black: #2E2D2A;
+
+  /* Supporting */
+  --color-highlight-warm: #F7C65F;
+  --color-dusty-mauve: #A9969B;
+  --color-pale-map-green: #CACF9F;
+}
