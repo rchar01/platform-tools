@@ -40,6 +40,9 @@ id_ed25519
 # VM collector output
 reports/*
 !reports/.gitkeep
+platform-vm-env-collect-*/
+platform-vm-env-collect/
+# Legacy local output names from the pre-`platform-*` collector.
 rocky-vm-collect-*/
 *-vm-collect-*/
 vm-env-collect/

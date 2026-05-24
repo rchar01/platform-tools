@@ -27,7 +27,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | Tool | Purpose |
 | --- | --- |
 | `platform-ssh-init` | Create purpose-specific SSH identities and optional SSH config blocks. |
-| `vm-env-collect` | Collect Rocky Linux VM facts for rebuild planning. |
+| `platform-vm-env-collect` | Collect VM environment facts for rebuild planning. |
 | `platform-config-init` | Create the local outside-Git secret namespace under `~/.config/platform-infrastructure/`. |
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
@@ -117,10 +117,10 @@ Or use a config file from private operator config:
 platform-ssh-init ../platform-private/infra/ssh/production-cloud-init.env --print-public-key
 ```
 
-Collect facts from a Rocky Linux VM:
+Collect facts from a VM:
 
 ```bash
-sudo vm-env-collect
+sudo platform-vm-env-collect
 ```
 
 Create the outside-Git local secret namespace with `infra/`, `config/`, and `pki/`:
@@ -178,7 +178,7 @@ platform-proxmox-vm-cleanup \
 If running directly from a checkout before install:
 
 ```bash
-sudo ./bin/vm-env-collect
+sudo ./bin/platform-vm-env-collect
 ./bin/platform-config-init
 ./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
 ./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
@@ -190,7 +190,7 @@ sudo ./bin/vm-env-collect
 | Document | Purpose |
 | --- | --- |
 | `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
-| `docs/vm-env-collector.md` | Rocky VM collector usage, output structure, and safety notes. |
+| `docs/platform-vm-env-collect.md` | VM environment collector usage, output structure, and safety notes. |
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |

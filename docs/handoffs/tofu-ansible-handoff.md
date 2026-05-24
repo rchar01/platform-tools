@@ -1,6 +1,6 @@
 # OpenTofu and Ansible Handoff
 
-Example source report: `rocky-vm-collect-example-bastion-01-YYYYMMDD-HHMMSS/SUMMARY.md`
+Example source report: `platform-vm-env-collect-example-bastion-01-YYYYMMDD-HHMMSS/SUMMARY.md`
 
 VM boundary:
 

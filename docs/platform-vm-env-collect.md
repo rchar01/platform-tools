@@ -1,6 +1,6 @@
-# Rocky VM Environment Collector
+# Platform VM Environment Collector
 
-`vm-env-collect` collects important settings from an existing Rocky Linux VM so a similar VM can be recreated later in a target Proxmox platform environment.
+`platform-vm-env-collect` collects important settings from an existing VM so a similar VM can be recreated later in a target Proxmox platform environment.
 
 It is intended for VMs such as:
 
@@ -31,37 +31,37 @@ Copy the script to the VM you want to inspect, or install it first.
 Installed usage:
 
 ```bash
-sudo vm-env-collect
+sudo platform-vm-env-collect
 ```
 
 Checkout usage:
 
 ```bash
-sudo ./bin/vm-env-collect
+sudo ./bin/platform-vm-env-collect
 ```
 
 The output is created under:
 
 ```text
-/tmp/vm-env-collect/
+/tmp/platform-vm-env-collect/
 ```
 
 Example output:
 
 ```text
-/tmp/vm-env-collect/rocky-vm-collect-myhost-20260513-184500.tar.gz
-/tmp/vm-env-collect/rocky-vm-collect-myhost-20260513-184500.tar.gz.sha256
+/tmp/platform-vm-env-collect/platform-vm-env-collect-myhost-20260513-184500.tar.gz
+/tmp/platform-vm-env-collect/platform-vm-env-collect-myhost-20260513-184500.tar.gz.sha256
 ```
 
 ## Local Report Directory
 
-Use `reports/vm-env-collect/` inside this repository as the local analysis/import location for collector archives and extracted reports.
+Use `reports/platform-vm-env-collect/` inside this repository as the local analysis/import location for collector archives and extracted reports.
 
-The collector still writes to `/tmp/vm-env-collect/` by default because it usually runs on a remote/source VM. After copying an archive back to this repository, extract it under `reports/vm-env-collect/`:
+The collector still writes to `/tmp/platform-vm-env-collect/` by default because it usually runs on a remote/source VM. After copying an archive back to this repository, extract it under `reports/platform-vm-env-collect/`:
 
 ```bash
-mkdir -p reports/vm-env-collect
-tar -C reports/vm-env-collect -xzf /tmp/vm-env-collect/rocky-vm-collect-myhost-20260513-184500.tar.gz
+mkdir -p reports/platform-vm-env-collect
+tar -C reports/platform-vm-env-collect -xzf /tmp/platform-vm-env-collect/platform-vm-env-collect-myhost-20260513-184500.tar.gz
 ```
 
 Only `reports/.gitkeep` is committed. Report contents under `reports/` are ignored by Git.
@@ -75,7 +75,7 @@ Without `sudo`, many important files and commands may be unavailable, including 
 Recommended:
 
 ```bash
-sudo vm-env-collect
+sudo platform-vm-env-collect
 ```
 
 ## Sensitive Data
@@ -87,13 +87,13 @@ The raw process environment is not collected by default because it often contain
 Do not use this unless you intentionally want environment variables included and have confirmed the shell environment does not contain secrets:
 
 ```bash
-sudo COLLECT_ENV=1 vm-env-collect
+sudo COLLECT_ENV=1 platform-vm-env-collect
 ```
 
 Do not use this unless you intentionally want a more sensitive archive:
 
 ```bash
-sudo INCLUDE_SENSITIVE=1 vm-env-collect
+sudo INCLUDE_SENSITIVE=1 platform-vm-env-collect
 ```
 
 Even with the default safe mode, review the archive before copying it outside the source environment.
@@ -103,13 +103,13 @@ Even with the default safe mode, review the archive before copying it outside th
 Run the script once on each important source VM:
 
 ```bash
-sudo vm-env-collect
+sudo platform-vm-env-collect
 ```
 
 Then rename the archive by role:
 
 ```bash
-mv /tmp/vm-env-collect/rocky-vm-collect-*.tar.gz company-k8s-worker-01.tar.gz
+mv /tmp/platform-vm-env-collect/platform-vm-env-collect-*.tar.gz company-k8s-worker-01.tar.gz
 ```
 
 Example set:
@@ -193,7 +193,7 @@ Do not commit extracted collection directories or generated archives to this rep
 Place local analysis copies under:
 
 ```text
-reports/vm-env-collect/
+reports/platform-vm-env-collect/
 ```
 
 The `.gitignore` intentionally ignores common collector outputs:
@@ -201,9 +201,9 @@ The `.gitignore` intentionally ignores common collector outputs:
 ```text
 reports/*
 !reports/.gitkeep
-rocky-vm-collect-*/
+platform-vm-env-collect-*/
 *-vm-collect-*/
-vm-env-collect/
+platform-vm-env-collect/
 *.tar.gz
 *.tar.gz.sha256
 ```

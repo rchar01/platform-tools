@@ -14,7 +14,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 ## Docs In This Tree
 
 - [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
-- [`vm-env-collector.md`](./vm-env-collector.md): How to use `vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
+- [`platform-vm-env-collect.md`](./platform-vm-env-collect.md): How to use `platform-vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
 - [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
@@ -28,7 +28,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Generate a purpose-specific SSH keypair: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Create a cloud-init public key for `platform-infra`: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Decide where real SSH configs live: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
-- Collect Rocky VM rebuild facts: use [`vm-env-collector.md`](./vm-env-collector.md).
+- Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
 - Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).
@@ -37,7 +37,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 ## Key Repo Paths
 
 - [`../bin/platform-ssh-init`](../bin/platform-ssh-init): Shared SSH identity helper.
-- [`../bin/vm-env-collect`](../bin/vm-env-collect): Rocky VM environment collector.
+- [`../bin/platform-vm-env-collect`](../bin/platform-vm-env-collect): VM environment collector.
 - [`../bin/platform-config-init`](../bin/platform-config-init): Local outside-Git config initializer.
 - [`../bin/platform-proxmox-token-init`](../bin/platform-proxmox-token-init): Proxmox API token bootstrap helper.
 - [`../bin/platform-proxmox-vm-cleanup`](../bin/platform-proxmox-vm-cleanup): Safe single-VM Proxmox cleanup helper.

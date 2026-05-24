@@ -21,6 +21,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed the local secret convention to include `pki/` as a top-level namespace for PKI CA state, issued certificates, exports, and backups.
 - Changed `platform-config-init` to create `pki/` alongside `infra/` and `config/`.
 - Changed `make install` to install shared PKI assets into `SHARE_DIR`.
+- Renamed `vm-env-collect` to `platform-vm-env-collect` for CLI naming consistency.
 
 ## [1.0.0] - 2026-05-23
 
