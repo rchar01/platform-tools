@@ -17,7 +17,6 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - `vm-env-collector.md`: How to use `vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
 - `platform-config-init.md`: How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
 - `pki-openssl.md`: How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
-- `pki-implementation-plan.md`: Checklist plan for the OpenSSL PKI helper feature.
 - `proxmox-token-init.md`: How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - `proxmox-vm-cleanup.md`: How to safely stop and destroy exactly one Proxmox VM by VMID.
 - `handoffs/config-namespace-handoff.md`: Downstream ownership notes for the local secret namespace.
@@ -32,7 +31,6 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Collect Rocky VM rebuild facts: use `vm-env-collector.md`.
 - Create the outside-Git local secret namespace: use `platform-config-init.md`.
 - Create internal TLS certificates: use `pki-openssl.md`.
-- Track PKI helper implementation: use `pki-implementation-plan.md`.
 - Bootstrap the Proxmox API token identity: use `proxmox-token-init.md`.
 - Clean up one known Proxmox VM: use `proxmox-vm-cleanup.md`.
 
@@ -52,6 +50,6 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - `../bin/platform-pki-list-expiry`: Certificate expiry listing helper.
 - `../bin/platform-pki-print-cert`: Certificate detail printing helper.
 - `../bin/platform-pki-export-ansible`: Ansible export helper for generated PKI files.
-- `pki-implementation-plan.md`: PKI helper implementation checklist.
+- `../bin/platform-pki-backup`: PKI state backup helper.
 - `../assets/brand/`: Project brand assets for release metadata and forge profiles.
 - `handoffs/`: Handoff notes for downstream coding agents and platform repositories.

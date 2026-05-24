@@ -4,10 +4,12 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
-- Added the PKI implementation plan and reserved `~/.config/platform-infrastructure/pki/` as a top-level outside-Git namespace for future PKI helper state.
+- Reserved `~/.config/platform-infrastructure/pki/` as a top-level outside-Git namespace for PKI helper state.
 - `platform-config-init` now creates `pki/` alongside `infra/` and `config/`.
 - Added the first OpenSSL PKI helper milestone for initializing PKI state, creating root/intermediate CAs, issuing service certificates, verifying certificates, and listing expiry.
 - Added PKI renewal and Ansible export helpers for the second PKI milestone.
+- Added PKI backup support with encrypted `age` output by default and explicit plain-backup override.
+- Added README requirements for core tools, PKI helpers, SSH/Proxmox helpers, and optional verification tools.
 
 ## v1.0.0 - 2026-05-23
 

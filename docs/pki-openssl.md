@@ -43,6 +43,20 @@ Defaults:
 | Intermediate lifetime | 1825 days |
 | Service lifetime | 397 days |
 
+## Requirements
+
+Required:
+
+- `bash`
+- `openssl`
+- `tar`
+- GNU `date` for certificate expiry calculations
+- standard Unix tools such as `awk`, `cmp`, `cp`, `find`, `grep`, `mkdir`, `mktemp`, and `sed`
+
+Backup encryption requires `age`.
+
+If `age` is unavailable, `platform-pki-backup` refuses to create an unencrypted archive unless `--allow-plain-backup` is passed explicitly.
+
 ## Install
 
 ```bash
@@ -227,6 +241,36 @@ Output layout:
 
 The export directory contains service private keys and must stay outside Git.
 
+## Back Up PKI State
+
+Backups include the full PKI working directory, including CA private keys, service private keys, issued certificates, CSRs, CA database files, inventory, exports, and existing backups.
+
+Use `age` recipient encryption for non-interactive backups:
+
+```bash
+platform-pki-backup --age-recipient "$AGE_RECIPIENT"
+```
+
+If no `--age-recipient` is provided, `age` passphrase mode is used and prompts interactively:
+
+```bash
+platform-pki-backup
+```
+
+Output path:
+
+```text
+~/.config/platform-infrastructure/pki/backups/platform-pki-YYYYMMDD-HHMMSS.tar.gz.age
+```
+
+Plain unencrypted archives require an explicit override:
+
+```bash
+platform-pki-backup --allow-plain-backup
+```
+
+Plain backup output uses `.tar.gz` and still contains secrets. Keep it outside Git and move it to encrypted storage as soon as practical.
+
 ## List Expiry
 
 ```bash
@@ -253,3 +297,15 @@ Do not issue service certificates without SANs.
 Do not use the root CA to sign service certificates directly.
 
 Deployment to hosts belongs in `platform-config`, not in these helper scripts.
+
+## Future Migration To ACME Or step-ca
+
+These OpenSSL helpers are an initial private PKI, bootstrap path, break-glass fallback, and appliance support path.
+
+A future `step-ca` or ACME workflow can replace manual service certificate issuance for services that support automated enrollment. The surrounding pieces remain useful:
+
+- CA trust installation through `platform-config`.
+- Certificate deployment for non-ACME appliances.
+- Expiry checks and monitoring alerts.
+- Documentation of certificate ownership and file locations.
+- OpenSSL-based fallback for recovery or isolated environments.

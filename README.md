@@ -40,6 +40,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-list-expiry` | List service certificate expiry status. |
 | `platform-pki-print-cert` | Print readable certificate details for a service. |
 | `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
+| `platform-pki-backup` | Create encrypted or explicitly plain backups of PKI state. |
 
 ## Install
 
@@ -58,6 +59,32 @@ make install INSTALL_DIR="$PWD/.tools/bin"
 ```
 
 Ensure the install directory is on `PATH` when using tools by command name.
+
+## Requirements
+
+Core local requirements:
+
+- `bash`
+- `make`
+- standard Unix tools such as `awk`, `cmp`, `cp`, `date`, `find`, `grep`, `mkdir`, `mktemp`, `sed`, `stat`, and `tar`
+
+PKI helpers require:
+
+- `openssl`
+- GNU `date` for certificate expiry calculations
+- `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
+
+SSH and Proxmox helpers require:
+
+- `ssh` for remote execution modes
+- `pveum` on the Proxmox host for `platform-proxmox-token-init`
+- `qm` on the Proxmox host for `platform-proxmox-vm-cleanup`
+- `jq` on the Proxmox host when `platform-proxmox-token-init --write-token-file` is used over SSH
+
+Optional verification tools:
+
+- `shellcheck` for `make shellcheck`
+- `gitleaks` for local secret scanning
 
 ## Verify
 
@@ -136,6 +163,7 @@ platform-pki-service-issue platform-example
 platform-pki-service-renew platform-example
 platform-pki-list-expiry
 platform-pki-export-ansible --force
+platform-pki-backup --age-recipient "$AGE_RECIPIENT"
 ```
 
 Add a name guard and non-interactive confirmation for automation:
@@ -167,7 +195,6 @@ sudo ./bin/vm-env-collect
 | `docs/vm-env-collector.md` | Rocky VM collector usage, output structure, and safety notes. |
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
-| `docs/pki-implementation-plan.md` | Checklist plan for the OpenSSL PKI helper feature. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
 | `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |

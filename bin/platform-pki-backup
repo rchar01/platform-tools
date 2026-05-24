@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n "$COMMON_PATH" ]]; then COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh; elif [[ -r "${SCRIPT_DIR}/../lib/platform-pki-common.sh" ]]; then COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh; else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh; fi
+[[ -r "$COMMON_PATH" ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-pki-backup [options]
+
+Create a backup archive of the outside-Git PKI directory.
+
+Options:
+  --namespace <path>       Platform namespace root. Default: ~/.config/platform-infrastructure
+  --pki-dir <path>         PKI directory. Default: <namespace>/pki
+  --backup-dir <path>      Backup output directory. Default: <pki-dir>/backups
+  --age-recipient <value>  Encrypt to an age recipient. May be passed more than once.
+  --allow-plain-backup     Create a plain .tar.gz archive instead of age encryption.
+  -h, --help               Show this help.
+
+By default, this command requires age. If --age-recipient is not provided, age
+passphrase mode is used and age prompts interactively.
+USAGE
+}
+
+new_backup_path() {
+  local extension=$1
+  local timestamp base candidate n
+
+  timestamp=$(date -u '+%Y%m%d-%H%M%S')
+  base="${BACKUP_DIR}/platform-pki-${timestamp}${extension}"
+  candidate=$base
+  n=1
+  while [[ -e "$candidate" ]]; do
+    candidate=$(printf '%s/platform-pki-%s-%02d%s' "$BACKUP_DIR" "$timestamp" "$n" "$extension")
+    n=$((n + 1))
+  done
+  printf '%s\n' "$candidate"
+}
+
+NAMESPACE=$(pki_default_namespace)
+PKI_DIR=''
+BACKUP_DIR=''
+ALLOW_PLAIN=false
+AGE_RECIPIENTS=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --namespace)
+      [[ $# -ge 2 ]] || pki_die '--namespace requires a value'
+      NAMESPACE=$2
+      shift 2
+      ;;
+    --pki-dir)
+      [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'
+      PKI_DIR=$2
+      shift 2
+      ;;
+    --backup-dir)
+      [[ $# -ge 2 ]] || pki_die '--backup-dir requires a value'
+      BACKUP_DIR=$2
+      shift 2
+      ;;
+    --age-recipient)
+      [[ $# -ge 2 ]] || pki_die '--age-recipient requires a value'
+      AGE_RECIPIENTS+=("$2")
+      shift 2
+      ;;
+    --allow-plain-backup)
+      ALLOW_PLAIN=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      pki_die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+NAMESPACE=$(pki_expand_path "$NAMESPACE")
+PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
+PKI_DIR=$(pki_expand_path "$PKI_DIR")
+BACKUP_DIR=${BACKUP_DIR:-${PKI_DIR}/backups}
+BACKUP_DIR=$(pki_expand_path "$BACKUP_DIR")
+
+pki_require_cmd tar
+pki_require_pki_dir
+pki_prepare_dir "$BACKUP_DIR"
+
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_ARCHIVE="$TMP_DIR/platform-pki.tar.gz"
+
+pki_warn "PKI backup contains secrets, including private keys and CA database files"
+tar -C "$(dirname -- "$PKI_DIR")" -czf "$TMP_ARCHIVE" "$(basename -- "$PKI_DIR")"
+chmod 600 "$TMP_ARCHIVE"
+
+if [[ "$ALLOW_PLAIN" == 'true' ]]; then
+  FINAL_PATH=$(new_backup_path '.tar.gz')
+  mv "$TMP_ARCHIVE" "$FINAL_PATH"
+  chmod 600 "$FINAL_PATH"
+  pki_warn "Created unencrypted PKI backup because --allow-plain-backup was used: $FINAL_PATH"
+  exit 0
+fi
+
+pki_require_cmd age
+FINAL_PATH=$(new_backup_path '.tar.gz.age')
+
+if [[ ${#AGE_RECIPIENTS[@]} -gt 0 ]]; then
+  AGE_CMD=(age)
+  for recipient in "${AGE_RECIPIENTS[@]}"; do
+    AGE_CMD+=(-r "$recipient")
+  done
+  AGE_CMD+=(-o "$FINAL_PATH" "$TMP_ARCHIVE")
+  "${AGE_CMD[@]}"
+else
+  age -p -o "$FINAL_PATH" "$TMP_ARCHIVE"
+fi
+
+chmod 600 "$FINAL_PATH"
+pki_ok "Created encrypted PKI backup: $FINAL_PATH"

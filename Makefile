@@ -3,7 +3,7 @@ SHELL := /bin/sh
 
 INSTALL_DIR ?= $(HOME)/.local/bin
 SHARE_DIR ?= $(HOME)/.local/share/platform-tools
-TOOLS := platform-ssh-init vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-pki-init platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible
+TOOLS := platform-ssh-init vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-pki-init platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup
 LIBS := lib/platform-pki-common.sh
 
 .PHONY: help install verify shellcheck
