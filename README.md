@@ -160,10 +160,8 @@ platform-pki-init
 platform-pki-root-create --name "Platform Example Root CA" --org "Platform Example" --country "PL"
 platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org "Platform Example" --country "PL"
 platform-pki-service-issue platform-example
-platform-pki-service-renew platform-example
+platform-pki-service-verify platform-example
 platform-pki-list-expiry
-platform-pki-export-ansible --force
-platform-pki-backup --age-recipient "$AGE_RECIPIENT"
 ```
 
 Add a name guard and non-interactive confirmation for automation:
@@ -203,8 +201,8 @@ sudo ./bin/vm-env-collect
 
 ## Security
 
-Do not commit real VM collection output, generated archives, SSH keys, private `.env` files, token files, PKI CA files, service private keys, issued real certificates, or copied production configuration.
+Keep real secrets outside Git. Do not commit VM collection output, generated archives, SSH keys, private `.env` files, token files, PKI CA material, service private keys, issued real certificates, PKI exports, PKI backups, or copied private configuration.
 
-Collected VM reports are rebuild references. They can contain hostnames, usernames, IPs, logs, package repositories, service names, and other environment details even when obvious secrets are redacted. Raw process environments are skipped by default; only enable environment capture intentionally.
+Use `~/.config/platform-infrastructure/` for local secret material. Private but non-secret operator configuration belongs in private Git, such as `platform-private`.
 
-Local collector reports belong under `reports/vm-env-collect/`. The `reports/` directory is committed with `.gitkeep`, but report contents are ignored by Git.
+Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.

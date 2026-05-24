@@ -45,6 +45,8 @@ Defaults:
 
 ## Requirements
 
+See `../README.md` for the canonical repository requirements. This section lists PKI-specific requirements and behavior.
+
 Required:
 
 - `bash`
@@ -145,7 +147,7 @@ Service certificates are issued from:
 ~/.config/platform-infrastructure/pki/inventory/services.yml
 ```
 
-The first milestone supports a strict YAML subset with this shape:
+The inventory parser supports this strict YAML subset:
 
 ```yaml
 services:
