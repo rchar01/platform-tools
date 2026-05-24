@@ -8,7 +8,7 @@ The default location is:
 ~/.config/platform-infrastructure/
 ```
 
-Use this directory for local secret material needed by `platform-*` repositories, such as Proxmox API tokens, Kubernetes admin kubeconfigs, service TLS private keys, runner tokens, and service passwords.
+Use this directory for local secret material needed by `platform-*` repositories, such as Proxmox API tokens, Kubernetes admin kubeconfigs, PKI CA material, service TLS private keys, runner tokens, and service passwords.
 
 Only secret material that should stay outside every Git repository belongs here. Private but non-secret configuration still belongs in the relevant private repository, for example `platform-private`.
 
@@ -50,7 +50,8 @@ platform-config-init --config-dir /tmp/platform-infrastructure-test
 ~/.config/platform-infrastructure/
 ├── README.md
 ├── infra/
-└── config/
+├── config/
+└── pki/
 ```
 
 Directories are created with mode `700`. `README.md` is created with mode `600`.
@@ -64,6 +65,7 @@ Existing `README.md` is not overwritten and is chmodded to `600`. Existing names
 | `~/.config/platform-infrastructure/` | Shared outside-Git local secret root created by `platform-tools`. |
 | `infra/` | Infrastructure bootstrap secrets, especially Proxmox/OpenTofu token material used by `platform-infra` and `platform-proxmox-token-init`. |
 | `config/` | Ansible and service secrets consumed by `platform-config`. |
+| `pki/` | CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers. |
 | `config/<project-or-service>/...` | The consuming project or service that knows the concrete secret file semantics. |
 
 Examples of project-owned paths include:
@@ -73,6 +75,8 @@ Examples of project-owned paths include:
 ~/.config/platform-infrastructure/config/k8s-bastion/<env>/admin.kubeconfig
 ~/.config/platform-infrastructure/config/rke2/<env>/cluster-token
 ~/.config/platform-infrastructure/config/monitoring/<env>/grafana-admin-password
+~/.config/platform-infrastructure/pki/inventory/services.yml
+~/.config/platform-infrastructure/pki/export/ansible/
 ```
 
 `platform-config-init` intentionally does not create those concrete files. Empty placeholder secrets can accidentally satisfy file-exists checks while still being invalid.
@@ -128,6 +132,7 @@ proxmox_api_token_file = "/home/YOUR_USER/.config/platform-infrastructure/infra/
 
 ```bash
 export PLATFORM_INFRASTRUCTURE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/config"
+export PLATFORM_INFRASTRUCTURE_PKI_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/pki"
 ```
 
 Example secret file paths:

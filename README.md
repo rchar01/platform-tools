@@ -87,7 +87,7 @@ Collect facts from a Rocky Linux VM:
 sudo vm-env-collect
 ```
 
-Create the outside-Git local secret namespace:
+Create the outside-Git local secret namespace with `infra/`, `config/`, and `pki/`:
 
 ```bash
 platform-config-init
@@ -144,6 +144,7 @@ sudo ./bin/vm-env-collect
 | `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
 | `docs/vm-env-collector.md` | Rocky VM collector usage, output structure, and safety notes. |
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
+| `docs/pki-implementation-plan.md` | Checklist plan for the OpenSSL PKI helper feature. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
 | `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |
@@ -152,7 +153,7 @@ sudo ./bin/vm-env-collect
 
 ## Security
 
-Do not commit real VM collection output, generated archives, SSH keys, private `.env` files, token files, or copied production configuration.
+Do not commit real VM collection output, generated archives, SSH keys, private `.env` files, token files, PKI CA files, service private keys, issued real certificates, or copied production configuration.
 
 Collected VM reports are rebuild references. They can contain hostnames, usernames, IPs, logs, package repositories, service names, and other environment details even when obvious secrets are redacted. Raw process environments are skipped by default; only enable environment capture intentionally.
 

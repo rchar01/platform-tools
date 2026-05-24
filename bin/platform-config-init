@@ -21,6 +21,7 @@ Created layout:
   README.md
   infra/
   config/
+  pki/
 
 Existing README.md is not overwritten. Directories are chmod 700 and README.md is
 chmod 600.
@@ -72,13 +73,15 @@ Shared namespaces:
 
 - `infra/`: OpenTofu and infrastructure bootstrap secrets, for example tokens.
 - `config/`: Ansible and service secrets, for example certs, keys, kubeconfigs, and passwords.
+- `pki/`: CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers.
 
 This initializer creates only the shared root namespaces. Each downstream platform project or helper owns its concrete secret subdirectories and files.
 
-Common environment variable:
+Common environment variables:
 
 ```bash
 export PLATFORM_INFRASTRUCTURE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/config"
+export PLATFORM_INFRASTRUCTURE_PKI_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/pki"
 ```
 
 Usage example:
@@ -122,6 +125,7 @@ ok "Config directory ready: $CONFIG_DIR"
 
 ensure_secret_dir "$CONFIG_DIR/config"
 ensure_secret_dir "$CONFIG_DIR/infra"
+ensure_secret_dir "$CONFIG_DIR/pki"
 
 write_if_missing "$CONFIG_DIR/README.md" content_readme
 

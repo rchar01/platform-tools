@@ -11,11 +11,12 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - `../README.md`: Tool overview, install command, and high-level usage.
 - `../Makefile`: Supported local entry points. Run `make help` to see them.
 
-## Docs In This Directory
+## Docs In This Tree
 
 - `ssh-identity-helper.md`: How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
 - `vm-env-collector.md`: How to use `vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
 - `platform-config-init.md`: How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
+- `pki-implementation-plan.md`: Checklist plan for the OpenSSL PKI helper feature.
 - `proxmox-token-init.md`: How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - `proxmox-vm-cleanup.md`: How to safely stop and destroy exactly one Proxmox VM by VMID.
 - `handoffs/config-namespace-handoff.md`: Downstream ownership notes for the local secret namespace.
@@ -29,6 +30,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Decide where real SSH configs live: use `ssh-identity-helper.md`.
 - Collect Rocky VM rebuild facts: use `vm-env-collector.md`.
 - Create the outside-Git local secret namespace: use `platform-config-init.md`.
+- Track PKI helper implementation: use `pki-implementation-plan.md`.
 - Bootstrap the Proxmox API token identity: use `proxmox-token-init.md`.
 - Clean up one known Proxmox VM: use `proxmox-vm-cleanup.md`.
 
@@ -39,5 +41,6 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - `../bin/platform-config-init`: Local outside-Git config initializer.
 - `../bin/platform-proxmox-token-init`: Proxmox API token bootstrap helper.
 - `../bin/platform-proxmox-vm-cleanup`: Safe single-VM Proxmox cleanup helper.
+- `pki-implementation-plan.md`: PKI helper implementation checklist.
 - `../assets/brand/`: Project brand assets for release metadata and forge profiles.
 - `handoffs/`: Handoff notes for downstream coding agents and platform repositories.

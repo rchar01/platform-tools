@@ -4,7 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
-No unreleased changes.
+- Added the PKI implementation plan and reserved `~/.config/platform-infrastructure/pki/` as a top-level outside-Git namespace for future PKI helper state.
+- `platform-config-init` now creates `pki/` alongside `infra/` and `config/`.
 
 ## v1.0.0 - 2026-05-23
 
