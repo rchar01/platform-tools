@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n "$COMMON_PATH" ]]; then
+  COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh
+elif [[ -r "${SCRIPT_DIR}/../lib/platform-pki-common.sh" ]]; then
+  COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh
+else
+  COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh
+fi
+[[ -r "$COMMON_PATH" ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-pki-init [options]
+
+Create the local outside-Git PKI working directory.
+
+Options:
+  --namespace <path>  Platform namespace root. Default: ~/.config/platform-infrastructure
+  --pki-dir <path>    PKI directory. Default: <namespace>/pki
+  --force             Overwrite template/example files, but never CA keys or certs.
+  -h, --help          Show this help.
+USAGE
+}
+
+copy_template() {
+  local source=$1
+  local target=$2
+
+  if [[ -e "$target" && "$FORCE" != 'true' ]]; then
+    pki_info "Kept existing file: $target"
+    return 0
+  fi
+  cp "$source" "$target"
+  chmod 600 "$target"
+  pki_ok "Wrote $target"
+}
+
+NAMESPACE=$(pki_default_namespace)
+PKI_DIR=''
+FORCE=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --namespace)
+      [[ $# -ge 2 ]] || pki_die '--namespace requires a value'
+      NAMESPACE=$2
+      shift 2
+      ;;
+    --pki-dir)
+      [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'
+      PKI_DIR=$2
+      shift 2
+      ;;
+    --force)
+      FORCE=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      pki_die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+NAMESPACE=$(pki_expand_path "$NAMESPACE")
+if [[ -z "$PKI_DIR" ]]; then
+  PKI_DIR=${NAMESPACE}/pki
+else
+  PKI_DIR=$(pki_expand_path "$PKI_DIR")
+fi
+
+TEMPLATE_DIR=$(pki_template_dir) || pki_die 'PKI templates not found'
+
+pki_prepare_dir "$NAMESPACE"
+pki_prepare_dir "$PKI_DIR"
+
+for dir in \
+  "$PKI_DIR/inventory" \
+  "$PKI_DIR/root-ca" "$PKI_DIR/root-ca/certs" "$PKI_DIR/root-ca/private" "$PKI_DIR/root-ca/crl" "$PKI_DIR/root-ca/newcerts" \
+  "$PKI_DIR/intermediate-ca" "$PKI_DIR/intermediate-ca/certs" "$PKI_DIR/intermediate-ca/csr" "$PKI_DIR/intermediate-ca/private" "$PKI_DIR/intermediate-ca/crl" "$PKI_DIR/intermediate-ca/newcerts" \
+  "$PKI_DIR/services" "$PKI_DIR/export" "$PKI_DIR/export/ansible" "$PKI_DIR/backups"; do
+  pki_prepare_dir "$dir"
+done
+
+pki_init_ca_db "$PKI_DIR/root-ca"
+pki_init_ca_db "$PKI_DIR/intermediate-ca"
+chmod 600 "$PKI_DIR/root-ca/index.txt" "$PKI_DIR/root-ca/serial" "$PKI_DIR/root-ca/crlnumber" "$PKI_DIR/root-ca/index.txt.attr"
+chmod 600 "$PKI_DIR/intermediate-ca/index.txt" "$PKI_DIR/intermediate-ca/serial" "$PKI_DIR/intermediate-ca/crlnumber" "$PKI_DIR/intermediate-ca/index.txt.attr"
+
+copy_template "$TEMPLATE_DIR/services.yml.example" "$PKI_DIR/inventory/services.yml"
+copy_template "$TEMPLATE_DIR/pki.env.example" "$PKI_DIR/pki.env"
+
+for template in openssl-root.cnf.tpl openssl-intermediate.cnf.tpl openssl-service.cnf.tpl; do
+  copy_template "$TEMPLATE_DIR/$template" "$PKI_DIR/$template"
+done
+
+find "$PKI_DIR" -type d -name private -exec chmod 700 {} +
+find "$PKI_DIR" -type f -name '*.key' -exec chmod 600 {} +
+
+pki_ok "PKI directory ready: $PKI_DIR"

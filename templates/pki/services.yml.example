@@ -1,0 +1,20 @@
+services:
+  platform-example:
+    common_name: app.example.internal
+    dns:
+      - app.example.internal
+      - app
+    ips:
+      - 192.0.2.10
+    days: 397
+    deploy:
+      hosts:
+        - app.example.internal
+      cert_path: /etc/example/tls.crt
+      key_path: /etc/example/tls.key
+      chain_path: /etc/example/ca-chain.crt
+      owner: root
+      group: root
+      cert_mode: "0644"
+      key_mode: "0600"
+      reload_command: systemctl reload example.service

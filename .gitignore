@@ -18,6 +18,12 @@ dist/
 *.local
 *.secret
 
+# Local PKI state and generated certificate material
+/pki/
+*.p12
+*.pfx
+*.age
+
 # SSH material
 *.pem
 *.key

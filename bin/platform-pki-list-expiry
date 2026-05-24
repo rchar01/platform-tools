@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n "$COMMON_PATH" ]]; then COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh; elif [[ -r "${SCRIPT_DIR}/../lib/platform-pki-common.sh" ]]; then COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh; else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh; fi
+[[ -r "$COMMON_PATH" ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-pki-list-expiry [options]
+
+List expiry dates for generated service certificates.
+
+Options:
+  --namespace <path>      Platform namespace root. Default: ~/.config/platform-infrastructure
+  --pki-dir <path>        PKI directory. Default: <namespace>/pki
+  --warn-days <days>      Warning threshold. Default: 90
+  --critical-days <days>  Critical threshold. Default: 30
+  -h, --help              Show this help.
+
+Exit codes:
+  0 all OK, 1 warning threshold reached, 2 critical threshold reached, 3 config/script error.
+USAGE
+}
+
+NAMESPACE=$(pki_default_namespace)
+PKI_DIR=''
+WARN_DAYS=90
+CRITICAL_DAYS=30
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --namespace) [[ $# -ge 2 ]] || pki_die '--namespace requires a value'; NAMESPACE=$2; shift 2 ;;
+    --pki-dir) [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'; PKI_DIR=$2; shift 2 ;;
+    --warn-days) [[ $# -ge 2 ]] || pki_die '--warn-days requires a value'; WARN_DAYS=$2; shift 2 ;;
+    --critical-days) [[ $# -ge 2 ]] || pki_die '--critical-days requires a value'; CRITICAL_DAYS=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) pki_die "Unknown argument: $1" ;;
+  esac
+done
+
+pki_validate_days "$WARN_DAYS"
+pki_validate_days "$CRITICAL_DAYS"
+NAMESPACE=$(pki_expand_path "$NAMESPACE")
+PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
+PKI_DIR=$(pki_expand_path "$PKI_DIR")
+
+pki_require_cmd openssl
+pki_require_pki_dir
+pki_require_inventory
+
+printf '%-24s %-22s %-10s %s\n' 'SERVICE' 'EXPIRES' 'DAYS_LEFT' 'STATUS'
+EXIT_CODE=0
+
+while IFS= read -r service || [[ -n "$service" ]]; do
+  [[ -n "$service" ]] || continue
+  cert=$(pki_service_cert "$service")
+  if [[ ! -f "$cert" ]]; then
+    printf '%-24s %-22s %-10s %s\n' "$service" '-' '-' 'MISSING'
+    EXIT_CODE=3
+    continue
+  fi
+
+  days_left=$(pki_cert_days_left "$cert")
+  expires=$(pki_cert_not_after_iso "$cert")
+  status=OK
+  if (( days_left <= CRITICAL_DAYS )); then
+    status=CRITICAL
+    EXIT_CODE=2
+  elif (( days_left <= WARN_DAYS )); then
+    status=WARN
+    if (( EXIT_CODE < 1 )); then
+      EXIT_CODE=1
+    fi
+  fi
+
+  printf '%-24s %-22s %-10s %s\n' "$service" "$expires" "$days_left" "$status"
+done < <(pki_inventory_services)
+
+exit "$EXIT_CODE"

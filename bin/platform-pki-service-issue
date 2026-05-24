@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n "$COMMON_PATH" ]]; then COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh; elif [[ -r "${SCRIPT_DIR}/../lib/platform-pki-common.sh" ]]; then COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh; else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh; fi
+[[ -r "$COMMON_PATH" ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-pki-service-issue <service> [options]
+
+Issue a service certificate from inventory/services.yml using the intermediate CA.
+
+Options:
+  --namespace <path>  Platform namespace root. Default: ~/.config/platform-infrastructure
+  --pki-dir <path>    PKI directory. Default: <namespace>/pki
+  --days <days>       Override service certificate lifetime.
+  --rotate-key        Replace an existing service private key.
+  -h, --help          Show this help.
+USAGE
+}
+
+NAMESPACE=$(pki_default_namespace)
+PKI_DIR=''
+SERVICE=''
+DAYS=''
+ROTATE_KEY=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --namespace) [[ $# -ge 2 ]] || pki_die '--namespace requires a value'; NAMESPACE=$2; shift 2 ;;
+    --pki-dir) [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'; PKI_DIR=$2; shift 2 ;;
+    --days) [[ $# -ge 2 ]] || pki_die '--days requires a value'; DAYS=$2; shift 2 ;;
+    --rotate-key) ROTATE_KEY=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --*) pki_die "Unknown argument: $1" ;;
+    *)
+      [[ -z "$SERVICE" ]] || pki_die "Unexpected extra argument: $1"
+      SERVICE=$1
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$SERVICE" ]] || pki_die 'service name is required'
+pki_validate_service_name "$SERVICE"
+NAMESPACE=$(pki_expand_path "$NAMESPACE")
+PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
+PKI_DIR=$(pki_expand_path "$PKI_DIR")
+
+pki_require_cmd openssl
+pki_require_pki_dir
+pki_require_service_in_inventory "$SERVICE"
+pki_require_file "$(pki_intermediate_key)"
+pki_require_file "$(pki_intermediate_cert)"
+pki_require_file "$(pki_root_cert)"
+
+COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name)
+[[ -n "$COMMON_NAME" ]] || pki_die "common_name is missing for service: $SERVICE"
+if [[ -z "$DAYS" ]]; then
+  DAYS=$(pki_inventory_scalar "$SERVICE" days)
+fi
+DAYS=${DAYS:-${PLATFORM_PKI_SERVICE_DAYS:-397}}
+pki_validate_days "$DAYS"
+
+SERVICE_DIR=$(pki_service_dir "$SERVICE")
+KEY=$(pki_service_key "$SERVICE")
+CSR="$SERVICE_DIR/csr/tls.csr"
+CERT=$(pki_service_cert "$SERVICE")
+CONF="$SERVICE_DIR/openssl.cnf"
+DNS_FILE=$(mktemp)
+IPS_FILE=$(mktemp)
+trap 'rm -f "$DNS_FILE" "$IPS_FILE"' EXIT
+
+pki_inventory_array "$SERVICE" dns >"$DNS_FILE"
+pki_inventory_array "$SERVICE" ips >"$IPS_FILE"
+if [[ ! -s "$DNS_FILE" && ! -s "$IPS_FILE" ]]; then
+  pki_die "Service must define at least one DNS or IP SAN: $SERVICE"
+fi
+
+for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DIR/certs" "$SERVICE_DIR/chain"; do
+  pki_prepare_dir "$dir"
+done
+
+if [[ -e "$CERT" ]]; then
+  pki_die "Service certificate already exists; use platform-pki-service-renew when renewal is implemented: $CERT"
+fi
+
+if [[ -e "$KEY" && "$ROTATE_KEY" != 'true' ]]; then
+  pki_info "Reusing existing service private key: $KEY"
+elif [[ -e "$KEY" && "$ROTATE_KEY" == 'true' ]]; then
+  ARCHIVE_DIR="$SERVICE_DIR/archive/$(date -u '+%Y%m%d-%H%M%S')"
+  pki_prepare_dir "$ARCHIVE_DIR"
+  mv "$KEY" "$ARCHIVE_DIR/tls.key"
+  pki_warn "Archived previous service private key: $ARCHIVE_DIR/tls.key"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$KEY"
+else
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$KEY"
+fi
+chmod 600 "$KEY"
+
+pki_write_service_config "$CONF" "$COMMON_NAME" "$DNS_FILE" "$IPS_FILE"
+chmod 600 "$CONF"
+
+openssl req -config "$CONF" -key "$KEY" -new -sha384 -out "$CSR"
+chmod 600 "$CSR"
+openssl ca -batch -config "$PKI_DIR/intermediate-ca/openssl.cnf" -extfile "$CONF" -extensions server_cert -days "$DAYS" -notext -md sha384 -in "$CSR" -out "$CERT"
+chmod 644 "$CERT"
+cat "$(pki_intermediate_cert)" "$(pki_root_cert)" >"$(pki_service_chain "$SERVICE")"
+cat "$CERT" "$(pki_intermediate_cert)" >"$(pki_service_fullchain "$SERVICE")"
+chmod 644 "$(pki_service_chain "$SERVICE")" "$(pki_service_fullchain "$SERVICE")"
+
+bash "$SCRIPT_DIR/platform-pki-service-verify" "$SERVICE" --pki-dir "$PKI_DIR"
+pki_ok "Issued service certificate: $CERT"

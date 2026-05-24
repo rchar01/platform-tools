@@ -31,6 +31,12 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-config-init` | Create the local outside-Git secret namespace under `~/.config/platform-infrastructure/`. |
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
+| `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
+| `platform-pki-root-create` | Create the root CA key and certificate. |
+| `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
+| `platform-pki-service-issue` | Issue a service certificate from PKI inventory. |
+| `platform-pki-service-verify` | Verify a generated service certificate. |
+| `platform-pki-list-expiry` | List service certificate expiry status. |
 
 ## Install
 
@@ -117,6 +123,16 @@ Clean up one Proxmox VM by VMID after verifying the printed target:
 platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --vmid 9900
 ```
 
+Initialize PKI state and issue a test service certificate from inventory:
+
+```bash
+platform-pki-init
+platform-pki-root-create --name "Platform Example Root CA" --org "Platform Example" --country "PL"
+platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org "Platform Example" --country "PL"
+platform-pki-service-issue platform-example
+platform-pki-list-expiry
+```
+
 Add a name guard and non-interactive confirmation for automation:
 
 ```bash
@@ -135,6 +151,7 @@ sudo ./bin/vm-env-collect
 ./bin/platform-config-init
 ./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
 ./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
+./bin/platform-pki-init
 ```
 
 ## Documentation
@@ -144,6 +161,7 @@ sudo ./bin/vm-env-collect
 | `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
 | `docs/vm-env-collector.md` | Rocky VM collector usage, output structure, and safety notes. |
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
+| `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
 | `docs/pki-implementation-plan.md` | Checklist plan for the OpenSSL PKI helper feature. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |

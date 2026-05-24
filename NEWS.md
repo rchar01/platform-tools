@@ -6,6 +6,7 @@ This file gives a short, release-oriented view of what changed between versions.
 
 - Added the PKI implementation plan and reserved `~/.config/platform-infrastructure/pki/` as a top-level outside-Git namespace for future PKI helper state.
 - `platform-config-init` now creates `pki/` alongside `infra/` and `config/`.
+- Added the first OpenSSL PKI helper milestone for initializing PKI state, creating root/intermediate CAs, issuing service certificates, verifying certificates, and listing expiry.
 
 ## v1.0.0 - 2026-05-23
 

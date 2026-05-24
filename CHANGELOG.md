@@ -10,11 +10,15 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added `docs/pki-implementation-plan.md` to track the planned OpenSSL PKI helper feature.
+- Added initial OpenSSL PKI helpers: `platform-pki-init`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-service-issue`, `platform-pki-service-verify`, and `platform-pki-list-expiry`.
+- Added PKI templates and shared helper library under `templates/pki/` and `lib/`.
+- Added `docs/pki-openssl.md` for PKI helper usage and safety rules.
 
 ### Changed
 
 - Changed the local secret convention to include `pki/` as a top-level namespace for PKI CA state, issued certificates, exports, and backups.
 - Changed `platform-config-init` to create `pki/` alongside `infra/` and `config/`.
+- Changed `make install` to install shared PKI assets into `SHARE_DIR`.
 
 ## [1.0.0] - 2026-05-23
 

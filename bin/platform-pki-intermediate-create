@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n "$COMMON_PATH" ]]; then COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh; elif [[ -r "${SCRIPT_DIR}/../lib/platform-pki-common.sh" ]]; then COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh; else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh; fi
+[[ -r "$COMMON_PATH" ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-pki-intermediate-create --name <cn> --org <org> --country <country> [options]
+
+Create the intermediate CA key, CSR, certificate, and CA chain.
+
+Options:
+  --namespace <path>                       Platform namespace root. Default: ~/.config/platform-infrastructure
+  --pki-dir <path>                         PKI directory. Default: <namespace>/pki
+  --name <cn>                              Intermediate CA common name.
+  --org <org>                              Organization name.
+  --country <country>                      Country code.
+  --days <days>                            Intermediate lifetime. Default: 1825
+  --force                                  Overwrite existing intermediate material.
+  --allow-unencrypted-intermediate-key     Create an unencrypted intermediate private key.
+  -h, --help                               Show this help.
+USAGE
+}
+
+NAMESPACE=$(pki_default_namespace)
+PKI_DIR=''
+NAME=''
+ORG=''
+COUNTRY=''
+DAYS=${PLATFORM_PKI_INTERMEDIATE_DAYS:-1825}
+FORCE=false
+ALLOW_UNENCRYPTED=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --namespace) [[ $# -ge 2 ]] || pki_die '--namespace requires a value'; NAMESPACE=$2; shift 2 ;;
+    --pki-dir) [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'; PKI_DIR=$2; shift 2 ;;
+    --name) [[ $# -ge 2 ]] || pki_die '--name requires a value'; NAME=$2; shift 2 ;;
+    --org) [[ $# -ge 2 ]] || pki_die '--org requires a value'; ORG=$2; shift 2 ;;
+    --country) [[ $# -ge 2 ]] || pki_die '--country requires a value'; COUNTRY=$2; shift 2 ;;
+    --days) [[ $# -ge 2 ]] || pki_die '--days requires a value'; DAYS=$2; shift 2 ;;
+    --force) FORCE=true; shift ;;
+    --allow-unencrypted-intermediate-key) ALLOW_UNENCRYPTED=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) pki_die "Unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$NAME" ]] || pki_die '--name is required'
+[[ -n "$ORG" ]] || pki_die '--org is required'
+[[ -n "$COUNTRY" ]] || pki_die '--country is required'
+pki_validate_days "$DAYS"
+NAMESPACE=$(pki_expand_path "$NAMESPACE")
+PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
+PKI_DIR=$(pki_expand_path "$PKI_DIR")
+
+pki_require_cmd openssl
+pki_require_pki_dir
+pki_require_file "$(pki_root_key)"
+pki_require_file "$(pki_root_cert)"
+pki_init_ca_db "$PKI_DIR/intermediate-ca"
+
+INT_KEY=$(pki_intermediate_key)
+INT_CERT=$(pki_intermediate_cert)
+INT_CSR="$PKI_DIR/intermediate-ca/csr/intermediate-ca.csr"
+INT_CONF="$PKI_DIR/intermediate-ca/openssl.cnf"
+ROOT_CONF="$PKI_DIR/root-ca/openssl.cnf"
+
+if [[ "$FORCE" != 'true' ]]; then
+  [[ ! -e "$INT_KEY" ]] || pki_die "Intermediate key exists; use --force to overwrite: $INT_KEY"
+  [[ ! -e "$INT_CERT" ]] || pki_die "Intermediate certificate exists; use --force to overwrite: $INT_CERT"
+fi
+
+pki_write_intermediate_config "$INT_CONF" "$COUNTRY" "$ORG" "$NAME"
+chmod 600 "$INT_CONF"
+
+if [[ "$ALLOW_UNENCRYPTED" == 'true' ]]; then
+  pki_warn 'Creating an unencrypted intermediate CA private key because --allow-unencrypted-intermediate-key was used'
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$INT_KEY"
+else
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -out "$INT_KEY"
+fi
+chmod 600 "$INT_KEY"
+
+openssl req -config "$INT_CONF" -key "$INT_KEY" -new -sha384 -out "$INT_CSR"
+chmod 600 "$INT_CSR"
+openssl ca -batch -config "$ROOT_CONF" -extensions v3_intermediate_ca -days "$DAYS" -notext -md sha384 -in "$INT_CSR" -out "$INT_CERT"
+chmod 644 "$INT_CERT"
+cat "$INT_CERT" "$(pki_root_cert)" >"$(pki_ca_chain)"
+chmod 644 "$(pki_ca_chain)"
+pki_ok "Created intermediate CA certificate: $INT_CERT"
