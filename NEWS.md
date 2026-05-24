@@ -4,12 +4,17 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+No changes yet.
+
+## v1.1.0 - 2026-05-24
+
 - Reserved `~/.config/platform-infrastructure/pki/` as a top-level outside-Git namespace for PKI helper state.
 - `platform-config-init` now creates `pki/` alongside `infra/` and `config/`.
-- Added the first OpenSSL PKI helper milestone for initializing PKI state, creating root/intermediate CAs, issuing service certificates, verifying certificates, and listing expiry.
-- Added PKI renewal and Ansible export helpers for the second PKI milestone.
+- Added OpenSSL PKI helpers for initializing PKI state, creating root/intermediate CAs, issuing service certificates, verifying certificates, and listing expiry.
+- Added PKI renewal, certificate detail printing, and Ansible export helpers.
 - Added PKI backup support with encrypted `age` output by default and explicit plain-backup override.
 - Added README requirements for core tools, PKI helpers, SSH/Proxmox helpers, and optional verification tools.
+- Renamed `vm-env-collect` to `platform-vm-env-collect` for CLI naming consistency. This is a breaking command-name change.
 
 ## v1.0.0 - 2026-05-23
 

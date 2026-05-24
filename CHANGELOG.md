@@ -7,6 +7,8 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-24
+
 ### Added
 
 - Added initial OpenSSL PKI helpers: `platform-pki-init`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-service-issue`, `platform-pki-service-verify`, and `platform-pki-list-expiry`.
@@ -22,6 +24,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed `platform-config-init` to create `pki/` alongside `infra/` and `config/`.
 - Changed `make install` to install shared PKI assets into `SHARE_DIR`.
 - Renamed `vm-env-collect` to `platform-vm-env-collect` for CLI naming consistency.
+
+### Compatibility
+
+- `vm-env-collect` was removed. Use `platform-vm-env-collect` instead.
 
 ## [1.0.0] - 2026-05-23
 
