@@ -165,7 +165,67 @@ Generated files:
 ~/.config/platform-infrastructure/pki/services/platform-example/openssl.cnf
 ```
 
-`platform-pki-service-issue` refuses to overwrite an existing service certificate. Renewal belongs to the later `platform-pki-service-renew` milestone.
+`platform-pki-service-issue` refuses to overwrite an existing service certificate. Use `platform-pki-service-renew` after the first issuance.
+
+## Renew A Service Certificate
+
+Renewal archives the previous certificate material under:
+
+```text
+~/.config/platform-infrastructure/pki/services/<service>/archive/<timestamp>/
+```
+
+By default, renewal reuses the existing service private key:
+
+```bash
+platform-pki-service-renew platform-example
+```
+
+Rotate the service private key explicitly when needed:
+
+```bash
+platform-pki-service-renew platform-example --rotate-key
+```
+
+The renew command does not deploy anything to remote hosts. Deployment belongs in `platform-config`.
+
+## Print Certificate Details
+
+```bash
+platform-pki-print-cert platform-example
+```
+
+The command prints subject, issuer, serial, validity dates, SANs, key usage, extended key usage, and SHA-256 fingerprint.
+
+## Export For Ansible
+
+Export all generated inventory services by default:
+
+```bash
+platform-pki-export-ansible --force
+```
+
+Export only selected services by passing names:
+
+```bash
+platform-pki-export-ansible platform-example --force
+```
+
+Output layout:
+
+```text
+~/.config/platform-infrastructure/pki/export/ansible/
+├── ca/
+│   └── root-ca.crt
+└── services/
+    └── platform-example/
+        ├── tls.crt
+        ├── tls.key
+        ├── ca-chain.crt
+        └── fullchain.crt
+```
+
+The export directory contains service private keys and must stay outside Git.
 
 ## List Expiry
 

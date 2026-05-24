@@ -10,17 +10,26 @@ source "$COMMON_PATH"
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: platform-pki-service-issue <service> [options]
+Usage: platform-pki-service-renew <service> [options]
 
-Issue a service certificate from inventory/services.yml using the intermediate CA.
+Renew a service certificate from inventory/services.yml using the intermediate CA.
 
 Options:
   --namespace <path>  Platform namespace root. Default: ~/.config/platform-infrastructure
   --pki-dir <path>    PKI directory. Default: <namespace>/pki
   --days <days>       Override service certificate lifetime.
-  --rotate-key        Replace an existing service private key.
+  --rotate-key        Archive and replace the existing service private key.
   -h, --help          Show this help.
 USAGE
+}
+
+archive_if_exists() {
+  local path=$1
+  local target_name=$2
+
+  [[ -e "$path" ]] || return 0
+  mv "$path" "$ARCHIVE_DIR/$target_name"
+  pki_info "Archived $path to $ARCHIVE_DIR/$target_name"
 }
 
 NAMESPACE=$(pki_default_namespace)
@@ -70,7 +79,10 @@ SERVICE_DIR=$(pki_service_dir "$SERVICE")
 KEY=$(pki_service_key "$SERVICE")
 CSR="$SERVICE_DIR/csr/tls.csr"
 CERT=$(pki_service_cert "$SERVICE")
+CHAIN=$(pki_service_chain "$SERVICE")
+FULLCHAIN=$(pki_service_fullchain "$SERVICE")
 CONF="$SERVICE_DIR/openssl.cnf"
+ARCHIVE_DIR=$(pki_new_service_archive_dir "$SERVICE")
 DNS_FILE=$(mktemp)
 IPS_FILE=$(mktemp)
 trap 'rm -f "$DNS_FILE" "$IPS_FILE"' EXIT
@@ -81,23 +93,23 @@ if [[ ! -s "$DNS_FILE" && ! -s "$IPS_FILE" ]]; then
   pki_die "Service must define at least one DNS or IP SAN: $SERVICE"
 fi
 
-for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DIR/certs" "$SERVICE_DIR/chain"; do
+for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DIR/certs" "$SERVICE_DIR/chain" "$SERVICE_DIR/archive"; do
   pki_prepare_dir "$dir"
 done
 
-if [[ -e "$CERT" ]]; then
-  pki_die "Service certificate already exists; use platform-pki-service-renew when renewal is implemented: $CERT"
-fi
+[[ -f "$KEY" ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
+archive_if_exists "$CERT" tls.crt
+archive_if_exists "$CSR" tls.csr
+archive_if_exists "$CHAIN" ca-chain.crt
+archive_if_exists "$FULLCHAIN" fullchain.crt
+archive_if_exists "$CONF" openssl.cnf
 
-if [[ -e "$KEY" && "$ROTATE_KEY" != 'true' ]]; then
-  pki_info "Reusing existing service private key: $KEY"
-elif [[ -e "$KEY" && "$ROTATE_KEY" == 'true' ]]; then
-  ARCHIVE_DIR=$(pki_new_service_archive_dir "$SERVICE")
-  mv "$KEY" "$ARCHIVE_DIR/tls.key"
-  pki_warn "Archived previous service private key: $ARCHIVE_DIR/tls.key"
+if [[ "$ROTATE_KEY" == 'true' ]]; then
+  archive_if_exists "$KEY" tls.key
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$KEY"
+  pki_warn "Rotated service private key: $KEY"
 else
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$KEY"
+  pki_info "Reusing existing service private key: $KEY"
 fi
 chmod 600 "$KEY"
 
@@ -108,9 +120,9 @@ openssl req -config "$CONF" -key "$KEY" -new -sha384 -out "$CSR"
 chmod 600 "$CSR"
 openssl ca -batch -config "$PKI_DIR/intermediate-ca/openssl.cnf" -extfile "$CONF" -extensions server_cert -days "$DAYS" -notext -md sha384 -in "$CSR" -out "$CERT"
 chmod 644 "$CERT"
-cat "$(pki_intermediate_cert)" "$(pki_root_cert)" >"$(pki_service_chain "$SERVICE")"
-cat "$CERT" "$(pki_intermediate_cert)" >"$(pki_service_fullchain "$SERVICE")"
-chmod 644 "$(pki_service_chain "$SERVICE")" "$(pki_service_fullchain "$SERVICE")"
+cat "$(pki_intermediate_cert)" "$(pki_root_cert)" >"$CHAIN"
+cat "$CERT" "$(pki_intermediate_cert)" >"$FULLCHAIN"
+chmod 644 "$CHAIN" "$FULLCHAIN"
 
 bash "$SCRIPT_DIR/platform-pki-service-verify" "$SERVICE" --pki-dir "$PKI_DIR"
-pki_ok "Issued service certificate: $CERT"
+pki_ok "Renewed service certificate: $CERT"

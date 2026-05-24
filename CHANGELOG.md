@@ -11,6 +11,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added `docs/pki-implementation-plan.md` to track the planned OpenSSL PKI helper feature.
 - Added initial OpenSSL PKI helpers: `platform-pki-init`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-service-issue`, `platform-pki-service-verify`, and `platform-pki-list-expiry`.
+- Added PKI renewal, certificate detail printing, and Ansible export helpers: `platform-pki-service-renew`, `platform-pki-print-cert`, and `platform-pki-export-ansible`.
 - Added PKI templates and shared helper library under `templates/pki/` and `lib/`.
 - Added `docs/pki-openssl.md` for PKI helper usage and safety rules.
 

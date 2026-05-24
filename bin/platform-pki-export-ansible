@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n "$COMMON_PATH" ]]; then COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh; elif [[ -r "${SCRIPT_DIR}/../lib/platform-pki-common.sh" ]]; then COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh; else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh; fi
+[[ -r "$COMMON_PATH" ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-pki-export-ansible [service ...] [options]
+
+Export generated PKI files into a stable Ansible-consumable layout.
+
+By default, exports all inventory services that have generated certificate files.
+Pass one or more service names to export only those services.
+
+Options:
+  --namespace <path>  Platform namespace root. Default: ~/.config/platform-infrastructure
+  --pki-dir <path>    PKI directory. Default: <namespace>/pki
+  --export-dir <path> Export directory. Default: <pki-dir>/export/ansible
+  --force             Replace an existing export directory.
+  -h, --help          Show this help.
+USAGE
+}
+
+copy_file() {
+  local source=$1
+  local target=$2
+  local mode=$3
+
+  pki_require_file "$source"
+  cp "$source" "$target"
+  chmod "$mode" "$target"
+}
+
+service_is_generated() {
+  local service=$1
+  [[ -f "$(pki_service_key "$service")" && -f "$(pki_service_cert "$service")" && -f "$(pki_service_chain "$service")" && -f "$(pki_service_fullchain "$service")" ]]
+}
+
+NAMESPACE=$(pki_default_namespace)
+PKI_DIR=''
+EXPORT_DIR=''
+FORCE=false
+SERVICES=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --namespace) [[ $# -ge 2 ]] || pki_die '--namespace requires a value'; NAMESPACE=$2; shift 2 ;;
+    --pki-dir) [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'; PKI_DIR=$2; shift 2 ;;
+    --export-dir) [[ $# -ge 2 ]] || pki_die '--export-dir requires a value'; EXPORT_DIR=$2; shift 2 ;;
+    --force) FORCE=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --*) pki_die "Unknown argument: $1" ;;
+    *)
+      pki_validate_service_name "$1"
+      SERVICES+=("$1")
+      shift
+      ;;
+  esac
+done
+
+NAMESPACE=$(pki_expand_path "$NAMESPACE")
+PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
+PKI_DIR=$(pki_expand_path "$PKI_DIR")
+EXPORT_DIR=${EXPORT_DIR:-${PKI_DIR}/export/ansible}
+EXPORT_DIR=$(pki_expand_path "$EXPORT_DIR")
+
+pki_require_pki_dir
+pki_require_inventory
+pki_require_file "$(pki_root_cert)"
+
+if [[ ${#SERVICES[@]} -eq 0 ]]; then
+  while IFS= read -r service || [[ -n "$service" ]]; do
+    [[ -n "$service" ]] || continue
+    if service_is_generated "$service"; then
+      SERVICES+=("$service")
+    else
+      pki_warn "Skipping service without generated certificate files: $service"
+    fi
+  done < <(pki_inventory_services)
+else
+  for service in "${SERVICES[@]}"; do
+    pki_require_service_in_inventory "$service"
+    service_is_generated "$service" || pki_die "Generated certificate files are incomplete for service: $service"
+  done
+fi
+
+[[ ${#SERVICES[@]} -gt 0 ]] || pki_die 'No generated service certificates found to export'
+
+if [[ -e "$EXPORT_DIR" && "$FORCE" != 'true' ]]; then
+  pki_die "Export directory exists; use --force to replace it: $EXPORT_DIR"
+fi
+
+if [[ -e "$EXPORT_DIR" ]]; then
+  rm -rf "$EXPORT_DIR"
+fi
+pki_prepare_dir "$EXPORT_DIR"
+pki_prepare_dir "$EXPORT_DIR/ca"
+pki_prepare_dir "$EXPORT_DIR/services"
+
+copy_file "$(pki_root_cert)" "$EXPORT_DIR/ca/root-ca.crt" 644
+
+for service in "${SERVICES[@]}"; do
+  target_dir="$EXPORT_DIR/services/$service"
+  pki_prepare_dir "$target_dir"
+  copy_file "$(pki_service_cert "$service")" "$target_dir/tls.crt" 644
+  copy_file "$(pki_service_key "$service")" "$target_dir/tls.key" 600
+  copy_file "$(pki_service_chain "$service")" "$target_dir/ca-chain.crt" 644
+  copy_file "$(pki_service_fullchain "$service")" "$target_dir/fullchain.crt" 644
+  pki_ok "Exported service: $service"
+done
+
+pki_warn "Export contains service private keys: $EXPORT_DIR"
+pki_ok "Ansible export ready: $EXPORT_DIR"

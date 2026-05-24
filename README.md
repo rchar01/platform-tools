@@ -35,8 +35,11 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
 | `platform-pki-service-issue` | Issue a service certificate from PKI inventory. |
+| `platform-pki-service-renew` | Renew a service certificate, reusing the private key by default. |
 | `platform-pki-service-verify` | Verify a generated service certificate. |
 | `platform-pki-list-expiry` | List service certificate expiry status. |
+| `platform-pki-print-cert` | Print readable certificate details for a service. |
+| `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
 
 ## Install
 
@@ -130,7 +133,9 @@ platform-pki-init
 platform-pki-root-create --name "Platform Example Root CA" --org "Platform Example" --country "PL"
 platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org "Platform Example" --country "PL"
 platform-pki-service-issue platform-example
+platform-pki-service-renew platform-example
 platform-pki-list-expiry
+platform-pki-export-ansible --force
 ```
 
 Add a name guard and non-interactive confirmation for automation:

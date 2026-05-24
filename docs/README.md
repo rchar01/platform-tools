@@ -47,8 +47,11 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - `../bin/platform-pki-root-create`: Root CA creation helper.
 - `../bin/platform-pki-intermediate-create`: Intermediate CA creation helper.
 - `../bin/platform-pki-service-issue`: Service certificate issuance helper.
+- `../bin/platform-pki-service-renew`: Service certificate renewal helper.
 - `../bin/platform-pki-service-verify`: Service certificate verification helper.
 - `../bin/platform-pki-list-expiry`: Certificate expiry listing helper.
+- `../bin/platform-pki-print-cert`: Certificate detail printing helper.
+- `../bin/platform-pki-export-ansible`: Ansible export helper for generated PKI files.
 - `pki-implementation-plan.md`: PKI helper implementation checklist.
 - `../assets/brand/`: Project brand assets for release metadata and forge profiles.
 - `handoffs/`: Handoff notes for downstream coding agents and platform repositories.

@@ -215,6 +215,25 @@ pki_service_fullchain() {
   printf '%s/chain/fullchain.crt\n' "$(pki_service_dir "$1")"
 }
 
+pki_new_service_archive_dir() {
+  local service=$1
+  local archive_root base candidate n
+
+  archive_root="$(pki_service_dir "$service")/archive"
+  mkdir -p "$archive_root"
+  chmod 700 "$archive_root"
+  base="${archive_root}/$(date -u '+%Y%m%d-%H%M%S')"
+  candidate=$base
+  n=1
+  while [[ -e "$candidate" ]]; do
+    candidate=$(printf '%s-%02d' "$base" "$n")
+    n=$((n + 1))
+  done
+  mkdir -p "$candidate"
+  chmod 700 "$candidate"
+  printf '%s\n' "$candidate"
+}
+
 pki_root_cert() {
   printf '%s/root-ca/certs/root-ca.crt\n' "$PKI_DIR"
 }
