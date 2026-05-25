@@ -7,6 +7,23 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-25
+
+### Added
+
+- Added non-interactive passphrase file support for encrypted PKI root, intermediate, service issuance, and service renewal operations.
+- Added PKI documentation and README guidance for passphrase-file automation.
+- Added `AGENTS.md` with repository-specific workflow, verification, security, and release guidance for future agent sessions.
+
+### Changed
+
+- Hardened PKI passphrase file validation to require readable files with no group or world permissions.
+
+### Fixed
+
+- Rejected conflicting PKI options that combine passphrase files with unencrypted CA key creation.
+- Updated the existing-service certificate message to point directly at `platform-pki-service-renew`.
+
 ## [1.1.0] - 2026-05-24
 
 ### Added

@@ -18,6 +18,8 @@ Options:
   --namespace <path>  Platform namespace root. Default: ~/.config/platform-infrastructure
   --pki-dir <path>    PKI directory. Default: <namespace>/pki
   --days <days>       Override service certificate lifetime.
+  --intermediate-pass-file <path>
+                      Read encrypted intermediate key passphrase from file.
   --rotate-key        Replace an existing service private key.
   -h, --help          Show this help.
 USAGE
@@ -28,12 +30,14 @@ PKI_DIR=''
 SERVICE=''
 DAYS=''
 ROTATE_KEY=false
+INTERMEDIATE_PASS_FILE=''
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --namespace) [[ $# -ge 2 ]] || pki_die '--namespace requires a value'; NAMESPACE=$2; shift 2 ;;
     --pki-dir) [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'; PKI_DIR=$2; shift 2 ;;
     --days) [[ $# -ge 2 ]] || pki_die '--days requires a value'; DAYS=$2; shift 2 ;;
+    --intermediate-pass-file) [[ $# -ge 2 ]] || pki_die '--intermediate-pass-file requires a value'; INTERMEDIATE_PASS_FILE=$2; shift 2 ;;
     --rotate-key) ROTATE_KEY=true; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) pki_die "Unknown argument: $1" ;;
@@ -50,6 +54,10 @@ pki_validate_service_name "$SERVICE"
 NAMESPACE=$(pki_expand_path "$NAMESPACE")
 PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
 PKI_DIR=$(pki_expand_path "$PKI_DIR")
+if [[ -n "$INTERMEDIATE_PASS_FILE" ]]; then
+  INTERMEDIATE_PASS_FILE=$(pki_expand_path "$INTERMEDIATE_PASS_FILE")
+  pki_require_pass_file "$INTERMEDIATE_PASS_FILE"
+fi
 
 pki_require_cmd openssl
 pki_require_pki_dir
@@ -86,7 +94,7 @@ for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DI
 done
 
 if [[ -e "$CERT" ]]; then
-  pki_die "Service certificate already exists; use platform-pki-service-renew when renewal is implemented: $CERT"
+  pki_die "Service certificate already exists; use platform-pki-service-renew: $CERT"
 fi
 
 if [[ -e "$KEY" && "$ROTATE_KEY" != 'true' ]]; then
@@ -106,7 +114,11 @@ chmod 600 "$CONF"
 
 openssl req -config "$CONF" -key "$KEY" -new -sha384 -out "$CSR"
 chmod 600 "$CSR"
-openssl ca -batch -config "$PKI_DIR/intermediate-ca/openssl.cnf" -extfile "$CONF" -extensions server_cert -days "$DAYS" -notext -md sha384 -in "$CSR" -out "$CERT"
+CA_CMD=(openssl ca -batch -config "$PKI_DIR/intermediate-ca/openssl.cnf" -extfile "$CONF" -extensions server_cert -days "$DAYS" -notext -md sha384 -in "$CSR" -out "$CERT")
+if [[ -n "$INTERMEDIATE_PASS_FILE" ]]; then
+  CA_CMD+=(-passin "file:$INTERMEDIATE_PASS_FILE")
+fi
+"${CA_CMD[@]}"
 chmod 644 "$CERT"
 cat "$(pki_intermediate_cert)" "$(pki_root_cert)" >"$(pki_service_chain "$SERVICE")"
 cat "$CERT" "$(pki_intermediate_cert)" >"$(pki_service_fullchain "$SERVICE")"

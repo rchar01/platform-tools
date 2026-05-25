@@ -164,6 +164,8 @@ platform-pki-service-verify platform-example
 platform-pki-list-expiry
 ```
 
+For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
+
 Add a name guard and non-interactive confirmation for automation:
 
 ```bash
@@ -206,3 +208,5 @@ Keep real secrets outside Git. Do not commit VM collection output, generated arc
 Use `~/.config/platform-infrastructure/` for local secret material. Private but non-secret operator configuration belongs in private Git, such as `platform-private`.
 
 Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.
+
+PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, and prefer temporary secret-manager mounts over long-lived files.

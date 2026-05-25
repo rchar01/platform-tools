@@ -6,6 +6,13 @@ This file gives a short, release-oriented view of what changed between versions.
 
 No changes yet.
 
+## v1.2.0 - 2026-05-25
+
+- Added non-interactive passphrase file support for encrypted root, intermediate, service issuance, and service renewal PKI operations.
+- Added `AGENTS.md` with repository-specific workflow, verification, security, and release guidance for future agent sessions.
+- Hardened PKI passphrase file handling by requiring readable owner-only files and rejecting conflicting unencrypted-key options.
+- Documented passphrase-file automation examples and updated PKI secret handling guidance.
+
 ## v1.1.0 - 2026-05-24
 
 - Reserved `~/.config/platform-infrastructure/pki/` as a top-level outside-Git namespace for PKI helper state.

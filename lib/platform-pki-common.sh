@@ -173,6 +173,19 @@ pki_require_file() {
   [[ -f "$1" ]] || pki_die "Required file is missing: $1"
 }
 
+pki_require_pass_file() {
+  local path=$1
+  local mode
+
+  [[ -f "$path" ]] || pki_die "Passphrase file is missing: $path"
+  [[ -r "$path" ]] || pki_die "Passphrase file is not readable: $path"
+  mode=$(stat -c '%a' "$path") || pki_die "Cannot inspect passphrase file permissions: $path"
+  [[ $mode =~ ^[0-7]+$ ]] || pki_die "Cannot parse passphrase file permissions: $path"
+  if (( (8#$mode & 077) != 0 )); then
+    pki_die "Passphrase file permissions are too open; use chmod 600 or stricter: $path"
+  fi
+}
+
 pki_require_pki_dir() {
   [[ -d "$PKI_DIR" ]] || pki_die "PKI directory does not exist; run platform-pki-init first: $PKI_DIR"
 }

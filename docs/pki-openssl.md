@@ -53,7 +53,7 @@ Required:
 - `openssl`
 - `tar`
 - GNU `date` for certificate expiry calculations
-- standard Unix tools such as `awk`, `cmp`, `cp`, `find`, `grep`, `mkdir`, `mktemp`, and `sed`
+- standard Unix tools such as `awk`, `cmp`, `cp`, `find`, `grep`, `mkdir`, `mktemp`, `sed`, and `stat`
 
 Backup encryption requires `age`.
 
@@ -139,6 +139,29 @@ platform-pki-intermediate-create \
 
 The intermediate key is encrypted by default. For isolated test namespaces only, use `--allow-unencrypted-intermediate-key`.
 
+For non-interactive automation, provide passphrases through restricted files instead of typing them at OpenSSL prompts:
+
+```bash
+# Example assumes these files are populated by a secret manager with mode 600.
+# /run/secrets/platform-pki-root-pass
+# /run/secrets/platform-pki-intermediate-pass
+
+platform-pki-root-create \
+  --name "Platform Example Root CA" \
+  --org "Platform Example" \
+  --country "PL" \
+  --root-pass-file /run/secrets/platform-pki-root-pass
+
+platform-pki-intermediate-create \
+  --name "Platform Example Intermediate CA" \
+  --org "Platform Example" \
+  --country "PL" \
+  --root-pass-file /run/secrets/platform-pki-root-pass \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+```
+
+Passphrase files must exist, be readable by the current user, and must not be group- or world-accessible. Keep them outside Git and prefer temporary secret-manager mounts such as `/run/secrets` over long-lived files. Omit pass-file options to let OpenSSL prompt interactively.
+
 ## Service Inventory
 
 Service certificates are issued from:
@@ -166,7 +189,9 @@ SANs are mandatory. A service must define at least one value under `dns:` or `ip
 ## Issue And Verify A Service Certificate
 
 ```bash
-platform-pki-service-issue platform-example
+platform-pki-service-issue \
+  platform-example \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 platform-pki-service-verify platform-example
 ```
 
@@ -194,7 +219,9 @@ Renewal archives the previous certificate material under:
 By default, renewal reuses the existing service private key:
 
 ```bash
-platform-pki-service-renew platform-example
+platform-pki-service-renew \
+  platform-example \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
 
 Rotate the service private key explicitly when needed:
@@ -292,7 +319,7 @@ Exit codes:
 
 Do not commit anything generated under `~/.config/platform-infrastructure/pki/`.
 
-Do not store CA passphrases in files.
+Do not commit CA passphrases or passphrase files. If automation needs passphrase files, keep them outside Git, use mode `600` or stricter, and prefer short-lived secret-manager mounts.
 
 Do not issue service certificates without SANs.
 
