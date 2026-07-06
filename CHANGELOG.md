@@ -7,6 +7,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Refined the README landing page with a branded header, clearer install notes, and license information.
+
 ## [1.2.0] - 2026-05-25
 
 ### Added

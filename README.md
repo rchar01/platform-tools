@@ -1,10 +1,14 @@
-# platform-tools
-
 <div align="center">
   <img src="assets/brand/platform-tools-forge-avatar-transparent-512.png" width="256" alt="platform-tools logo">
+
+  <h1>platform-tools</h1>
+
+  <p>Shared Bash helper scripts for platform infrastructure, PKI, Proxmox, SSH, and local operator workflows.</p>
 </div>
 
-Helper scripts for platform project repositories.
+---
+
+`platform-tools` provides reusable command-line helpers used across the platform project repositories.
 
 Canonical repository: <https://codeberg.org/rch/platform-tools>
 
@@ -52,10 +56,12 @@ cd platform-tools
 make install
 ```
 
-Use another install directory when needed:
+Use another install directory when needed. PKI helpers also install shared library and template assets under `SHARE_DIR`:
 
 ```bash
-make install INSTALL_DIR="$PWD/.tools/bin"
+make install \
+  INSTALL_DIR="$PWD/.tools/bin" \
+  SHARE_DIR="$PWD/.tools/share/platform-tools"
 ```
 
 Ensure the install directory is on `PATH` when using tools by command name.
@@ -210,3 +216,7 @@ Use `~/.config/platform-infrastructure/` for local secret material. Private but 
 Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.
 
 PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, and prefer temporary secret-manager mounts over long-lived files.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
