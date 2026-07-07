@@ -7,6 +7,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `platform-bastion-policy` for validating and rendering Kubernetes bastion access-policy documents.
+
 ### Changed
 
 - Refined the README landing page with a branded header, clearer install notes, and license information.

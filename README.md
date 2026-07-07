@@ -3,7 +3,7 @@
 
   <h1>platform-tools</h1>
 
-  <p>Shared Bash helper scripts for platform infrastructure, PKI, Proxmox, SSH, and local operator workflows.</p>
+  <p>Shared helper tools for platform infrastructure, PKI, Proxmox, SSH, bastion policy, and local operator workflows.</p>
 </div>
 
 ---
@@ -24,7 +24,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-k8s-bastion` | Provides runtime commands and libraries for Kubernetes bastion hosts. |
 | `platform-private` | Stores private environment-specific operator config; secrets still stay outside Git. |
 | `platform-template-builder` | Builds reusable Proxmox VM templates from upstream Linux cloud images. |
-| `platform-tools` | Provides shared helper scripts used by the platform project repositories. |
+| `platform-tools` | Provides shared helper tools used by the platform project repositories. |
 
 ## Tools
 
@@ -45,6 +45,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-print-cert` | Print readable certificate details for a service. |
 | `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
 | `platform-pki-backup` | Create encrypted or explicitly plain backups of PKI state. |
+| `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
 ## Install
 
@@ -87,6 +88,11 @@ SSH and Proxmox helpers require:
 - `qm` on the Proxmox host for `platform-proxmox-vm-cleanup`
 - `jq` on the Proxmox host when `platform-proxmox-token-init --write-token-file` is used over SSH
 
+Bastion policy helpers require:
+
+- `python3`
+- `PyYAML`
+
 Optional verification tools:
 
 - `shellcheck` for `make shellcheck`
@@ -104,6 +110,12 @@ Run ShellCheck when it is available:
 
 ```bash
 make shellcheck
+```
+
+Run maintained behavior tests:
+
+```bash
+make test
 ```
 
 ## Quick Usage
@@ -172,6 +184,23 @@ platform-pki-list-expiry
 
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
 
+Validate and render a Kubernetes bastion access policy:
+
+```bash
+platform-bastion-policy validate \
+  --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml
+
+platform-bastion-policy render-host \
+  --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml \
+  --output /tmp/access-policy.yaml
+
+platform-bastion-policy render-csr-configmap \
+  --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml \
+  --name bastion-csr-policy \
+  --namespace bastion-system \
+  --output /tmp/bastion-csr-policy.configmap.yaml
+```
+
 Add a name guard and non-interactive confirmation for automation:
 
 ```bash
@@ -191,6 +220,7 @@ sudo ./bin/platform-vm-env-collect
 ./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
 ./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
 ./bin/platform-pki-init
+./bin/platform-bastion-policy validate --input examples/bastion-policy/access-policy.example.yaml
 ```
 
 ## Documentation
@@ -200,6 +230,7 @@ sudo ./bin/platform-vm-env-collect
 | `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
 | `docs/platform-vm-env-collect.md` | VM environment collector usage, output structure, and safety notes. |
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
+| `docs/bastion-policy.md` | Kubernetes bastion access-policy validation and rendering flow. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
@@ -216,6 +247,8 @@ Use `~/.config/platform-infrastructure/` for local secret material. Private but 
 Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.
 
 PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, and prefer temporary secret-manager mounts over long-lived files.
+
+Real bastion access policies can reveal users, groups, cluster endpoints, and access intent. Keep real policies in `platform-private`; only fake examples belong in this repository.
 
 ## License
 

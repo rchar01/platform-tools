@@ -76,15 +76,15 @@ Goal: Make the new command discoverable and update repository guidance for mixed
 
 Tasks:
 
-- [ ] Update `README.md` tool list, requirements, and quick usage.
-- [ ] Add `docs/bastion-policy.md` with schema, ownership, examples, and rendering flow.
-- [ ] Update `docs/README.md` to link the new documentation.
-- [ ] Update `AGENTS.md` for maintained Bash and Python helper tools.
-- [ ] Update `NEWS.md` and `CHANGELOG.md` under `Unreleased`.
+- [x] Update `README.md` tool list, requirements, and quick usage.
+- [x] Add `docs/bastion-policy.md` with schema, ownership, examples, and rendering flow.
+- [x] Update `docs/README.md` to link the new documentation.
+- [x] Update `AGENTS.md` for maintained Bash and Python helper tools.
+- [x] Update `NEWS.md` and `CHANGELOG.md` under `Unreleased`.
 
 Validation gate:
 
-- [ ] Re-run `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` in `platform-tools`.
+- [x] Re-run `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` in `platform-tools`.
 
 ## Phase 4: Update Consuming Repository Docs
 
@@ -134,6 +134,7 @@ Tasks:
 | 2026-07-07 | Plan created. | User requested phase-by-phase implementation with commits and tracked progress. |
 | 2026-07-07 | Phase 1 committed. | Commit `ca67e0d` added `docs/plans/incorporate-platform-users.md`. |
 | 2026-07-07 | Phase 2 tooling port completed. | Added `bin/platform-bastion-policy`, examples, tests, Makefile support, and Python cache ignores; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
+| 2026-07-07 | Phase 3 documentation completed. | Updated `README.md`, `AGENTS.md`, `docs/README.md`, `docs/bastion-policy.md`, `NEWS.md`, and `CHANGELOG.md`; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
 
 ## Decision Log
 

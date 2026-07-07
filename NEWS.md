@@ -4,6 +4,7 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-bastion-policy` for validating and rendering Kubernetes bastion access-policy documents.
 - Refined the README landing page with a branded header, clearer install notes, and license information.
 
 ## v1.2.0 - 2026-05-25

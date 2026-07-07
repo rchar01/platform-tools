@@ -16,6 +16,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
 - [`platform-vm-env-collect.md`](./platform-vm-env-collect.md): How to use `platform-vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
 - [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
+- [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
@@ -31,6 +32,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
 - Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
+- Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).
 - Clean up one known Proxmox VM: use [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md).
 
@@ -51,5 +53,6 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki-print-cert`](../bin/platform-pki-print-cert): Certificate detail printing helper.
 - [`../bin/platform-pki-export-ansible`](../bin/platform-pki-export-ansible): Ansible export helper for generated PKI files.
 - [`../bin/platform-pki-backup`](../bin/platform-pki-backup): PKI state backup helper.
+- [`../bin/platform-bastion-policy`](../bin/platform-bastion-policy): Bastion access-policy validation and rendering helper.
 - [`../assets/brand/`](../assets/brand/): Project brand assets for release metadata and forge profiles.
 - [`handoffs/`](./handoffs/): Handoff notes for downstream coding agents and platform repositories.
