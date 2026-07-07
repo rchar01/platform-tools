@@ -45,11 +45,11 @@ Goal: Create a durable plan file that tracks implementation and verification evi
 Tasks:
 
 - [x] Create this plan at `docs/plans/incorporate-platform-users.md`.
-- [ ] Commit the plan before code changes.
+- [x] Commit the plan before code changes.
 
 Validation gate:
 
-- [ ] `git status --short` in `platform-tools` shows only the staged plan before commit.
+- [x] `git status --short` in `platform-tools` shows only the staged plan before commit.
 
 ## Phase 2: Add Tooling To platform-tools
 
@@ -57,18 +57,18 @@ Goal: Port the policy validator/renderer into `platform-tools` with tests and in
 
 Tasks:
 
-- [ ] Add `bin/platform-bastion-policy` with `validate`, `render-host`, and `render-csr-configmap` subcommands.
-- [ ] Add public examples under `examples/bastion-policy/`.
-- [ ] Add render tests under `tests/bastion-policy/`.
-- [ ] Update `Makefile` to install the Python helper, syntax-check it, and run tests.
-- [ ] Update `.gitignore` to exclude Python caches.
+- [x] Add `bin/platform-bastion-policy` with `validate`, `render-host`, and `render-csr-configmap` subcommands.
+- [x] Add public examples under `examples/bastion-policy/`.
+- [x] Add render tests under `tests/bastion-policy/`.
+- [x] Update `Makefile` to install the Python helper, syntax-check it, and run tests.
+- [x] Update `.gitignore` to exclude Python caches.
 
 Validation gate:
 
-- [ ] Run `make verify` in `platform-tools`.
-- [ ] Run `make test` in `platform-tools`.
-- [ ] Run `make shellcheck` in `platform-tools`.
-- [ ] Run `gitleaks detect --source . --verbose` in `platform-tools`.
+- [x] Run `make verify` in `platform-tools`.
+- [x] Run `make test` in `platform-tools`.
+- [x] Run `make shellcheck` in `platform-tools`.
+- [x] Run `gitleaks detect --source . --verbose` in `platform-tools`.
 
 ## Phase 3: Document platform-tools Migration
 
@@ -132,6 +132,8 @@ Tasks:
 | Date | Update | Evidence |
 | --- | --- | --- |
 | 2026-07-07 | Plan created. | User requested phase-by-phase implementation with commits and tracked progress. |
+| 2026-07-07 | Phase 1 committed. | Commit `ca67e0d` added `docs/plans/incorporate-platform-users.md`. |
+| 2026-07-07 | Phase 2 tooling port completed. | Added `bin/platform-bastion-policy`, examples, tests, Makefile support, and Python cache ignores; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
 
 ## Decision Log
 

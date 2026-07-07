@@ -1,0 +1,44 @@
+---
+apiVersion: bastion.access/v1
+cluster:
+  name: example-cluster
+  server: https://api.example.invalid:6443
+  caFile: /etc/bastion/ca.crt
+csr:
+  signerName: example.com/client
+  groupPrefix: k8s-
+  ttl:
+    minSeconds: 3600
+    defaultSeconds: 28800
+    maxSeconds: 86400
+  renewal:
+    thresholdSeconds: 7200
+  cleanup:
+    retentionSeconds: 1209600
+bootstrap:
+  ttl:
+    defaultSeconds: 900
+    maxSeconds: 1800
+daemon:
+  allowedLoginGroup: bastion-users
+  socket:
+    path: /run/bastion-bootstrapd/bootstrapd.sock
+  request:
+    maxBytes: 16384
+    timeoutSeconds: 15
+  rateLimit:
+    failureBackoffSeconds: 60
+groups:
+  k8s-admins:
+    namespaces:
+      - all
+  k8s-viewers:
+    namespaces:
+      - default
+users:
+  alice:
+    ensureGroups:
+      - k8s-admins
+  bob:
+    ensureGroups:
+      - k8s-viewers

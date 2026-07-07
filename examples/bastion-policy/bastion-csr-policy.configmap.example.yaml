@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bastion-csr-policy
+  namespace: bastion-system
+data:
+  policy.yaml: |
+    apiVersion: bastion.csr-policy/v1
+    csr:
+      signerName: example.com/client
+      groupPrefix: k8s-
+      ttl:
+        minSeconds: 3600
+        defaultSeconds: 28800
+        maxSeconds: 86400
+      cleanup:
+        retentionSeconds: 1209600
+    groups:
+      k8s-admins:
+        namespaces:
+          - all
+      k8s-viewers:
+        namespaces:
+          - default
+    users:
+      alice:
+        ensureGroups:
+          - k8s-admins
+      bob:
+        ensureGroups:
+          - k8s-viewers

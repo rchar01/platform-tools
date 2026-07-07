@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""Validate and render Kubernetes bastion access policy."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised only when dependency is absent
+    print("error: PyYAML is required for platform-bastion-policy", file=sys.stderr)
+    sys.exit(2)
+
+
+ACCESS_API_VERSION = "bastion.access/v1"
+CSR_API_VERSION = "bastion.csr-policy/v1"
+LINUX_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
+class PolicyError(Exception):
+    """Raised when a policy is invalid."""
+
+
+class IndentDumper(yaml.SafeDumper):
+    """PyYAML dumper that indents list items under their mapping keys."""
+
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> Any:
+        return super().increase_indent(flow, False)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Validate and render Kubernetes bastion access policy"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate = subparsers.add_parser("validate", help="validate a source policy")
+    add_common_io(validate, output=False)
+    validate.set_defaults(func=command_validate)
+
+    render_host = subparsers.add_parser(
+        "render-host", help="render the full host access policy"
+    )
+    add_common_io(render_host)
+    render_host.set_defaults(func=command_render_host)
+
+    render_configmap = subparsers.add_parser(
+        "render-csr-configmap", help="render the CSR policy ConfigMap"
+    )
+    add_common_io(render_configmap)
+    render_configmap.add_argument(
+        "--name", default="bastion-csr-policy", help="ConfigMap name"
+    )
+    render_configmap.add_argument(
+        "--namespace", default="bastion-system", help="ConfigMap namespace"
+    )
+    render_configmap.set_defaults(func=command_render_configmap)
+
+    return parser
+
+
+def add_common_io(parser: argparse.ArgumentParser, *, output: bool = True) -> None:
+    parser.add_argument("--input", required=True, help="source access policy YAML")
+    if output:
+        parser.add_argument("--output", help="output file; defaults to stdout")
+
+
+def load_policy(path: str) -> dict[str, Any]:
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except OSError as exc:
+        raise PolicyError(f"failed to read {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise PolicyError(f"failed to parse {path}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise PolicyError("policy must be a YAML mapping")
+    return data
+
+
+def dump_yaml(data: dict[str, Any]) -> str:
+    return yaml.dump(
+        data,
+        Dumper=IndentDumper,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=False,
+    )
+
+
+def write_output(text: str, output: str | None) -> None:
+    if output:
+        try:
+            Path(output).write_text(text, encoding="utf-8")
+        except OSError as exc:
+            raise PolicyError(f"failed to write {output}: {exc}") from exc
+    else:
+        print(text, end="")
+
+
+def validate_policy(policy: dict[str, Any]) -> None:
+    errors: list[str] = []
+
+    if policy.get("apiVersion") != ACCESS_API_VERSION:
+        errors.append(f"apiVersion must be {ACCESS_API_VERSION}")
+
+    require_string(policy, ["cluster", "name"], errors)
+    require_string(policy, ["cluster", "server"], errors)
+    require_string(policy, ["cluster", "caFile"], errors)
+
+    require_string(policy, ["csr", "signerName"], errors)
+    require_string(policy, ["csr", "groupPrefix"], errors)
+    require_int(policy, ["csr", "ttl", "minSeconds"], errors)
+    require_int(policy, ["csr", "ttl", "defaultSeconds"], errors)
+    require_int(policy, ["csr", "ttl", "maxSeconds"], errors)
+    require_int(policy, ["csr", "renewal", "thresholdSeconds"], errors)
+    require_int(policy, ["csr", "cleanup", "retentionSeconds"], errors)
+
+    min_ttl = get_path(policy, ["csr", "ttl", "minSeconds"])
+    default_ttl = get_path(policy, ["csr", "ttl", "defaultSeconds"])
+    max_ttl = get_path(policy, ["csr", "ttl", "maxSeconds"])
+    if all(type(value) is int for value in (min_ttl, default_ttl, max_ttl)):
+        if not min_ttl <= default_ttl <= max_ttl:
+            errors.append("csr.ttl must satisfy minSeconds <= defaultSeconds <= maxSeconds")
+
+    require_int(policy, ["bootstrap", "ttl", "defaultSeconds"], errors)
+    require_int(policy, ["bootstrap", "ttl", "maxSeconds"], errors)
+    bootstrap_default = get_path(policy, ["bootstrap", "ttl", "defaultSeconds"])
+    bootstrap_max = get_path(policy, ["bootstrap", "ttl", "maxSeconds"])
+    if type(bootstrap_default) is int and type(bootstrap_max) is int:
+        if bootstrap_default > bootstrap_max:
+            errors.append("bootstrap.ttl must satisfy defaultSeconds <= maxSeconds")
+
+    require_string(policy, ["daemon", "allowedLoginGroup"], errors)
+    require_string(policy, ["daemon", "socket", "path"], errors)
+    require_int(policy, ["daemon", "request", "maxBytes"], errors)
+    require_int(policy, ["daemon", "request", "timeoutSeconds"], errors)
+    require_int(policy, ["daemon", "rateLimit", "failureBackoffSeconds"], errors)
+
+    validate_groups_and_users(policy, errors)
+
+    if errors:
+        formatted = "\n".join(f"- {error}" for error in errors)
+        raise PolicyError(f"invalid access policy:\n{formatted}")
+
+
+def render_host_policy(policy: dict[str, Any]) -> str:
+    validate_policy(policy)
+    return dump_yaml(policy)
+
+
+def render_configmap(policy: dict[str, Any], *, name: str, namespace: str) -> str:
+    validate_policy(policy)
+    if not name.strip():
+        raise PolicyError("ConfigMap name must be non-empty")
+    if not namespace.strip():
+        raise PolicyError("ConfigMap namespace must be non-empty")
+
+    csr = policy["csr"]
+    projection = {
+        "apiVersion": CSR_API_VERSION,
+        "csr": {
+            "signerName": csr["signerName"],
+            "groupPrefix": csr["groupPrefix"],
+            "ttl": {
+                "minSeconds": csr["ttl"]["minSeconds"],
+                "defaultSeconds": csr["ttl"]["defaultSeconds"],
+                "maxSeconds": csr["ttl"]["maxSeconds"],
+            },
+            "cleanup": {
+                "retentionSeconds": csr["cleanup"]["retentionSeconds"],
+            },
+        },
+        "groups": policy["groups"],
+        "users": policy["users"],
+    }
+
+    projection_yaml = dump_yaml(projection).rstrip("\n")
+    indented_projection = "\n".join(
+        f"    {line}" for line in projection_yaml.splitlines()
+    )
+
+    configmap = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+    }
+
+    return f"{dump_yaml(configmap)}data:\n  policy.yaml: |\n{indented_projection}\n"
+
+
+def get_path(data: dict[str, Any], path: list[str]) -> Any:
+    current: Any = data
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def require_string(data: dict[str, Any], path: list[str], errors: list[str]) -> None:
+    value = get_path(data, path)
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{format_path(path)} must be a non-empty string")
+
+
+def require_int(data: dict[str, Any], path: list[str], errors: list[str]) -> None:
+    value = get_path(data, path)
+    if type(value) is not int:
+        errors.append(f"{format_path(path)} must be an integer")
+
+
+def format_path(path: list[str]) -> str:
+    return ".".join(path)
+
+
+def validate_groups_and_users(policy: dict[str, Any], errors: list[str]) -> None:
+    groups = policy.get("groups")
+    users = policy.get("users")
+
+    if not isinstance(groups, dict):
+        errors.append("groups must be a mapping")
+        groups = {}
+    if not isinstance(users, dict):
+        errors.append("users must be a mapping")
+        users = {}
+
+    for group_name in groups:
+        if not isinstance(group_name, str) or not LINUX_NAME_RE.match(group_name):
+            errors.append(f"group name {group_name!r} must match {LINUX_NAME_RE.pattern}")
+
+    for user_name, user_config in users.items():
+        if not isinstance(user_name, str) or not LINUX_NAME_RE.match(user_name):
+            errors.append(f"user name {user_name!r} must match {LINUX_NAME_RE.pattern}")
+
+        if not isinstance(user_config, dict):
+            errors.append(f"users.{user_name} must be a mapping")
+            continue
+
+        ensure_groups = user_config.get("ensureGroups")
+        if not isinstance(ensure_groups, list) or not ensure_groups:
+            errors.append(f"users.{user_name}.ensureGroups must be a non-empty list")
+            continue
+
+        for group_name in ensure_groups:
+            if not isinstance(group_name, str):
+                errors.append(f"users.{user_name}.ensureGroups entries must be strings")
+            elif group_name not in groups:
+                errors.append(
+                    f"users.{user_name}.ensureGroups references missing group {group_name!r}"
+                )
+
+
+def command_validate(args: argparse.Namespace) -> int:
+    validate_policy(load_policy(args.input))
+    return 0
+
+
+def command_render_host(args: argparse.Namespace) -> int:
+    write_output(render_host_policy(load_policy(args.input)), args.output)
+    return 0
+
+
+def command_render_configmap(args: argparse.Namespace) -> int:
+    text = render_configmap(load_policy(args.input), name=args.name, namespace=args.namespace)
+    write_output(text, args.output)
+    return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        return args.func(args)
+    except PolicyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

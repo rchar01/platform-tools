@@ -6,11 +6,16 @@
 .vscode/
 .idea/
 
+# Python caches
+__pycache__/
+*.pyc
+
 # Local tool installs and temp output
 .tools/
 .tmp/
 tmp/
 dist/
+build/
 
 # Environment/private config
 .env

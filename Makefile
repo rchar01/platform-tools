@@ -3,10 +3,12 @@ SHELL := /bin/sh
 
 INSTALL_DIR ?= $(HOME)/.local/bin
 SHARE_DIR ?= $(HOME)/.local/share/platform-tools
-TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-pki-init platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup
+SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-pki-init platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup
+PYTHON_TOOLS := platform-bastion-policy
+TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 
-.PHONY: help install verify shellcheck
+.PHONY: help install verify test test-bastion-policy shellcheck
 
 ## Show available commands
 help:
@@ -39,14 +41,24 @@ install:
 
 ## Run syntax checks for maintained tool scripts
 verify:
-	@for tool in $(TOOLS); do \
+	@for tool in $(SHELL_TOOLS); do \
 		bash -n "bin/$$tool"; \
 	done
 	@for lib in $(LIBS); do \
 		bash -n "$$lib"; \
 	done
+	@for tool in $(PYTHON_TOOLS); do \
+		python3 -m py_compile "bin/$$tool"; \
+	done
+
+## Run maintained tests
+test: test-bastion-policy
+
+## Run bastion policy render tests
+test-bastion-policy:
+	./tests/bastion-policy/test-render.sh
 
 ## Run ShellCheck for maintained tool scripts
 shellcheck:
 	@command -v shellcheck >/dev/null 2>&1 || { printf '%s\n' 'shellcheck not found; install ShellCheck or skip this target' >&2; exit 1; }
-	shellcheck $(addprefix bin/,$(TOOLS)) $(LIBS)
+	shellcheck $(addprefix bin/,$(SHELL_TOOLS)) $(LIBS)
