@@ -92,14 +92,14 @@ Goal: Point consumers at the new `platform-tools` command without moving ownersh
 
 Tasks:
 
-- [ ] Update `platform-config/docs/k8s-bastion.md` to mention rendering with `platform-bastion-policy`.
-- [ ] Update `platform-config/docs/private-workflow.md` with validate/render examples.
-- [ ] Update `platform-k8s-bastion` docs to mention optional external policy tooling while preserving runtime-only ownership.
+- [x] Update `platform-config/docs/k8s-bastion.md` to mention rendering with `platform-bastion-policy`.
+- [x] Update `platform-config/docs/private-workflow.md` with validate/render examples.
+- [x] Update `platform-k8s-bastion` docs to mention optional external policy tooling while preserving runtime-only ownership.
 
 Validation gate:
 
-- [ ] Review diffs carefully because these repositories already had unrelated local changes.
-- [ ] Run each repository's available lightweight verification target if one exists.
+- [x] Review diffs carefully because these repositories already had unrelated local changes.
+- [x] Run each repository's available lightweight verification target if one exists.
 
 ## Phase 5: Deprecate platform-users
 
@@ -135,6 +135,7 @@ Tasks:
 | 2026-07-07 | Phase 1 committed. | Commit `ca67e0d` added `docs/plans/incorporate-platform-users.md`. |
 | 2026-07-07 | Phase 2 tooling port completed. | Added `bin/platform-bastion-policy`, examples, tests, Makefile support, and Python cache ignores; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
 | 2026-07-07 | Phase 3 documentation completed. | Updated `README.md`, `AGENTS.md`, `docs/README.md`, `docs/bastion-policy.md`, `NEWS.md`, and `CHANGELOG.md`; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
+| 2026-07-07 | Phase 4 consuming docs completed. | `platform-config` commit `68abd4c` updated bastion docs; `platform-k8s-bastion` commit `3a3746f` updated runtime boundary docs. `platform-k8s-bastion` `make test` and staged `gitleaks protect --staged --verbose` passed. |
 
 ## Decision Log
 
