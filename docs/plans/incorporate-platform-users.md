@@ -107,15 +107,15 @@ Goal: Remove the bad cached Python artifact and redirect users to the new comman
 
 Tasks:
 
-- [ ] Remove tracked `scripts/__pycache__/bastion_policy.cpython-313.pyc`.
-- [ ] Add `__pycache__/` and `*.pyc` to `.gitignore`.
-- [ ] Update `README.md` with a deprecation notice pointing to `platform-tools`.
-- [ ] Update docs if needed to avoid presenting `platform-users` as the primary workflow.
+- [x] Remove tracked `scripts/__pycache__/bastion_policy.cpython-313.pyc`.
+- [x] Add `__pycache__/` and `*.pyc` to `.gitignore`.
+- [x] Update `README.md` with a deprecation notice pointing to `platform-tools`.
+- [x] Update docs if needed to avoid presenting `platform-users` as the primary workflow.
 
 Validation gate:
 
-- [ ] Run `make test` in `platform-users` if the legacy tests remain runnable.
-- [ ] Run `gitleaks detect --source . --verbose` in `platform-users`.
+- [x] Run `make test` in `platform-users` if the legacy tests remain runnable.
+- [x] Run `gitleaks detect --source . --verbose` in `platform-users`.
 
 ## Phase 6: Final Verification
 
@@ -136,6 +136,7 @@ Tasks:
 | 2026-07-07 | Phase 2 tooling port completed. | Added `bin/platform-bastion-policy`, examples, tests, Makefile support, and Python cache ignores; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
 | 2026-07-07 | Phase 3 documentation completed. | Updated `README.md`, `AGENTS.md`, `docs/README.md`, `docs/bastion-policy.md`, `NEWS.md`, and `CHANGELOG.md`; `make verify`, `make test`, `make shellcheck`, and `gitleaks detect --source . --verbose` passed. |
 | 2026-07-07 | Phase 4 consuming docs completed. | `platform-config` commit `68abd4c` updated bastion docs; `platform-k8s-bastion` commit `3a3746f` updated runtime boundary docs. `platform-k8s-bastion` `make test` and staged `gitleaks protect --staged --verbose` passed. |
+| 2026-07-07 | Phase 5 `platform-users` deprecation completed. | `platform-users` commit `414cd0a` added `.gitignore`, removed tracked `.pyc`, and pointed users at `platform-bastion-policy`; `make test`, `git diff --check`, and `gitleaks detect --source . --verbose` passed. |
 
 ## Decision Log
 
