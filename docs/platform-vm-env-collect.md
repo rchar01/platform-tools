@@ -43,25 +43,27 @@ sudo ./bin/platform-vm-env-collect
 The output is created under:
 
 ```text
-/tmp/platform-vm-env-collect/
+/tmp/platform-vm-env-collect.XXXXXX/
 ```
+
+The random suffix is generated with `mktemp -d`, and the directory is created with owner-only permissions before collection starts.
 
 Example output:
 
 ```text
-/tmp/platform-vm-env-collect/platform-vm-env-collect-myhost-20260513-184500.tar.gz
-/tmp/platform-vm-env-collect/platform-vm-env-collect-myhost-20260513-184500.tar.gz.sha256
+/tmp/platform-vm-env-collect.a1B2c3/platform-vm-env-collect-myhost-20260513-184500.tar.gz
+/tmp/platform-vm-env-collect.a1B2c3/platform-vm-env-collect-myhost-20260513-184500.tar.gz.sha256
 ```
 
 ## Local Report Directory
 
 Use `reports/platform-vm-env-collect/` inside this repository as the local analysis/import location for collector archives and extracted reports.
 
-The collector still writes to `/tmp/platform-vm-env-collect/` by default because it usually runs on a remote/source VM. After copying an archive back to this repository, extract it under `reports/platform-vm-env-collect/`:
+The collector still writes to a private `/tmp/platform-vm-env-collect.XXXXXX/` directory by default because it usually runs on a remote/source VM. After copying an archive back to this repository, extract it under `reports/platform-vm-env-collect/`:
 
 ```bash
 mkdir -p reports/platform-vm-env-collect
-tar -C reports/platform-vm-env-collect -xzf /tmp/platform-vm-env-collect/platform-vm-env-collect-myhost-20260513-184500.tar.gz
+tar -C reports/platform-vm-env-collect -xzf /tmp/platform-vm-env-collect.a1B2c3/platform-vm-env-collect-myhost-20260513-184500.tar.gz
 ```
 
 Only `reports/.gitkeep` is committed. Report contents under `reports/` are ignored by Git.
@@ -106,10 +108,10 @@ Run the script once on each important source VM:
 sudo platform-vm-env-collect
 ```
 
-Then rename the archive by role:
+Then rename the archive by role, using the exact archive path printed by the collector:
 
 ```bash
-mv /tmp/platform-vm-env-collect/platform-vm-env-collect-*.tar.gz company-k8s-worker-01.tar.gz
+mv /tmp/platform-vm-env-collect.a1B2c3/platform-vm-env-collect-myhost-20260513-184500.tar.gz company-k8s-worker-01.tar.gz
 ```
 
 Example set:
