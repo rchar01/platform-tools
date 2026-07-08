@@ -1,12 +1,15 @@
 #!/bin/sh
 set -eu
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
 VALID_POLICY="$ROOT_DIR/tests/bastion-policy/fixtures/access-policy.valid.yaml"
 INVALID_POLICY="$ROOT_DIR/tests/bastion-policy/fixtures/access-policy.invalid-missing-user-group.yaml"
+INVALID_NEWLINE_GROUP_POLICY="$ROOT_DIR/tests/bastion-policy/fixtures/access-policy.invalid-newline-group.yaml"
+INVALID_NEWLINE_USER_POLICY="$ROOT_DIR/tests/bastion-policy/fixtures/access-policy.invalid-newline-user.yaml"
+INVALID_EMBEDDED_NEWLINE_USER_POLICY="$ROOT_DIR/tests/bastion-policy/fixtures/access-policy.invalid-embedded-newline-user.yaml"
 EXPECTED_CONFIGMAP="$ROOT_DIR/examples/bastion-policy/bastion-csr-policy.configmap.example.yaml"
 HOST_OUT="$TMP_DIR/access-policy.yaml"
 CONFIGMAP_OUT="$TMP_DIR/bastion-csr-policy.configmap.yaml"
@@ -16,6 +19,21 @@ assert_mode_600() {
   mode=$(stat -c '%a' "$1")
   if [ "$mode" != "600" ]; then
     printf '%s\n' "expected $1 to have mode 600, got $mode" >&2
+    exit 1
+  fi
+}
+
+expect_validation_rejects() {
+  policy=$1
+  expected=$2
+
+  if "$ROOT_DIR/bin/platform-bastion-policy" validate --input "$policy" >"$ERROR_OUT" 2>&1; then
+    printf '%s\n' "invalid policy unexpectedly passed validation: $policy" >&2
+    exit 1
+  fi
+
+  if ! grep -q "$expected" "$ERROR_OUT"; then
+    printf '%s\n' "invalid policy error did not mention: $expected" >&2
     exit 1
   fi
 }
@@ -79,15 +97,10 @@ assert set(policy["groups"]) == {"k8s-admins", "k8s-viewers"}
 assert set(policy["users"]) == {"alice", "bob"}
 PY
 
-if "$ROOT_DIR/bin/platform-bastion-policy" validate --input "$INVALID_POLICY" >"$ERROR_OUT" 2>&1; then
-  printf '%s\n' "invalid policy unexpectedly passed validation" >&2
-  exit 1
-fi
-
-if ! grep -q "k8s-missing" "$ERROR_OUT"; then
-  printf '%s\n' "invalid policy error did not mention missing group" >&2
-  exit 1
-fi
+expect_validation_rejects "$INVALID_POLICY" "k8s-missing"
+expect_validation_rejects "$INVALID_NEWLINE_GROUP_POLICY" "group name"
+expect_validation_rejects "$INVALID_NEWLINE_USER_POLICY" "user name"
+expect_validation_rejects "$INVALID_EMBEDDED_NEWLINE_USER_POLICY" "user name"
 
 EXISTING_OUT="$TMP_DIR/existing-output.yaml"
 printf '%s\n' 'keep' > "$EXISTING_OUT"

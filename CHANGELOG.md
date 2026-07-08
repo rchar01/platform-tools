@@ -15,6 +15,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Hardened `platform-vm-env-collect` to write reports and archives under a private random `/tmp` directory with owner-only permissions.
 - Hardened `platform-bastion-policy` to create output files with owner-only permissions and refuse existing output paths.
+- Hardened `platform-bastion-policy` Linux user and group validation to reject newline-suffixed identity names.
 - Hardened PKI passphrase-file validation to reject empty, whitespace-only, or shorter-than-16-character first lines.
 - Excluded in-tree PKI backup output directories from `platform-pki-backup` archives to prevent recursive backup growth.
 - Hardened `platform-pki-export-ansible` to reject unsafe export paths and avoid writing private keys through destination symlinks.

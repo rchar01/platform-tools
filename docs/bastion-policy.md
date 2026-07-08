@@ -132,6 +132,8 @@ Required `daemon` fields:
 
 `users` must be a mapping. User names must match the same Linux-name pattern as groups. Each user must define `ensureGroups` as a non-empty list of group names, and every referenced group must exist under `groups`.
 
+User and group names must match the full pattern value; newline-suffixed names and other control-character variants are rejected.
+
 ## Examples
 
 Public fake examples live under `examples/bastion-policy/`:

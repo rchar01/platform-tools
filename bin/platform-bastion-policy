@@ -245,11 +245,11 @@ def validate_groups_and_users(policy: dict[str, Any], errors: list[str]) -> None
         users = {}
 
     for group_name in groups:
-        if not isinstance(group_name, str) or not LINUX_NAME_RE.match(group_name):
+        if not isinstance(group_name, str) or not LINUX_NAME_RE.fullmatch(group_name):
             errors.append(f"group name {group_name!r} must match {LINUX_NAME_RE.pattern}")
 
     for user_name, user_config in users.items():
-        if not isinstance(user_name, str) or not LINUX_NAME_RE.match(user_name):
+        if not isinstance(user_name, str) or not LINUX_NAME_RE.fullmatch(user_name):
             errors.append(f"user name {user_name!r} must match {LINUX_NAME_RE.pattern}")
 
         if not isinstance(user_config, dict):
