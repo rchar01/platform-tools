@@ -33,7 +33,7 @@
 
 - Never commit generated archives, VM reports, SSH keys, token files, PKI CA material, service private keys, PKI exports, PKI backups, or copied private config.
 - `reports/*` is ignored except `reports/.gitkeep`; use `reports/platform-vm-env-collect/` only for local analysis copies.
-- PKI passphrase files are plaintext secrets; keep them outside Git, mode `600` or stricter, and prefer temporary secret-manager mounts such as `/run/secrets`.
+- PKI passphrase files are plaintext secrets; keep them outside Git, mode `600` or stricter, first-line passphrase length at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts such as `/run/secrets`.
 - PKI backups are encrypted with `age` by default; plain `.tar.gz` backups require the explicit `--allow-plain-backup` flag and still contain secrets.
 
 ## Tooling Notes

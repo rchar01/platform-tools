@@ -22,7 +22,7 @@ Options:
   --country <country>                Country code.
   --days <days>                      Root CA lifetime. Default: 3650
   --force                            Overwrite existing root CA key/cert.
-  --root-pass-file <path>            Read encrypted root key passphrase from file.
+  --root-pass-file <path>            Read encrypted root key passphrase from file; first line must be at least 16 characters with non-whitespace content.
   --allow-unencrypted-root-key       Create an unencrypted root private key.
   -h, --help                         Show this help.
 USAGE

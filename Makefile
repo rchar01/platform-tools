@@ -8,7 +8,7 @@ PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 
-.PHONY: help install verify test test-bastion-policy shellcheck
+.PHONY: help install verify test test-bastion-policy test-pki-pass-file shellcheck
 
 ## Show available commands
 help:
@@ -52,11 +52,15 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-bastion-policy
+test: test-bastion-policy test-pki-pass-file
 
 ## Run bastion policy render tests
 test-bastion-policy:
 	./tests/bastion-policy/test-render.sh
+
+## Run PKI passphrase file validation tests
+test-pki-pass-file:
+	./tests/pki/test-pass-file-validation.sh
 
 ## Run ShellCheck for maintained tool scripts
 shellcheck:

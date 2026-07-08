@@ -22,8 +22,8 @@ Options:
   --country <country>                      Country code.
   --days <days>                            Intermediate lifetime. Default: 1825
   --force                                  Overwrite existing intermediate material.
-  --root-pass-file <path>                  Read encrypted root key passphrase from file.
-  --intermediate-pass-file <path>          Read encrypted intermediate key passphrase from file.
+  --root-pass-file <path>                  Read encrypted root key passphrase from file; first line must be at least 16 characters with non-whitespace content.
+  --intermediate-pass-file <path>          Read encrypted intermediate key passphrase from file; first line must be at least 16 characters with non-whitespace content.
   --allow-unencrypted-intermediate-key     Create an unencrypted intermediate private key.
   -h, --help                               Show this help.
 USAGE

@@ -176,6 +176,7 @@ pki_require_file() {
 pki_require_pass_file() {
   local path=$1
   local mode
+  local passphrase
 
   [[ -f "$path" ]] || pki_die "Passphrase file is missing: $path"
   [[ -r "$path" ]] || pki_die "Passphrase file is not readable: $path"
@@ -184,6 +185,10 @@ pki_require_pass_file() {
   if (( (8#$mode & 077) != 0 )); then
     pki_die "Passphrase file permissions are too open; use chmod 600 or stricter: $path"
   fi
+  IFS= read -r passphrase <"$path" || [[ -n "$passphrase" ]] || pki_die "Passphrase file first line is empty: $path"
+  [[ -n "$passphrase" ]] || pki_die "Passphrase file first line is empty: $path"
+  [[ $passphrase =~ [^[:space:]] ]] || pki_die "Passphrase file first line must contain non-whitespace characters: $path"
+  (( ${#passphrase} >= 16 )) || pki_die "Passphrase file first line must be at least 16 characters: $path"
 }
 
 pki_require_pki_dir() {

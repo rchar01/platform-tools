@@ -160,7 +160,7 @@ platform-pki-intermediate-create \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
 
-Passphrase files must exist, be readable by the current user, and must not be group- or world-accessible. Keep them outside Git and prefer temporary secret-manager mounts such as `/run/secrets` over long-lived files. Omit pass-file options to let OpenSSL prompt interactively.
+Passphrase files must exist, be readable by the current user, and must not be group- or world-accessible. OpenSSL uses the first line of each passphrase file; that first line must be at least 16 characters and contain non-whitespace characters. Keep passphrase files outside Git and prefer temporary secret-manager mounts such as `/run/secrets` over long-lived files. Omit pass-file options to let OpenSSL prompt interactively.
 
 ## Service Inventory
 
@@ -319,7 +319,7 @@ Exit codes:
 
 Do not commit anything generated under `~/.config/platform-infrastructure/pki/`.
 
-Do not commit CA passphrases or passphrase files. If automation needs passphrase files, keep them outside Git, use mode `600` or stricter, and prefer short-lived secret-manager mounts.
+Do not commit CA passphrases or passphrase files. If automation needs passphrase files, keep them outside Git, use mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer short-lived secret-manager mounts.
 
 Do not issue service certificates without SANs.
 

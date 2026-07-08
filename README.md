@@ -248,7 +248,7 @@ Use `~/.config/platform-infrastructure/` for local secret material. Private but 
 
 Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.
 
-PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, and prefer temporary secret-manager mounts over long-lived files.
+PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts over long-lived files.
 
 Real bastion access policies can reveal users, groups, cluster endpoints, and access intent. Keep real policies in `platform-private`; only fake examples belong in this repository.
 

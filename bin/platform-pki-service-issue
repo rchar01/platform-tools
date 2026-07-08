@@ -19,7 +19,7 @@ Options:
   --pki-dir <path>    PKI directory. Default: <namespace>/pki
   --days <days>       Override service certificate lifetime.
   --intermediate-pass-file <path>
-                      Read encrypted intermediate key passphrase from file.
+                      Read encrypted intermediate key passphrase from file; first line must be at least 16 characters with non-whitespace content.
   --rotate-key        Replace an existing service private key.
   -h, --help          Show this help.
 USAGE
