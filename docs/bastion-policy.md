@@ -38,12 +38,14 @@ Validation checks the API version, required sections, TTL ordering, Linux-compat
 ## Render The Host Policy
 
 ```bash
+POLICY_OUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/bastion-policy.XXXXXX")"
+
 platform-bastion-policy render-host \
   --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml \
-  --output /tmp/access-policy.yaml
+  --output "$POLICY_OUT_DIR/access-policy.yaml"
 ```
 
-Host rendering validates the source policy and writes the full policy unchanged except for deterministic YAML formatting.
+Host rendering validates the source policy and writes the full policy unchanged except for deterministic YAML formatting. Output files are created with owner-only permissions and must not already exist.
 
 ## Render The CSR ConfigMap
 
@@ -52,7 +54,7 @@ platform-bastion-policy render-csr-configmap \
   --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml \
   --name bastion-csr-policy \
   --namespace bastion-system \
-  --output /tmp/bastion-csr-policy.configmap.yaml
+  --output "$POLICY_OUT_DIR/bastion-csr-policy.configmap.yaml"
 ```
 
 The ConfigMap projection includes only:

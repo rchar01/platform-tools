@@ -5,6 +5,7 @@ This file gives a short, release-oriented view of what changed between versions.
 ## Unreleased
 
 - Hardened `platform-vm-env-collect` to write reports and archives under a private random `/tmp` directory with owner-only permissions.
+- Hardened `platform-bastion-policy` to create output files with owner-only permissions and refuse existing output paths.
 - Added `platform-bastion-policy` for validating and rendering Kubernetes bastion access-policy documents.
 - Refined the README landing page with a branded header, clearer install notes, and license information.
 

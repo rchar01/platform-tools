@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -66,7 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
 def add_common_io(parser: argparse.ArgumentParser, *, output: bool = True) -> None:
     parser.add_argument("--input", required=True, help="source access policy YAML")
     if output:
-        parser.add_argument("--output", help="output file; defaults to stdout")
+        parser.add_argument(
+            "--output",
+            help="output file created with mode 0600; must not already exist; defaults to stdout",
+        )
 
 
 def load_policy(path: str) -> dict[str, Any]:
@@ -95,8 +99,15 @@ def dump_yaml(data: dict[str, Any]) -> str:
 
 def write_output(text: str, output: str | None) -> None:
     if output:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         try:
-            Path(output).write_text(text, encoding="utf-8")
+            fd = os.open(Path(output), flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except FileExistsError as exc:
+            raise PolicyError(f"refusing to overwrite existing output {output}") from exc
         except OSError as exc:
             raise PolicyError(f"failed to write {output}: {exc}") from exc
     else:

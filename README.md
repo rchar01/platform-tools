@@ -187,18 +187,20 @@ For non-interactive PKI automation with encrypted CA keys, pass restricted passp
 Validate and render a Kubernetes bastion access policy:
 
 ```bash
+POLICY_OUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/bastion-policy.XXXXXX")"
+
 platform-bastion-policy validate \
   --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml
 
 platform-bastion-policy render-host \
   --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml \
-  --output /tmp/access-policy.yaml
+  --output "$POLICY_OUT_DIR/access-policy.yaml"
 
 platform-bastion-policy render-csr-configmap \
   --input ../platform-private/config/files/k8s-bastion/dev/access-policy.yaml \
   --name bastion-csr-policy \
   --namespace bastion-system \
-  --output /tmp/bastion-csr-policy.configmap.yaml
+  --output "$POLICY_OUT_DIR/bastion-csr-policy.configmap.yaml"
 ```
 
 Add a name guard and non-interactive confirmation for automation:
