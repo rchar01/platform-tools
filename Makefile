@@ -8,7 +8,7 @@ PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 
-.PHONY: help install verify test test-bastion-policy test-pki-pass-file test-pki-backup test-pki-export shellcheck
+.PHONY: help install verify test test-bastion-policy test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -52,7 +52,7 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-bastion-policy test-pki-pass-file test-pki-backup test-pki-export
+test: test-bastion-policy test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
 
 ## Run bastion policy render tests
 test-bastion-policy:
@@ -69,6 +69,10 @@ test-pki-backup:
 ## Run PKI Ansible export path safety tests
 test-pki-export:
 	./tests/pki/test-export-ansible-safe-paths.sh
+
+## Run PKI inventory value validation tests
+test-pki-inventory:
+	./tests/pki/test-inventory-value-validation.sh
 
 ## Run ShellCheck for maintained tool scripts
 shellcheck:

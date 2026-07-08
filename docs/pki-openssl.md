@@ -186,6 +186,8 @@ services:
 
 SANs are mandatory. A service must define at least one value under `dns:` or `ips:`.
 
+Inventory values are written into OpenSSL configuration files during issuance and renewal. `common_name` and `dns` entries must be DNS names using only letters, digits, dots, and hyphens; wildcard names are not supported. `ips` entries must be IPv4 addresses. Inventory values must not contain OpenSSL configuration expansion syntax such as `$ENV::SECRET_NAME`.
+
 ## Issue And Verify A Service Certificate
 
 ```bash

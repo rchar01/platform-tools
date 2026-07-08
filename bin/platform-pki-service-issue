@@ -88,6 +88,7 @@ pki_inventory_array "$SERVICE" ips >"$IPS_FILE"
 if [[ ! -s "$DNS_FILE" && ! -s "$IPS_FILE" ]]; then
   pki_die "Service must define at least one DNS or IP SAN: $SERVICE"
 fi
+pki_validate_service_inventory_values "$SERVICE" "$COMMON_NAME" "$DNS_FILE" "$IPS_FILE"
 
 for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DIR/certs" "$SERVICE_DIR/chain"; do
   pki_prepare_dir "$dir"

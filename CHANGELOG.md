@@ -18,6 +18,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Hardened PKI passphrase-file validation to reject empty, whitespace-only, or shorter-than-16-character first lines.
 - Excluded in-tree PKI backup output directories from `platform-pki-backup` archives to prevent recursive backup growth.
 - Hardened `platform-pki-export-ansible` to reject unsafe export paths and avoid writing private keys through destination symlinks.
+- Hardened PKI service inventory validation to reject OpenSSL configuration expansion syntax in certificate names and SANs; `ips` inventory entries are now explicitly IPv4-only.
 - Refined the README landing page with a branded header, clearer install notes, and license information.
 
 ## [1.2.0] - 2026-05-25

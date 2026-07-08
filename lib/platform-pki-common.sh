@@ -87,6 +87,65 @@ pki_validate_service_name() {
   [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || pki_die "Invalid service name: $1"
 }
 
+pki_validate_openssl_config_value() {
+  local label=$1
+  local value=$2
+
+  [[ -n "$value" ]] || pki_die "$label must be non-empty"
+  [[ "$value" != *'$'* ]] || pki_die "$label must not contain OpenSSL variable expansion syntax"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || pki_die "$label must not contain newlines"
+  [[ ! "$value" =~ [[:cntrl:]] ]] || pki_die "$label must not contain control characters"
+  [[ ! "$value" =~ ^[[:space:]] && ! "$value" =~ [[:space:]]$ ]] || pki_die "$label must not start or end with whitespace"
+}
+
+pki_validate_dns_name_value() {
+  local label=$1
+  local value=$2
+
+  pki_validate_openssl_config_value "$label" "$value"
+  (( ${#value} <= 253 )) || pki_die "$label must be at most 253 characters"
+  [[ "$value" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]] || pki_die "$label must be a DNS name using letters, digits, dots, and hyphens"
+}
+
+pki_validate_ipv4_literal() {
+  local value=$1
+  local octet
+  local -a octets
+
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a octets <<< "$value"
+  for octet in "${octets[@]}"; do
+    (( octet <= 255 )) || return 1
+  done
+  return 0
+}
+
+pki_validate_ip_value() {
+  local label=$1
+  local value=$2
+
+  pki_validate_openssl_config_value "$label" "$value"
+  pki_validate_ipv4_literal "$value" || pki_die "$label must be a valid IPv4 address"
+}
+
+pki_validate_service_inventory_values() {
+  local service=$1
+  local common_name=$2
+  local dns_file=$3
+  local ips_file=$4
+  local value
+
+  pki_validate_dns_name_value "common_name for service $service" "$common_name"
+  while IFS= read -r value || [[ -n "$value" ]]; do
+    [[ -n "$value" ]] || continue
+    pki_validate_dns_name_value "DNS SAN for service $service" "$value"
+  done <"$dns_file"
+  while IFS= read -r value || [[ -n "$value" ]]; do
+    [[ -n "$value" ]] || continue
+    pki_validate_ip_value "IP SAN for service $service" "$value"
+  done <"$ips_file"
+}
+
 pki_validate_days() {
   [[ $1 =~ ^[0-9]+$ ]] || pki_die "Days value must be numeric: $1"
   (( $1 >= 1 )) || pki_die "Days value must be at least 1: $1"

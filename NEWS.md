@@ -9,6 +9,7 @@ This file gives a short, release-oriented view of what changed between versions.
 - Hardened PKI passphrase-file validation to reject empty, whitespace-only, or shorter-than-16-character first lines.
 - Excluded in-tree PKI backup output directories from `platform-pki-backup` archives to prevent recursive backup growth.
 - Hardened `platform-pki-export-ansible` to reject unsafe export paths and avoid writing private keys through destination symlinks.
+- Hardened PKI service inventory validation to reject OpenSSL configuration expansion syntax in certificate names and SANs; `ips` inventory entries are now explicitly IPv4-only.
 - Added `platform-bastion-policy` for validating and rendering Kubernetes bastion access-policy documents.
 - Refined the README landing page with a branded header, clearer install notes, and license information.
 
