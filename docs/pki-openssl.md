@@ -51,7 +51,7 @@ Required:
 
 - `bash`
 - `openssl`
-- `tar`
+- `tar` with `--no-wildcards` support for safe backup directory exclusions
 - GNU `date` for certificate expiry calculations
 - standard Unix tools such as `awk`, `cmp`, `cp`, `find`, `grep`, `mkdir`, `mktemp`, `sed`, and `stat`
 
@@ -272,7 +272,7 @@ The export directory contains service private keys and must stay outside Git.
 
 ## Back Up PKI State
 
-Backups include the full PKI working directory, including CA private keys, service private keys, issued certificates, CSRs, CA database files, inventory, exports, and existing backups.
+Backups include the full PKI working directory, including CA private keys, service private keys, issued certificates, CSRs, CA database files, inventory, and exports. When the backup output directory is inside the PKI directory, it is excluded from the archive to avoid recursive backups.
 
 Use `age` recipient encryption for non-interactive backups:
 
@@ -291,6 +291,8 @@ Output path:
 ```text
 ~/.config/platform-infrastructure/pki/backups/platform-pki-YYYYMMDD-HHMMSS.tar.gz.age
 ```
+
+The default `~/.config/platform-infrastructure/pki/backups/` output directory is not included in generated backup archives.
 
 Plain unencrypted archives require an explicit override:
 

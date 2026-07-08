@@ -24,6 +24,8 @@ Options:
 
 By default, this command requires age. If --age-recipient is not provided, age
 passphrase mode is used and age prompts interactively.
+If the backup output directory is inside the PKI directory, it is excluded from
+the archive to avoid recursive backups.
 USAGE
 }
 
@@ -40,6 +42,18 @@ new_backup_path() {
     n=$((n + 1))
   done
   printf '%s\n' "$candidate"
+}
+
+add_tar_exclude_if_in_pki() {
+  local path=$1
+  local rel
+
+  case ${path}/ in
+    "${PKI_REAL}"/*)
+      rel=${path#"$PKI_REAL"/}
+      TAR_EXCLUDES+=(--no-wildcards --exclude "${PKI_BASE}/${rel}")
+      ;;
+  esac
 }
 
 NAMESPACE=$(pki_default_namespace)
@@ -91,15 +105,35 @@ BACKUP_DIR=${BACKUP_DIR:-${PKI_DIR}/backups}
 BACKUP_DIR=$(pki_expand_path "$BACKUP_DIR")
 
 pki_require_cmd tar
+TAR_HELP=$(tar --help 2>/dev/null || true)
+case $TAR_HELP in
+  *--no-wildcards*) ;;
+  *) pki_die 'tar with --no-wildcards support is required for safe PKI backup exclusions' ;;
+esac
 pki_require_pki_dir
 pki_prepare_dir "$BACKUP_DIR"
+
+PKI_REAL=$(cd -- "$PKI_DIR" && pwd -P)
+BACKUP_REAL=$(cd -- "$BACKUP_DIR" && pwd -P)
+BACKUP_INPUT=$(cd -- "$(dirname -- "$BACKUP_DIR")" && pwd -P)/$(basename -- "$BACKUP_DIR")
+PKI_BASE=$(basename -- "$PKI_REAL")
+TAR_EXCLUDES=()
+
+if [[ "$BACKUP_REAL" == "$PKI_REAL" ]]; then
+  pki_die "Backup directory cannot be the PKI directory itself: $BACKUP_DIR"
+fi
+
+add_tar_exclude_if_in_pki "$BACKUP_REAL"
+if [[ "$BACKUP_INPUT" != "$BACKUP_REAL" ]]; then
+  add_tar_exclude_if_in_pki "$BACKUP_INPUT"
+fi
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 TMP_ARCHIVE="$TMP_DIR/platform-pki.tar.gz"
 
 pki_warn "PKI backup contains secrets, including private keys and CA database files"
-tar -C "$(dirname -- "$PKI_DIR")" -czf "$TMP_ARCHIVE" "$(basename -- "$PKI_DIR")"
+tar "${TAR_EXCLUDES[@]}" -C "$(dirname -- "$PKI_REAL")" -czf "$TMP_ARCHIVE" "$PKI_BASE"
 chmod 600 "$TMP_ARCHIVE"
 
 if [[ "$ALLOW_PLAIN" == 'true' ]]; then

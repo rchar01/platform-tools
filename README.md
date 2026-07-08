@@ -79,6 +79,7 @@ PKI helpers require:
 
 - `openssl`
 - GNU `date` for certificate expiry calculations
+- `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 
 SSH and Proxmox helpers require:

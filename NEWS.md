@@ -7,6 +7,7 @@ This file gives a short, release-oriented view of what changed between versions.
 - Hardened `platform-vm-env-collect` to write reports and archives under a private random `/tmp` directory with owner-only permissions.
 - Hardened `platform-bastion-policy` to create output files with owner-only permissions and refuse existing output paths.
 - Hardened PKI passphrase-file validation to reject empty, whitespace-only, or shorter-than-16-character first lines.
+- Excluded in-tree PKI backup output directories from `platform-pki-backup` archives to prevent recursive backup growth.
 - Added `platform-bastion-policy` for validating and rendering Kubernetes bastion access-policy documents.
 - Refined the README landing page with a branded header, clearer install notes, and license information.
 
