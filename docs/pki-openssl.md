@@ -269,6 +269,7 @@ Output layout:
 ```
 
 The export directory contains service private keys and must stay outside Git.
+Custom `--export-dir` values must be absolute paths. Export directory parents must already exist, be owned by the current user, and must not be group- or world-writable. Export paths must not contain symlink components; the helper creates a fresh private export tree and writes files through temporary files before renaming them into place.
 
 ## Back Up PKI State
 

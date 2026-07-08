@@ -251,6 +251,8 @@ Collected VM reports and PKI exports can contain sensitive environment details e
 
 PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts over long-lived files.
 
+PKI Ansible exports contain service private keys. Custom export directories must be absolute paths with current-user-owned parents that are not group- or world-writable and do not contain symlink components.
+
 Real bastion access policies can reveal users, groups, cluster endpoints, and access intent. Keep real policies in `platform-private`; only fake examples belong in this repository.
 
 ## License

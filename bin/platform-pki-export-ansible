@@ -23,17 +23,84 @@ Options:
   --export-dir <path> Export directory. Default: <pki-dir>/export/ansible
   --force             Replace an existing export directory.
   -h, --help          Show this help.
+
+Custom export directories must be absolute paths. Export directory parents must
+be owned by the current user and not be group- or world-writable. Export paths
+must not contain symlink components.
 USAGE
+}
+
+require_no_symlink_components() {
+  local path=$1
+  local label=$2
+  local current component
+  local mode
+  local -a components
+
+  case $path in
+    /*) current='' ;;
+    *) current='.' ;;
+  esac
+
+  IFS='/' read -r -a components <<< "$path"
+  for component in "${components[@]}"; do
+    [[ -n "$component" && "$component" != '.' ]] || continue
+    if [[ "$current" == '/' || -z "$current" ]]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+    [[ ! -L "$current" ]] || pki_die "$label path component must not be a symlink: $current"
+    if [[ -d "$current" ]]; then
+      mode=$(stat -c '%a' "$current") || pki_die "Cannot inspect $label path component permissions: $current"
+      [[ $mode =~ ^[0-7]+$ ]] || pki_die "Cannot parse $label path component permissions: $current"
+      if (( (8#$mode & 022) != 0 && (8#$mode & 01000) == 0 )); then
+        pki_die "$label path component is group- or world-writable without sticky bit: $current"
+      fi
+    fi
+  done
+}
+
+require_private_dir() {
+  local path=$1
+  local label=$2
+  local mode owner current_uid
+
+  [[ -d "$path" ]] || pki_die "$label directory is missing: $path"
+  [[ ! -L "$path" ]] || pki_die "$label directory must not be a symlink: $path"
+  mode=$(stat -c '%a' "$path") || pki_die "Cannot inspect $label directory permissions: $path"
+  [[ $mode =~ ^[0-7]+$ ]] || pki_die "Cannot parse $label directory permissions: $path"
+  if (( (8#$mode & 022) != 0 )); then
+    pki_die "$label directory is group- or world-writable: $path"
+  fi
+  owner=$(stat -c '%u' "$path") || pki_die "Cannot inspect $label directory owner: $path"
+  current_uid=$(id -u)
+  [[ "$owner" == "$current_uid" ]] || pki_die "$label directory is not owned by the current user: $path"
+}
+
+prepare_fresh_dir() {
+  local path=$1
+
+  [[ ! -e "$path" && ! -L "$path" ]] || pki_die "Export path unexpectedly exists: $path"
+  mkdir -m 700 "$path"
 }
 
 copy_file() {
   local source=$1
   local target=$2
   local mode=$3
+  local target_dir target_name tmp
 
   pki_require_file "$source"
-  cp "$source" "$target"
-  chmod "$mode" "$target"
+  target_dir=$(dirname -- "$target")
+  target_name=$(basename -- "$target")
+  [[ -d "$target_dir" && ! -L "$target_dir" ]] || pki_die "Export target directory is unsafe: $target_dir"
+  [[ ! -e "$target" && ! -L "$target" ]] || pki_die "Export target already exists: $target"
+  tmp=$(mktemp "${target_dir}/.${target_name}.tmp.XXXXXX")
+  cp "$source" "$tmp"
+  chmod "$mode" "$tmp"
+  [[ ! -e "$target" && ! -L "$target" ]] || { rm -f "$tmp"; pki_die "Export target appeared during copy: $target"; }
+  mv "$tmp" "$target"
 }
 
 service_is_generated() {
@@ -44,6 +111,7 @@ service_is_generated() {
 NAMESPACE=$(pki_default_namespace)
 PKI_DIR=''
 EXPORT_DIR=''
+EXPORT_DIR_PROVIDED=false
 FORCE=false
 SERVICES=()
 
@@ -51,7 +119,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --namespace) [[ $# -ge 2 ]] || pki_die '--namespace requires a value'; NAMESPACE=$2; shift 2 ;;
     --pki-dir) [[ $# -ge 2 ]] || pki_die '--pki-dir requires a value'; PKI_DIR=$2; shift 2 ;;
-    --export-dir) [[ $# -ge 2 ]] || pki_die '--export-dir requires a value'; EXPORT_DIR=$2; shift 2 ;;
+    --export-dir) [[ $# -ge 2 ]] || pki_die '--export-dir requires a value'; EXPORT_DIR=$2; EXPORT_DIR_PROVIDED=true; shift 2 ;;
     --force) FORCE=true; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) pki_die "Unknown argument: $1" ;;
@@ -66,12 +134,30 @@ done
 NAMESPACE=$(pki_expand_path "$NAMESPACE")
 PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
 PKI_DIR=$(pki_expand_path "$PKI_DIR")
+case $PKI_DIR in
+  /*) ;;
+  *) PKI_DIR="$(pwd -P)/$PKI_DIR" ;;
+esac
 EXPORT_DIR=${EXPORT_DIR:-${PKI_DIR}/export/ansible}
 EXPORT_DIR=$(pki_expand_path "$EXPORT_DIR")
+if [[ "$EXPORT_DIR_PROVIDED" == 'true' ]]; then
+  case $EXPORT_DIR in
+    /*) ;;
+    *) pki_die '--export-dir must be an absolute path' ;;
+  esac
+fi
+EXPORT_PARENT=$(dirname -- "$EXPORT_DIR")
+umask 077
 
 pki_require_pki_dir
 pki_require_inventory
 pki_require_file "$(pki_root_cert)"
+require_no_symlink_components "$EXPORT_PARENT" 'Export parent'
+require_private_dir "$EXPORT_PARENT" 'Export parent'
+
+if [[ -L "$EXPORT_DIR" ]]; then
+  pki_die "Export directory must not be a symlink: $EXPORT_DIR"
+fi
 
 if [[ ${#SERVICES[@]} -eq 0 ]]; then
   while IFS= read -r service || [[ -n "$service" ]]; do
@@ -96,17 +182,19 @@ if [[ -e "$EXPORT_DIR" && "$FORCE" != 'true' ]]; then
 fi
 
 if [[ -e "$EXPORT_DIR" ]]; then
+  require_no_symlink_components "$EXPORT_DIR" 'Export'
+  require_private_dir "$EXPORT_DIR" 'Export'
   rm -rf "$EXPORT_DIR"
 fi
-pki_prepare_dir "$EXPORT_DIR"
-pki_prepare_dir "$EXPORT_DIR/ca"
-pki_prepare_dir "$EXPORT_DIR/services"
+prepare_fresh_dir "$EXPORT_DIR"
+prepare_fresh_dir "$EXPORT_DIR/ca"
+prepare_fresh_dir "$EXPORT_DIR/services"
 
 copy_file "$(pki_root_cert)" "$EXPORT_DIR/ca/root-ca.crt" 644
 
 for service in "${SERVICES[@]}"; do
   target_dir="$EXPORT_DIR/services/$service"
-  pki_prepare_dir "$target_dir"
+  prepare_fresh_dir "$target_dir"
   copy_file "$(pki_service_cert "$service")" "$target_dir/tls.crt" 644
   copy_file "$(pki_service_key "$service")" "$target_dir/tls.key" 600
   copy_file "$(pki_service_chain "$service")" "$target_dir/ca-chain.crt" 644
