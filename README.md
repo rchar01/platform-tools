@@ -18,13 +18,13 @@ All shared platform helper tools live in this repository. The platform repositor
 
 | Repository | Purpose |
 | --- | --- |
-| `platform-config` | Configures operating systems and services with Ansible. |
-| `platform-deployments` | Owns Helm chart source plus deployment values and overlays. |
-| `platform-infra` | Provisions Proxmox VMs with OpenTofu and exposes handoff outputs. |
-| `platform-k8s-bastion` | Provides runtime commands and libraries for Kubernetes bastion hosts. |
+| [`platform-config`](https://codeberg.org/rch/platform-config) | Configures operating systems and services with Ansible. |
+| [`platform-deployments`](https://codeberg.org/rch/platform-deployments) | Owns Helm chart source plus deployment values and overlays. |
+| [`platform-infra`](https://codeberg.org/rch/platform-infra) | Provisions Proxmox VMs with OpenTofu and exposes handoff outputs. |
+| [`platform-k8s-bastion`](https://codeberg.org/rch/platform-k8s-bastion) | Provides runtime commands and libraries for Kubernetes bastion hosts. |
 | `platform-private` | Stores private environment-specific operator config; secrets still stay outside Git. |
-| `platform-template-builder` | Builds reusable Proxmox VM templates from upstream Linux cloud images. |
-| `platform-tools` | Provides shared helper tools used by the platform project repositories. |
+| [`platform-template-builder`](https://codeberg.org/rch/platform-template-builder) | Builds reusable Proxmox VM templates from upstream Linux cloud images. |
+| [`platform-tools`](https://codeberg.org/rch/platform-tools) | Provides shared helper tools used by the platform project repositories. |
 
 ## Tools
 
