@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
+EXEC_TMP_DIR=$(mktemp -d "$ROOT_DIR/.test-export-ansible.XXXXXX")
+trap 'rm -rf "$TMP_DIR" "$EXEC_TMP_DIR"' EXIT HUP INT TERM
 
 create_generated_pki_tree() {
   local pki_dir=$1
@@ -52,6 +53,20 @@ assert_file_content() {
   fi
 }
 
+write_fake_stat() {
+  local path=$1
+
+  cat >"$path" <<'SH'
+#!/bin/sh
+if [ "$1" = '-c' ] && [ "$2" = '%u' ] && [ "${3:-}" = "$UNTRUSTED_COMPONENT" ]; then
+  printf '%s\n' "$UNTRUSTED_OWNER"
+  exit 0
+fi
+exec "$REAL_STAT" "$@"
+SH
+  chmod 755 "$path"
+}
+
 pki_dir="$TMP_DIR/default/pki"
 create_generated_pki_tree "$pki_dir"
 printf '%s\n' 'stale export' >"$pki_dir/export/ansible/stale.txt"
@@ -98,6 +113,48 @@ if "$ROOT_DIR/bin/platform-pki-export-ansible" \
   exit 1
 fi
 grep -q 'Export parent path component is group- or world-writable without sticky bit' "$TMP_DIR/unsafe-ancestor.out"
+
+owner_ancestor_pki="$TMP_DIR/owner-ancestor-pki/pki"
+owner_ancestor="$TMP_DIR/owner-ancestor"
+owner_child="$owner_ancestor/safe-child"
+fake_bin="$EXEC_TMP_DIR/fake-bin"
+real_stat=$(command -v stat)
+current_uid=$(id -u)
+untrusted_owner=99999
+if [[ $current_uid -eq $untrusted_owner ]]; then
+  untrusted_owner=99998
+fi
+create_generated_pki_tree "$owner_ancestor_pki"
+mkdir -p "$owner_child" "$fake_bin"
+chmod 755 "$owner_ancestor"
+chmod 700 "$owner_child"
+write_fake_stat "$fake_bin/stat"
+
+if REAL_STAT=$real_stat UNTRUSTED_COMPONENT=$owner_ancestor UNTRUSTED_OWNER=$untrusted_owner PATH="$fake_bin:$PATH" "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$owner_ancestor_pki" \
+  --export-dir "$owner_child/export" >"$TMP_DIR/owner-ancestor.out" 2>&1; then
+  printf '%s\n' 'export accepted an untrusted-owner ancestor' >&2
+  exit 1
+fi
+grep -q 'Export parent path component is not owned by current user or root' "$TMP_DIR/owner-ancestor.out"
+[[ ! -e "$owner_child/export/services/platform-example/tls.key" ]] || { printf '%s\n' 'untrusted-owner ancestor export target received private key' >&2; exit 1; }
+
+sticky_owner_ancestor_pki="$TMP_DIR/sticky-owner-ancestor-pki/pki"
+sticky_owner_ancestor="$TMP_DIR/sticky-owner-ancestor"
+sticky_owner_child="$sticky_owner_ancestor/safe-child"
+create_generated_pki_tree "$sticky_owner_ancestor_pki"
+mkdir -p "$sticky_owner_child"
+chmod 1755 "$sticky_owner_ancestor"
+chmod 700 "$sticky_owner_child"
+
+if REAL_STAT=$real_stat UNTRUSTED_COMPONENT=$sticky_owner_ancestor UNTRUSTED_OWNER=$untrusted_owner PATH="$fake_bin:$PATH" "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$sticky_owner_ancestor_pki" \
+  --export-dir "$sticky_owner_child/export" >"$TMP_DIR/sticky-owner-ancestor.out" 2>&1; then
+  printf '%s\n' 'export accepted a sticky untrusted-owner ancestor' >&2
+  exit 1
+fi
+grep -q 'Export parent path component is not owned by current user or root' "$TMP_DIR/sticky-owner-ancestor.out"
+[[ ! -e "$sticky_owner_child/export/services/platform-example/tls.key" ]] || { printf '%s\n' 'sticky untrusted-owner ancestor export target received private key' >&2; exit 1; }
 
 symlink_pki="$TMP_DIR/symlink/pki"
 create_generated_pki_tree "$symlink_pki"

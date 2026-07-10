@@ -24,18 +24,22 @@ Options:
   --force             Replace an existing export directory.
   -h, --help          Show this help.
 
-Custom export directories must be absolute paths. Export directory parents must
-be owned by the current user and not be group- or world-writable. Export paths
-must not contain symlink components.
+Custom export directories must be absolute paths. Existing export path
+components must be owned by the current user or root, must not be unsafe
+writable directories, and must not be symlinks. The immediate export parent
+must already exist, be owned by the current user, and not be group- or
+world-writable.
 USAGE
 }
 
-require_no_symlink_components() {
+require_trusted_path_components() {
   local path=$1
   local label=$2
   local current component
-  local mode
+  local mode owner current_uid
   local -a components
+
+  current_uid=$(id -u)
 
   case $path in
     /*) current='' ;;
@@ -51,11 +55,17 @@ require_no_symlink_components() {
       current="${current}/${component}"
     fi
     [[ ! -L "$current" ]] || pki_die "$label path component must not be a symlink: $current"
+    [[ ! -e "$current" || -d "$current" ]] || pki_die "$label path component is not a directory: $current"
     if [[ -d "$current" ]]; then
       mode=$(stat -c '%a' "$current") || pki_die "Cannot inspect $label path component permissions: $current"
       [[ $mode =~ ^[0-7]+$ ]] || pki_die "Cannot parse $label path component permissions: $current"
       if (( (8#$mode & 022) != 0 && (8#$mode & 01000) == 0 )); then
         pki_die "$label path component is group- or world-writable without sticky bit: $current"
+      fi
+      owner=$(stat -c '%u' "$current") || pki_die "Cannot inspect $label path component owner: $current"
+      [[ $owner =~ ^[0-9]+$ ]] || pki_die "Cannot parse $label path component owner: $current"
+      if [[ "$owner" != "$current_uid" && "$owner" != '0' ]]; then
+        pki_die "$label path component is not owned by current user or root: $current"
       fi
     fi
   done
@@ -152,7 +162,7 @@ umask 077
 pki_require_pki_dir
 pki_require_inventory
 pki_require_file "$(pki_root_cert)"
-require_no_symlink_components "$EXPORT_PARENT" 'Export parent'
+require_trusted_path_components "$EXPORT_PARENT" 'Export parent'
 require_private_dir "$EXPORT_PARENT" 'Export parent'
 
 if [[ -L "$EXPORT_DIR" ]]; then
@@ -182,7 +192,7 @@ if [[ -e "$EXPORT_DIR" && "$FORCE" != 'true' ]]; then
 fi
 
 if [[ -e "$EXPORT_DIR" ]]; then
-  require_no_symlink_components "$EXPORT_DIR" 'Export'
+  require_trusted_path_components "$EXPORT_DIR" 'Export'
   require_private_dir "$EXPORT_DIR" 'Export'
   rm -rf "$EXPORT_DIR"
 fi
