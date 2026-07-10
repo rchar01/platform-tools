@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v1.3.0 - 2026-07-10
+
 - Hardened `platform-vm-env-collect` to write reports and archives under a private random `/tmp` directory with owner-only permissions.
 - Hardened `platform-bastion-policy` to create output files with owner-only permissions and refuse existing output paths.
 - Hardened `platform-bastion-policy` Linux user and group validation to reject newline-suffixed identity names.

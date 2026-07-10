@@ -7,11 +7,17 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-10
+
 ### Added
 
 - Added `platform-bastion-policy` for validating and rendering Kubernetes bastion access-policy documents.
 
 ### Changed
+
+- Refined the README landing page with a branded header, clearer install notes, and license information.
+
+### Security
 
 - Hardened `platform-vm-env-collect` to write reports and archives under a private random `/tmp` directory with owner-only permissions.
 - Hardened `platform-bastion-policy` to create output files with owner-only permissions and refuse existing output paths.
@@ -20,7 +26,6 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Excluded in-tree PKI backup output directories from `platform-pki-backup` archives to prevent recursive backup growth.
 - Hardened `platform-pki-export-ansible` to reject unsafe export paths, untrusted path ancestors, and destination symlinks.
 - Hardened PKI service inventory validation to reject OpenSSL configuration expansion syntax in certificate names and SANs; `ips` inventory entries are now explicitly IPv4-only.
-- Refined the README landing page with a branded header, clearer install notes, and license information.
 
 ## [1.2.0] - 2026-05-25
 
