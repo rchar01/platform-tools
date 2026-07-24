@@ -113,6 +113,18 @@ run_tool create --vmid 101 --snapshot-name a
 assert_failure
 assert_contains "$OUTPUT" '2-40 characters'
 
+run_tool create --vmid
+assert_failure
+assert_contains "$OUTPUT" '--vmid requires a value'
+
+run_tool create --vmid 101 --snapshot-name current
+assert_failure
+assert_contains "$OUTPUT" 'Reserved snapshot name: current'
+
+run_tool create --vmid 101 --snapshot-name PENDING
+assert_failure
+assert_contains "$OUTPUT" 'Reserved snapshot name: PENDING'
+
 run_tool create --vmid 101 --vmid 102 --snapshot-name valid-name
 assert_failure
 assert_contains "$OUTPUT" 'may be specified only once'
@@ -120,6 +132,10 @@ assert_contains "$OUTPUT" 'may be specified only once'
 run_tool list --environment managed-by-tofu
 assert_failure
 assert_contains "$OUTPUT" 'Reserved environment selector'
+
+run_tool list --environment all
+assert_failure
+assert_contains "$OUTPUT" 'Reserved environment selector: all'
 
 run_tool list --environment '*'
 assert_failure
@@ -137,6 +153,10 @@ run_tool create --ssh '-oProxyCommand=touch-bad' --vmid 101 --snapshot-name vali
 assert_failure
 assert_contains "$OUTPUT" '--ssh must use user@host'
 assert_not_contains "$(ssh_log)" 'CALL ssh'
+
+run_tool create --identity-file "$TMP_DIR/missing-key" --vmid 101 --snapshot-name valid-name --yes
+assert_failure
+assert_contains "$OUTPUT" '--identity-file requires --ssh'
 
 run_tool create --vmid 101 --snapshot-name valid-name --description $'line one\nline two' --yes
 assert_failure
