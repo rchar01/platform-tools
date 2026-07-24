@@ -1,0 +1,6 @@
+{
+  "vmid": 102,
+  "name": "fixture-db",
+  "status": "stopped",
+  "qmpstatus": "stopped"
+}

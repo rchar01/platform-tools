@@ -1,0 +1,10 @@
+[
+  {
+    "node": "pve-a",
+    "status": "online"
+  },
+  {
+    "node": "pve-b",
+    "status": "offline"
+  }
+]

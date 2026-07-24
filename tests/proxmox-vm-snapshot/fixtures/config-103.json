@@ -1,0 +1,7 @@
+{
+  "name": "fixture-other",
+  "template": 0,
+  "tags": "managed-by-tofu;production",
+  "sata0": "fixture-storage:vm-103-disk-0,size=8G",
+  "digest": "2123456789abcdef0123456789abcdef01234567"
+}

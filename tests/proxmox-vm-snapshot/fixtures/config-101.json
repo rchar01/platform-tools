@@ -1,0 +1,7 @@
+{
+  "name": "fixture-app",
+  "template": 0,
+  "tags": "managed-by-tofu;dev",
+  "scsi0": "fixture-storage:vm-101-disk-0,size=16G",
+  "digest": "0123456789abcdef0123456789abcdef01234567"
+}

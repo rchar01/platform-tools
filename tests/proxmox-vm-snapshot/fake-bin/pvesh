@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state=${FAKE_PVE_STATE:?FAKE_PVE_STATE is required}
+[[ ${1:-} == get ]] || { printf 'fake pvesh supports get only\n' >&2; exit 2; }
+endpoint=${2:-}
+
+assert_args() {
+  local -a expected=("$@")
+  local -a actual=("${ORIGINAL_ARGS[@]}")
+  local index
+
+  [[ ${#actual[@]} -eq ${#expected[@]} ]] || {
+    printf 'unexpected fake pvesh argument count for %s\n' "$endpoint" >&2
+    exit 2
+  }
+  for ((index = 0; index < ${#expected[@]}; index += 1)); do
+    [[ ${actual[index]} == "${expected[index]}" ]] || {
+      printf 'unexpected fake pvesh argument %s for %s\n' "$index" "$endpoint" >&2
+      exit 2
+    }
+  done
+}
+
+ORIGINAL_ARGS=("$@")
+
+{
+  printf 'CALL pvesh\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"$state/pvesh.log"
+
+if [[ $endpoint == /nodes/pve-a/qemu ]]; then
+  count_file="$state/inventory-count"
+  count=0
+  [[ ! -f $count_file ]] || count=$(<"$count_file")
+  ((count += 1))
+  printf '%s\n' "$count" >"$count_file"
+
+  if [[ -n ${FAKE_PVESH_DRIFT_AT:-} && $count -eq $FAKE_PVESH_DRIFT_AT ]]; then
+    case ${FAKE_PVESH_DRIFT_KIND:-rename-102} in
+      rename-101)
+        jq '.name = "fixture-app-renamed"' "$state/configs/101.json" >"$state/configs/101.tmp"
+        mv "$state/configs/101.tmp" "$state/configs/101.json"
+        ;;
+      rename-102)
+        jq '.name = "fixture-db-renamed"' "$state/configs/102.json" >"$state/configs/102.tmp"
+        mv "$state/configs/102.tmp" "$state/configs/102.json"
+        ;;
+      add-104)
+        cp "$state/configs/103.json" "$state/configs/104.json"
+        jq '.name = "fixture-added" | .tags = "managed-by-tofu;dev"' "$state/configs/104.json" >"$state/configs/104.tmp"
+        mv "$state/configs/104.tmp" "$state/configs/104.json"
+        cp "$state/status/102.json" "$state/status/104.json"
+        cp "$state/snapshots/102.json" "$state/snapshots/104.json"
+        jq '. + [{"vmid":104,"name":"fixture-added","status":"stopped","template":0,"tags":"managed-by-tofu;dev"}]' "$state/inventory.json" >"$state/inventory.tmp"
+        mv "$state/inventory.tmp" "$state/inventory.json"
+        ;;
+      disk-101)
+        jq '.scsi0 = "fixture-storage:vm-101-disk-0,size=24G" | .digest = "4123456789abcdef0123456789abcdef01234567"' "$state/configs/101.json" >"$state/configs/101.tmp"
+        mv "$state/configs/101.tmp" "$state/configs/101.json"
+        ;;
+      lock-102)
+        jq '.lock = "snapshot" | .digest = "5123456789abcdef0123456789abcdef01234567"' "$state/configs/102.json" >"$state/configs/102.tmp"
+        mv "$state/configs/102.tmp" "$state/configs/102.json"
+        ;;
+      status-101)
+        jq '.status = "stopped" | .qmpstatus = "stopped"' "$state/status/101.json" >"$state/status/101.tmp"
+        mv "$state/status/101.tmp" "$state/status/101.json"
+        ;;
+      snapshot-102)
+        jq 'map(select(.name != "current")) + [{"name":"late-snapshot","snaptime":1700003000,"vmstate":0},{"name":"current","parent":"late-snapshot"}]' "$state/snapshots/102.json" >"$state/snapshots/102.tmp"
+        mv "$state/snapshots/102.tmp" "$state/snapshots/102.json"
+        ;;
+    esac
+  fi
+fi
+
+case $endpoint in
+  /nodes)
+    assert_args get "$endpoint" --output-format json
+    file="$state/nodes.json"
+    ;;
+  /nodes/pve-a/qemu)
+    assert_args get "$endpoint" --output-format json
+    file="$state/inventory.json"
+    ;;
+  /nodes/pve-a/qemu/*/config)
+    assert_args get "$endpoint" --current 1 --output-format json
+    vmid=${endpoint#/nodes/pve-a/qemu/}
+    vmid=${vmid%/config}
+    file="$state/configs/$vmid.json"
+    ;;
+  /nodes/pve-a/qemu/*/status/current)
+    assert_args get "$endpoint" --output-format json
+    vmid=${endpoint#/nodes/pve-a/qemu/}
+    vmid=${vmid%/status/current}
+    file="$state/status/$vmid.json"
+    ;;
+  /nodes/pve-a/qemu/*/snapshot)
+    assert_args get "$endpoint" --output-format json
+    vmid=${endpoint#/nodes/pve-a/qemu/}
+    vmid=${vmid%/snapshot}
+    file="$state/snapshots/$vmid.json"
+    ;;
+  *) printf 'unknown fake pvesh endpoint: %s\n' "$endpoint" >&2; exit 2 ;;
+esac
+
+[[ -f $file ]] || { printf 'missing fake pvesh response: %s\n' "$file" >&2; exit 2; }
+cat "$file"

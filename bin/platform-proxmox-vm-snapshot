@@ -1,0 +1,1226 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+info() { printf '[INFO] %s\n' "$*" >&2; }
+ok() { printf '[OK] %s\n' "$*" >&2; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+die() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: platform-proxmox-vm-snapshot <create|list|rollback|delete> [options]
+
+Create, inspect, roll back, or delete short-lived Proxmox VE 9 VM snapshots.
+Run directly on a single-node Proxmox host or stream the command over SSH.
+
+Target selector; exactly one required:
+  --vmid <vmid>                 Select one numeric VMID.
+  --vm-name <exact-name>        Select one exact, uniquely named VM.
+  --environment <tag>           Select non-template VMs tagged
+                                managed-by-tofu and <tag>.
+
+Snapshot options:
+  --snapshot-name <name>        Required for create, rollback, and delete.
+  --description <text>          Create-only snapshot description.
+  --include-memory              Create-only saved VM memory state.
+  --start-after-rollback        Rollback-only explicit VM start.
+
+Connection and safety:
+  --ssh <user@host>             Run Proxmox work on a host over SSH.
+  --identity-file <path>        SSH private key for --ssh.
+  --dry-run                     Resolve, inspect, and print without mutation.
+  --yes                         Skip mutation confirmation, not preflight.
+  -h, --help                    Show this help.
+
+Snapshots are temporary rollback points, not backups. Environment membership
+is defined only by exact Proxmox tags, and multi-VM operations are not atomic.
+USAGE
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+expand_path() {
+  case $1 in
+    \~) printf '%s\n' "$HOME" ;;
+    \~/*) printf '%s/%s\n' "$HOME" "${1:2}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+resolve_self_path() {
+  case ${BASH_SOURCE[0]} in
+    */*)
+      [[ -r "${BASH_SOURCE[0]}" ]] || return 1
+      printf '%s\n' "${BASH_SOURCE[0]}"
+      ;;
+    *)
+      command -v -- "${BASH_SOURCE[0]}" 2>/dev/null || return 1
+      ;;
+  esac
+}
+
+quote_remote_command() {
+  printf '%q ' "$@"
+}
+
+mark_once() {
+  local option=$1
+
+  [[ -z "${SEEN_OPTIONS[$option]:-}" ]] || die "$option may be specified only once"
+  SEEN_OPTIONS[$option]=1
+}
+
+has_control_characters() {
+  local value=$1 character code index
+  local LC_ALL=C
+
+  for ((index = 0; index < ${#value}; index += 1)); do
+    character=${value:index:1}
+    printf -v code '%d' "'$character"
+    if ((code < 32 || code == 127)); then
+      return 0
+    fi
+  done
+  return 1
+}
+
+validate_vmid() {
+  [[ "$VMID" =~ ^[1-9][0-9]{2,8}$ ]] || die "--vmid must be an integer from 100 to 999999999: $VMID"
+  ((10#$VMID <= 999999999)) || die "--vmid must be an integer from 100 to 999999999: $VMID"
+}
+
+validate_snapshot_name() {
+  local normalized
+
+  [[ "$SNAPSHOT_NAME" =~ ^[A-Za-z][A-Za-z0-9_-]{1,39}$ ]] ||
+    die '--snapshot-name must be 2-40 characters, start with a letter, and contain only letters, digits, underscores, or hyphens'
+
+  normalized=${SNAPSHOT_NAME,,}
+  [[ "$normalized" != 'current' && "$normalized" != 'pending' ]] ||
+    die "Reserved snapshot name: $SNAPSHOT_NAME"
+}
+
+validate_environment() {
+  local normalized
+
+  [[ "$ENVIRONMENT" =~ ^[A-Za-z0-9_][A-Za-z0-9_.+-]*$ ]] ||
+    die '--environment must use a valid exact Proxmox tag'
+
+  normalized=${ENVIRONMENT,,}
+  [[ "$normalized" != 'managed-by-tofu' && "$normalized" != 'all' ]] ||
+    die "Reserved environment selector: $ENVIRONMENT"
+}
+
+selector_count() {
+  local count=0
+
+  [[ -z "$VMID" ]] || ((count += 1))
+  [[ -z "$VM_NAME" ]] || ((count += 1))
+  [[ -z "$ENVIRONMENT" ]] || ((count += 1))
+  printf '%s\n' "$count"
+}
+
+validate_cli() {
+  local count
+
+  case $COMMAND in
+    create|list|rollback|delete) ;;
+    '') die 'A subcommand is required: create, list, rollback, or delete' ;;
+    *) die "Unknown subcommand: $COMMAND" ;;
+  esac
+
+  count=$(selector_count)
+  [[ "$count" -eq 1 ]] || die 'Exactly one of --vmid, --vm-name, or --environment is required'
+
+  if [[ -n "$VMID" ]]; then
+    validate_vmid
+  fi
+  if [[ -n "$VM_NAME" ]]; then
+    [[ -n "$VM_NAME" ]] || die '--vm-name must not be empty'
+    has_control_characters "$VM_NAME" && die '--vm-name must not contain control characters'
+  fi
+  if [[ -n "$ENVIRONMENT" ]]; then
+    validate_environment
+  fi
+
+  if [[ "$COMMAND" == 'list' ]]; then
+    [[ -z "$SNAPSHOT_NAME" ]] || die '--snapshot-name is not valid for list'
+    [[ "$DESCRIPTION_SET" == 'false' ]] || die '--description is valid only for create'
+    [[ "$INCLUDE_MEMORY" == 'false' ]] || die '--include-memory is valid only for create'
+    [[ "$START_AFTER_ROLLBACK" == 'false' ]] || die '--start-after-rollback is valid only for rollback'
+    [[ "$ASSUME_YES" == 'false' ]] || die '--yes is not valid for list'
+  else
+    [[ -n "$SNAPSHOT_NAME" ]] || die "--snapshot-name is required for $COMMAND"
+    validate_snapshot_name
+  fi
+
+  if [[ "$COMMAND" != 'create' ]]; then
+    [[ "$DESCRIPTION_SET" == 'false' ]] || die '--description is valid only for create'
+    [[ "$INCLUDE_MEMORY" == 'false' ]] || die '--include-memory is valid only for create'
+  fi
+  if [[ "$COMMAND" != 'rollback' ]]; then
+    [[ "$START_AFTER_ROLLBACK" == 'false' ]] || die '--start-after-rollback is valid only for rollback'
+  fi
+  if [[ "$DESCRIPTION_SET" == 'true' ]]; then
+    has_control_characters "$DESCRIPTION" && die '--description must not contain control characters'
+  fi
+
+  [[ -z "$IDENTITY_FILE" || -n "$SSH_TARGET" ]] || die '--identity-file requires --ssh'
+  if [[ -n "${SEEN_OPTIONS[--ssh]:-}" ]]; then
+    [[ -n "$SSH_TARGET" ]] || die '--ssh must not be empty'
+    [[ "$SSH_TARGET" =~ ^[A-Za-z_][A-Za-z0-9_.-]*@([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[A-Fa-f0-9:]+\])$ ]] ||
+      die '--ssh must use user@host, user@IPv4, or user@[IPv6] syntax'
+  fi
+  if [[ -n "${SEEN_OPTIONS[--identity-file]:-}" ]]; then
+    [[ -n "$IDENTITY_FILE" ]] || die '--identity-file must not be empty'
+  fi
+  [[ "$DRY_RUN" == 'false' || "$ASSUME_YES" == 'false' ]] || die '--yes cannot be combined with --dry-run'
+
+  if [[ -n "$INTERNAL_MODE" ]]; then
+    [[ -z "$SSH_TARGET" ]] || die '--ssh cannot be combined with internal execution modes'
+    [[ "$DRY_RUN" == 'false' ]] || die '--dry-run cannot be combined with internal execution modes'
+    if [[ "$INTERNAL_MODE" == 'preflight' ]]; then
+      [[ "$ASSUME_YES" == 'false' ]] || die '--yes cannot be combined with internal preflight'
+    else
+      [[ "$ASSUME_YES" == 'true' ]] || die 'Internal action requires --yes to acknowledge confirmation bypass'
+    fi
+    [[ "$COMMAND" != 'list' ]] || die 'Internal execution modes are not valid for list'
+  fi
+
+  case $INTERNAL_MODE in
+    '') [[ -z "$EXPECTED_TARGETS_FILE" ]] || die '--expected-targets-file requires internal action mode' ;;
+    preflight) [[ -z "$EXPECTED_TARGETS_FILE" ]] || die 'Internal preflight does not accept an expected target manifest' ;;
+    action) [[ -n "$EXPECTED_TARGETS_FILE" ]] || die 'Internal action requires an expected target manifest file' ;;
+    *) die "Unknown internal execution mode: $INTERNAL_MODE" ;;
+  esac
+}
+
+require_execution_tools() {
+  command_exists pvesh || die 'pvesh is required; run on a Proxmox VE 9 host or use --ssh'
+  command_exists jq || die 'jq is required for structured Proxmox data'
+  if [[ "$COMMAND" != 'list' ]]; then
+    command_exists qm || die 'qm is required for snapshot mutations'
+  fi
+}
+
+pvesh_get() {
+  local endpoint=$1
+  shift
+  pvesh get "$endpoint" "$@" --output-format json
+}
+
+discover_node() {
+  local nodes_json count
+
+  if ! nodes_json=$(pvesh_get /nodes); then
+    die 'Could not query Proxmox nodes through pvesh'
+  fi
+  if ! jq -e '
+    type == "array" and
+    length == 1 and
+    (.[0] | type == "object") and
+    (.[0].node | type == "string") and
+    (.[0].node | test("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$"))
+  ' >/dev/null <<<"$nodes_json"; then
+    if count=$(jq -er 'if type == "array" then length else "invalid" end' <<<"$nodes_json" 2>/dev/null); then
+      die "Exactly one Proxmox node is required; discovered: $count"
+    fi
+    die 'Invalid JSON returned by pvesh node discovery'
+  fi
+
+  jq -r '.[0].node' <<<"$nodes_json"
+}
+
+get_vm_inventory() {
+  local node=$1 inventory
+
+  if ! inventory=$(pvesh_get "/nodes/$node/qemu"); then
+    die "Could not query QEMU VMs on node $node"
+  fi
+  jq -e '
+    type == "array" and
+    all(.[];
+      type == "object" and
+      (.vmid as $vmid |
+        ($vmid | type) == "number" and
+        ($vmid | floor) == $vmid and
+        $vmid >= 100 and $vmid <= 999999999) and
+      ((.name? == null) or (.name | type == "string")) and
+      ((.tags? == null) or (.tags | type == "string")) and
+      ((.lock? == null) or (.lock | type == "string")) and
+      ((.template? == null) or .template == 0 or .template == 1 or .template == false or .template == true)
+    ) and
+    ((map(.vmid) | unique | length) == length)
+  ' >/dev/null <<<"$inventory" || die "Invalid QEMU inventory JSON from node $node"
+
+  jq -c 'sort_by(.vmid)' <<<"$inventory"
+}
+
+get_vm_config() {
+  local node=$1 vmid=$2 config
+
+  if ! config=$(pvesh_get "/nodes/$node/qemu/$vmid/config" --current 1); then
+    die "Could not query current config for VMID $vmid"
+  fi
+  jq -e '
+    type == "object" and
+    ((.name? == null) or
+      (.name as $name |
+        ($name | type) == "string" and
+        ($name | length) > 0 and
+        ($name | test("[[:cntrl:]]") | not))) and
+    ((.tags? == null) or (.tags | type == "string")) and
+    ((.lock? == null) or (.lock | type == "string")) and
+    ((.template? == null) or .template == 0 or .template == 1 or .template == false or .template == true) and
+    (to_entries | all(.[];
+      if (.key | test("^(ide[0-3]|sata[0-5]|scsi([0-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|efidisk0|tpmstate0)$"))
+      then (.value | type == "string") else true end
+    ))
+  ' >/dev/null <<<"$config" || die "Invalid current config JSON for VMID $vmid"
+
+  jq -c . <<<"$config"
+}
+
+get_vm_status() {
+  local node=$1 vmid=$2 status
+
+  if ! status=$(pvesh_get "/nodes/$node/qemu/$vmid/status/current"); then
+    die "Could not query current status for VMID $vmid"
+  fi
+  jq -e '
+    type == "object" and
+    (.status as $status |
+      ($status | type) == "string" and
+      ($status | length) > 0 and
+      ($status | test("[[:cntrl:]]") | not))
+  ' >/dev/null <<<"$status" || die "Invalid current status JSON for VMID $vmid"
+
+  jq -c . <<<"$status"
+}
+
+get_vm_snapshots() {
+  local node=$1 vmid=$2 snapshots
+
+  if ! snapshots=$(pvesh_get "/nodes/$node/qemu/$vmid/snapshot"); then
+    die "Could not query snapshots for VMID $vmid"
+  fi
+  jq -e '
+    type == "array" and
+    all(.[];
+      type == "object" and
+      (.name as $name |
+        ($name | type) == "string" and
+        ($name | length) > 0 and
+        ($name | test("[[:cntrl:]]") | not)) and
+      ((.description? == null) or (.description | type == "string")) and
+      ((.parent? == null) or (.parent | type == "string")) and
+      ((.snaptime? == null) or
+        (.snaptime as $snaptime |
+          ($snaptime | type) == "number" and
+          ($snaptime | floor) == $snaptime)) and
+      ((.vmstate? == null) or .vmstate == 0 or .vmstate == 1 or .vmstate == false or .vmstate == true)
+    ) and
+    ((map(.name) | unique | length) == length) and
+    ([.[] | select(.name == "current")] | length == 1)
+  ' >/dev/null <<<"$snapshots" || die "Invalid snapshot JSON for VMID $vmid"
+
+  jq -c . <<<"$snapshots"
+}
+
+config_is_template() {
+  jq -e '(.template? == 1) or (.template? == true)' >/dev/null <<<"$1"
+}
+
+config_has_environment_tags() {
+  local config=$1 environment=$2
+
+  jq -e --arg ownership 'managed-by-tofu' --arg environment "$environment" '
+    def tag_list: (.tags // "") | split(";") | map(select(length > 0));
+    (tag_list | index($ownership)) != null and
+    (tag_list | index($environment)) != null
+  ' >/dev/null <<<"$config"
+}
+
+append_target() {
+  local targets=$1 node=$2 vmid=$3 name=$4
+
+  jq -cn \
+    --argjson targets "$targets" \
+    --arg node "$node" \
+    --argjson vmid "$vmid" \
+    --arg name "$name" \
+    '$targets + [{node: $node, vmid: $vmid, name: $name}]'
+}
+
+canonicalize_targets() {
+  jq -ce '
+    if (
+      type == "array" and length > 0 and
+      all(.[];
+        type == "object" and
+        ((keys | sort) == ["name", "node", "vmid"]) and
+        (.node as $node |
+          ($node | type) == "string" and
+          ($node | test("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$"))) and
+        (.vmid as $vmid |
+          ($vmid | type) == "number" and
+          ($vmid | floor) == $vmid and
+          $vmid >= 100 and $vmid <= 999999999) and
+        (.name as $name |
+          ($name | type) == "string" and
+          ($name | length) > 0 and
+          ($name | test("[[:cntrl:]]") | not))
+      ) and
+      ((map(.vmid) | unique | length) == length)
+    ) then
+      sort_by(.vmid, .name)
+    else
+      error("invalid target manifest")
+    end
+  '
+}
+
+canonicalize_operation_state() {
+  jq -ce '
+    if (
+      type == "array" and length > 0 and
+      all(.[];
+        type == "object" and
+        ((keys | sort) == ["config", "name", "node", "snapshots", "status", "vmid"]) and
+        (.node as $node |
+          ($node | type) == "string" and
+          ($node | test("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$"))) and
+        (.vmid as $vmid |
+          ($vmid | type) == "number" and
+          ($vmid | floor) == $vmid and
+          $vmid >= 100 and $vmid <= 999999999) and
+        (.name as $name |
+          ($name | type) == "string" and
+          ($name | length) > 0 and
+          ($name | test("[[:cntrl:]]") | not)) and
+        (.config as $config |
+          ($config | type) == "object" and
+          (($config | keys | sort) == ["digest", "disks", "lock", "name", "tags", "template"]) and
+          ($config.digest as $digest |
+            ($digest | type) == "string" and
+            ($digest | test("^[A-Fa-f0-9]{40}$"))) and
+          ($config.name == .name) and
+          ($config.template | type == "boolean") and
+          (($config.tags == null) or (($config.tags | type) == "string")) and
+          (($config.lock == null) or (($config.lock | type) == "string")) and
+          ($config.disks as $disks |
+            ($disks | type) == "object" and
+            all($disks | to_entries[]; (.value | type) == "string"))) and
+        (.status as $status |
+          ($status | type) == "string" and
+          ($status | length) > 0 and
+          ($status | test("[[:cntrl:]]") | not)) and
+        (.snapshots | type == "array" and
+          all(.[]; type == "object" and (.name | type == "string")) and
+          ([.[] | select(.name == "current")] | length == 1))
+      ) and
+      ((map(.vmid) | unique | length) == length)
+    ) then
+      sort_by(.vmid, .name) |
+      map(.snapshots |= sort_by(.name, .snaptime // 0))
+    else
+      error("invalid operation-state manifest")
+    end
+  '
+}
+
+operation_state_targets() {
+  jq -c 'map({node, vmid, name}) | sort_by(.vmid, .name)' <<<"$1"
+}
+
+capture_operation_state() {
+  local targets=$1 count index node vmid expected_name config status snapshots
+  local actual_name state config_state records='[]'
+
+  count=$(jq -r 'length' <<<"$targets")
+  for ((index = 0; index < count; index += 1)); do
+    node=$(jq -r ".[$index].node" <<<"$targets")
+    vmid=$(jq -r ".[$index].vmid" <<<"$targets")
+    expected_name=$(jq -r ".[$index].name" <<<"$targets")
+    config=$(get_vm_config "$node" "$vmid") || return 1
+    status=$(get_vm_status "$node" "$vmid") || return 1
+    snapshots=$(get_vm_snapshots "$node" "$vmid") || return 1
+
+    config_is_template "$config" && die "VMID $vmid became a template"
+    actual_name=$(jq -er '.name | select(type == "string" and length > 0)' <<<"$config") ||
+      die "VMID $vmid has no usable current name"
+    [[ "$actual_name" == "$expected_name" ]] ||
+      die "VMID $vmid name drift: expected '$expected_name', got '$actual_name'"
+    jq -e '.digest | select(type == "string" and test("^[A-Fa-f0-9]{40}$"))' >/dev/null <<<"$config" ||
+      die "VMID $vmid current config has no valid digest"
+    state=$(jq -er '.status | select(type == "string" and length > 0)' <<<"$status") ||
+      die "VMID $vmid current status is invalid"
+    snapshots=$(jq -c 'sort_by(.name, .snaptime // 0)' <<<"$snapshots") || return 1
+    config_state=$(jq -c '
+      {
+        digest: .digest,
+        name: .name,
+        template: ((.template? == 1) or (.template? == true)),
+        tags: (.tags // null),
+        lock: (.lock // null),
+        disks: (with_entries(select(
+          .key | test("^(ide[0-3]|sata[0-5]|scsi([0-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|efidisk0|tpmstate0)$")
+        )))
+      }
+    ' <<<"$config") || return 1
+
+    records=$(printf '%s\n%s\n%s\n' "$records" "$config_state" "$snapshots" | jq -cs \
+      --arg node "$node" \
+      --argjson vmid "$vmid" \
+      --arg name "$actual_name" \
+      --arg status "$state" \
+      '.[0] + [{
+        node: $node,
+        vmid: $vmid,
+        name: $name,
+        config: .[1],
+        status: $status,
+        snapshots: .[2]
+      }]') || return 1
+  done
+
+  canonicalize_operation_state <<<"$records" || die 'Captured operation-state manifest is invalid'
+}
+
+resolve_targets() {
+  local node inventory targets='[]' config name vmid matches excluded=0
+  local count index
+
+  node=$(discover_node) || return 1
+  inventory=$(get_vm_inventory "$node") || return 1
+
+  if [[ -n "$VMID" ]]; then
+    vmid=$((10#$VMID))
+    matches=$(jq -c --argjson vmid "$vmid" '[.[] | select(.vmid == $vmid)]' <<<"$inventory")
+    [[ $(jq -r 'length' <<<"$matches") -eq 1 ]] || die "VMID $vmid does not exist on node $node"
+    config=$(get_vm_config "$node" "$vmid") || return 1
+    config_is_template "$config" && die "VMID $vmid is a template, not a snapshot target"
+    name=$(jq -er '.name | select(type == "string" and length > 0)' <<<"$config") ||
+      die "VMID $vmid has no usable name in current config"
+    targets=$(append_target "$targets" "$node" "$vmid" "$name") || return 1
+  else
+    count=$(jq -r 'length' <<<"$inventory")
+    for ((index = 0; index < count; index += 1)); do
+      vmid=$(jq -r ".[$index].vmid" <<<"$inventory")
+      config=$(get_vm_config "$node" "$vmid") || return 1
+
+      if config_is_template "$config"; then
+        if [[ -n "$VM_NAME" ]] && [[ $(jq -r '.name // ""' <<<"$config") == "$VM_NAME" ]]; then
+          die "VM name '$VM_NAME' resolves to template VMID $vmid"
+        fi
+        ((excluded += 1))
+        continue
+      fi
+
+      name=$(jq -er '.name | select(type == "string" and length > 0)' <<<"$config") ||
+        die "VMID $vmid has no usable name in current config"
+
+      if [[ -n "$VM_NAME" ]]; then
+        if [[ "$name" == "$VM_NAME" ]]; then
+          targets=$(append_target "$targets" "$node" "$vmid" "$name") || return 1
+        fi
+      elif config_has_environment_tags "$config" "$ENVIRONMENT"; then
+        targets=$(append_target "$targets" "$node" "$vmid" "$name") || return 1
+      fi
+    done
+
+    if [[ -n "$VM_NAME" ]]; then
+      matches=$(jq -r 'length' <<<"$targets")
+      if [[ "$matches" -eq 0 ]]; then
+        die "No VM has exact name '$VM_NAME'"
+      elif [[ "$matches" -gt 1 ]]; then
+        die "VM name '$VM_NAME' is not unique; matching VMIDs: $(jq -r 'map(.vmid | tostring) | join(", ")' <<<"$targets")"
+      fi
+    else
+      [[ $(jq -r 'length' <<<"$targets") -gt 0 ]] ||
+        die "No non-template VMs have exact tags 'managed-by-tofu' and '$ENVIRONMENT'"
+      if [[ "$excluded" -gt 0 ]]; then
+        info "Excluded $excluded template VM(s) from environment selection"
+      fi
+    fi
+  fi
+
+  canonicalize_targets <<<"$targets" || die 'Resolved target manifest is invalid'
+}
+
+snapshot_exists() {
+  local snapshots=$1 name=$2
+
+  jq -e --arg name "$name" 'any(.[]; .name != "current" and .name == $name)' >/dev/null <<<"$snapshots"
+}
+
+print_disk_config() {
+  jq -r '
+    to_entries[] |
+    select(.key | test("^(ide[0-3]|sata[0-5]|scsi([0-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|efidisk0|tpmstate0)$")) |
+    "  disk \(.key): \(.value | @json)"
+  ' <<<"$1" >&2
+}
+
+print_snapshot_list() {
+  jq -r '
+    sort_by(if .name == "current" then 1 else 0 end, .snaptime // 0, .name)[] |
+    if .name == "current" then
+      "  current state (parent=\((.parent // "none") | @json))"
+    else
+      "  snapshot \(.name): vmstate=\(.vmstate // 0) snaptime=\(.snaptime // "unknown") description=\((.description // "") | @json)"
+    end
+  ' <<<"$1"
+}
+
+preflight_operation_state() {
+  local operation_state=$1 operation=$2 count index node vmid name config status snapshots lock
+
+  count=$(jq -r 'length' <<<"$operation_state")
+  info "Preflight for $operation on $count VM(s)"
+
+  for ((index = 0; index < count; index += 1)); do
+    node=$(jq -r ".[$index].node" <<<"$operation_state")
+    vmid=$(jq -r ".[$index].vmid" <<<"$operation_state")
+    name=$(jq -r ".[$index].name" <<<"$operation_state")
+    config=$(jq -c ".[$index].config" <<<"$operation_state")
+    status=$(jq -r ".[$index].status" <<<"$operation_state")
+    snapshots=$(jq -c ".[$index].snapshots" <<<"$operation_state")
+
+    jq -e '.template == false' >/dev/null <<<"$config" || die "VMID $vmid is a template"
+    lock=$(jq -r '.lock // ""' <<<"$config")
+    [[ -z "$lock" ]] || die "VMID $vmid has Proxmox lock '$lock'"
+
+    case $operation in
+      create)
+        snapshot_exists "$snapshots" "$SNAPSHOT_NAME" &&
+          die "VMID $vmid already has snapshot '$SNAPSHOT_NAME'"
+        ;;
+      rollback|delete)
+        snapshot_exists "$snapshots" "$SNAPSHOT_NAME" ||
+          die "VMID $vmid does not have snapshot '$SNAPSHOT_NAME'"
+        ;;
+    esac
+
+    warn "Target: node=$node VMID=$vmid name=$name status=$status lock=${lock:-none}"
+    print_disk_config "$(jq -c '.disks' <<<"$config")"
+    print_snapshot_list "$snapshots" >&2
+  done
+
+  return 0
+}
+
+verify_identity_and_state() {
+  local operation=$1 node=$2 vmid=$3 expected_name=$4
+  local config actual_name lock snapshots
+
+  config=$(get_vm_config "$node" "$vmid") || return 1
+  config_is_template "$config" && die "VMID $vmid became a template"
+  actual_name=$(jq -er '.name | select(type == "string" and length > 0)' <<<"$config") ||
+    die "VMID $vmid has no usable current name"
+  [[ "$actual_name" == "$expected_name" ]] ||
+    die "VMID $vmid name drift: expected '$expected_name', got '$actual_name'"
+
+  lock=$(jq -r '.lock // ""' <<<"$config")
+  if [[ "$operation" != 'list' && -n "$lock" ]]; then
+    die "VMID $vmid has Proxmox lock '$lock'"
+  fi
+
+  snapshots=$(get_vm_snapshots "$node" "$vmid") || return 1
+  case $operation in
+    create)
+      snapshot_exists "$snapshots" "$SNAPSHOT_NAME" &&
+        die "VMID $vmid already has snapshot '$SNAPSHOT_NAME'"
+      ;;
+    rollback|delete)
+      snapshot_exists "$snapshots" "$SNAPSHOT_NAME" ||
+        die "VMID $vmid does not have snapshot '$SNAPSHOT_NAME'"
+      ;;
+  esac
+
+  return 0
+}
+
+list_targets() {
+  local targets=$1 count index node vmid name snapshots
+
+  count=$(jq -r 'length' <<<"$targets")
+  for ((index = 0; index < count; index += 1)); do
+    node=$(jq -r ".[$index].node" <<<"$targets")
+    vmid=$(jq -r ".[$index].vmid" <<<"$targets")
+    name=$(jq -r ".[$index].name" <<<"$targets")
+    snapshots=$(get_vm_snapshots "$node" "$vmid") || return 1
+
+    printf 'VMID %s (%s) on %s\n' "$vmid" "$name" "$node"
+    print_snapshot_list "$snapshots"
+  done
+}
+
+set_default_description() {
+  local targets=$1 vmid
+
+  [[ "$COMMAND" == 'create' && "$DESCRIPTION_SET" == 'false' ]] || return 0
+
+  if [[ -n "$ENVIRONMENT" ]]; then
+    DESCRIPTION="Created by platform-proxmox-vm-snapshot for environment $ENVIRONMENT"
+  else
+    vmid=$(jq -r '.[0].vmid' <<<"$targets")
+    DESCRIPTION="Created by platform-proxmox-vm-snapshot for VMID $vmid"
+  fi
+}
+
+prepare_qm_args() {
+  local vmid=$1
+
+  case $COMMAND in
+    create)
+      QM_ARGS=(qm snapshot "$vmid" "$SNAPSHOT_NAME" --description "$DESCRIPTION")
+      if [[ "$INCLUDE_MEMORY" == 'true' ]]; then
+        QM_ARGS+=(--vmstate 1)
+      fi
+      ;;
+    rollback)
+      QM_ARGS=(qm rollback "$vmid" "$SNAPSHOT_NAME")
+      if [[ "$START_AFTER_ROLLBACK" == 'true' ]]; then
+        QM_ARGS+=(--start 1)
+      fi
+      ;;
+    delete)
+      QM_ARGS=(qm delsnapshot "$vmid" "$SNAPSHOT_NAME")
+      ;;
+    *) die "No mutation command for $COMMAND" ;;
+  esac
+}
+
+print_planned_actions() {
+  local targets=$1 count index vmid
+
+  count=$(jq -r 'length' <<<"$targets")
+  for ((index = 0; index < count; index += 1)); do
+    vmid=$(jq -r ".[$index].vmid" <<<"$targets")
+    prepare_qm_args "$vmid"
+    printf '[PLAN] Would run:' >&2
+    printf ' %q' "${QM_ARGS[@]}" >&2
+    printf '\n' >&2
+  done
+}
+
+confirm_mutation() {
+  local targets=$1 confirmation expected count vmid
+
+  [[ "$ASSUME_YES" == 'false' ]] || return 0
+
+  count=$(jq -r 'length' <<<"$targets")
+  if [[ "$COMMAND" == 'create' ]]; then
+    printf 'Create snapshot %s for %s VM(s)? [y/N] ' "$SNAPSHOT_NAME" "$count"
+    read -r confirmation || die 'Confirmation input unavailable; snapshot creation aborted'
+    [[ "$confirmation" == 'y' || "$confirmation" == 'Y' ]] || die 'Snapshot creation aborted'
+    return 0
+  fi
+
+  if [[ -n "$ENVIRONMENT" ]]; then
+    expected="$ENVIRONMENT $SNAPSHOT_NAME"
+  else
+    vmid=$(jq -r '.[0].vmid' <<<"$targets")
+    expected="$vmid $SNAPSHOT_NAME"
+  fi
+  printf 'Type "%s" to %s: ' "$expected" "$COMMAND"
+  read -r confirmation || die "Confirmation input unavailable; $COMMAND aborted"
+  [[ "$confirmation" == "$expected" ]] || die "Confirmation did not match; $COMMAND aborted"
+}
+
+targets_equal() {
+  [[ "$1" == "$2" ]]
+}
+
+wait_for_power_state() {
+  local node=$1 vmid=$2 expected=$3 attempt status state
+
+  for ((attempt = 1; attempt <= 30; attempt += 1)); do
+    if status=$(pvesh_get "/nodes/$node/qemu/$vmid/status/current" 2>/dev/null) &&
+      jq -e 'type == "object" and ((.status | type) == "string")' >/dev/null <<<"$status"; then
+      state=$(jq -r '.status' <<<"$status")
+      if [[ "$state" == "$expected" ]]; then
+        return 0
+      fi
+    fi
+    if [[ "$attempt" -lt 30 ]]; then
+      sleep 1
+    fi
+  done
+
+  warn "VMID $vmid did not reach Proxmox state '$expected' within 30 seconds"
+  return 1
+}
+
+verify_mutation_postcondition() {
+  local node=$1 vmid=$2 snapshots
+
+  if ! snapshots=$(get_vm_snapshots "$node" "$vmid"); then
+    return 1
+  fi
+
+  case $COMMAND in
+    create)
+      snapshot_exists "$snapshots" "$SNAPSHOT_NAME" || {
+        warn "VMID $vmid snapshot command succeeded but '$SNAPSHOT_NAME' is absent"
+        return 1
+      }
+      ;;
+    delete)
+      if snapshot_exists "$snapshots" "$SNAPSHOT_NAME"; then
+        warn "VMID $vmid deletion returned success but '$SNAPSHOT_NAME' remains"
+        return 1
+      fi
+      ;;
+    rollback)
+      snapshot_exists "$snapshots" "$SNAPSHOT_NAME" || {
+        warn "VMID $vmid rollback returned success but '$SNAPSHOT_NAME' is absent"
+        return 1
+      }
+      jq -e --arg name "$SNAPSHOT_NAME" '
+        any(.[]; .name == "current" and .parent? == $name)
+      ' >/dev/null <<<"$snapshots" || {
+        warn "VMID $vmid current snapshot parent is not '$SNAPSHOT_NAME' after rollback"
+        return 1
+      }
+      if [[ "$START_AFTER_ROLLBACK" == 'true' ]]; then
+        wait_for_power_state "$node" "$vmid" running || return 1
+      else
+        wait_for_power_state "$node" "$vmid" stopped || return 1
+      fi
+      ;;
+  esac
+}
+
+mutate_one() {
+  local node=$1 vmid=$2
+
+  prepare_qm_args "$vmid"
+  warn "Executing ${COMMAND} for VMID $vmid"
+  if ! "${QM_ARGS[@]}"; then
+    warn "qm $COMMAND failed for VMID $vmid"
+    return 1
+  fi
+  verify_mutation_postcondition "$node" "$vmid"
+}
+
+remaining_targets_match() {
+  local expected=$1 current=$2 index=$3 attempted expected_remaining current_remaining
+
+  attempted=$(jq -c ".[:$index] | map(.vmid)" <<<"$expected")
+  expected_remaining=$(jq -c ".[$index:]" <<<"$expected")
+  current_remaining=$(jq -c --argjson attempted "$attempted" '
+    map(select(.vmid as $vmid | ($attempted | index($vmid) | not)))
+    | sort_by(.vmid, .name)
+  ' <<<"$current")
+  [[ "$expected_remaining" == "$current_remaining" ]]
+}
+
+remaining_operation_state_matches() {
+  local expected=$1 current=$2 index=$3 attempted expected_remaining current_remaining
+
+  attempted=$(jq -c ".[:$index] | map(.vmid)" <<<"$expected")
+  expected_remaining=$(jq -c ".[$index:]" <<<"$expected")
+  current_remaining=$(jq -c --argjson attempted "$attempted" '
+    map(select(.vmid as $vmid | ($attempted | index($vmid) | not)))
+    | sort_by(.vmid, .name)
+  ' <<<"$current")
+  [[ "$expected_remaining" == "$current_remaining" ]]
+}
+
+print_summary() {
+  local targets=$1 count index vmid name
+
+  printf 'Summary:\n'
+  count=$(jq -r 'length' <<<"$targets")
+  for ((index = 0; index < count; index += 1)); do
+    vmid=$(jq -r ".[$index].vmid" <<<"$targets")
+    name=$(jq -r ".[$index].name" <<<"$targets")
+    printf '  VMID %s (%s): %s' "$vmid" "$name" "${RESULT_STATUS[$index]}"
+    if [[ -n "${RESULT_DETAIL[$index]}" ]]; then
+      printf ' - %s' "${RESULT_DETAIL[$index]}"
+    fi
+    printf '\n'
+  done
+}
+
+execute_targets() {
+  local targets=$1 expected_state=$2 count index node vmid name current_targets current_state status=0
+
+  count=$(jq -r 'length' <<<"$targets")
+  RESULT_STATUS=()
+  RESULT_DETAIL=()
+  for ((index = 0; index < count; index += 1)); do
+    RESULT_STATUS[index]='not attempted'
+    RESULT_DETAIL[index]=''
+  done
+
+  for ((index = 0; index < count; index += 1)); do
+    node=$(jq -r ".[$index].node" <<<"$targets")
+    vmid=$(jq -r ".[$index].vmid" <<<"$targets")
+    name=$(jq -r ".[$index].name" <<<"$targets")
+
+    if ! current_targets=$(resolve_targets); then
+      RESULT_STATUS[index]='failed'
+      RESULT_DETAIL[index]='target discovery failed before mutation'
+      status=1
+      break
+    fi
+    if ! remaining_targets_match "$targets" "$current_targets" "$index"; then
+      warn "Target drift detected before VMID $vmid"
+      RESULT_STATUS[index]='failed'
+      RESULT_DETAIL[index]='target set changed before mutation'
+      status=1
+      break
+    fi
+    if ! current_state=$(capture_operation_state "$current_targets"); then
+      RESULT_STATUS[index]='failed'
+      RESULT_DETAIL[index]='target state discovery failed before mutation'
+      status=1
+      break
+    fi
+    if ! remaining_operation_state_matches "$expected_state" "$current_state" "$index"; then
+      warn "Config, status, lock, or snapshot drift detected before VMID $vmid"
+      RESULT_STATUS[index]='failed'
+      RESULT_DETAIL[index]='operation state changed before mutation'
+      status=1
+      break
+    fi
+    if ! (verify_identity_and_state "$COMMAND" "$node" "$vmid" "$name"); then
+      RESULT_STATUS[index]='failed'
+      RESULT_DETAIL[index]='target safety recheck failed'
+      status=1
+      break
+    fi
+
+    if mutate_one "$node" "$vmid"; then
+      RESULT_STATUS[index]='succeeded'
+    else
+      RESULT_STATUS[index]='failed'
+      if [[ "$COMMAND" == 'rollback' && "$START_AFTER_ROLLBACK" == 'true' ]]; then
+        RESULT_DETAIL[index]='rollback or requested final running state failed'
+      else
+        RESULT_DETAIL[index]="$COMMAND command or postcondition failed"
+      fi
+      status=1
+      break
+    fi
+  done
+
+  print_summary "$targets"
+  return "$status"
+}
+
+run_local_public() {
+  local targets confirmed_state fresh_targets fresh_state
+
+  require_execution_tools
+  targets=$(resolve_targets) || return 1
+
+  if [[ "$COMMAND" == 'list' ]]; then
+    list_targets "$targets"
+    return 0
+  fi
+
+  set_default_description "$targets"
+  confirmed_state=$(capture_operation_state "$targets") || return 1
+  preflight_operation_state "$confirmed_state" "$COMMAND"
+  print_planned_actions "$targets"
+  if [[ "$DRY_RUN" == 'true' ]]; then
+    ok 'Dry-run complete; no mutation commands were executed'
+    return 0
+  fi
+
+  confirm_mutation "$targets"
+  fresh_targets=$(resolve_targets) || return 1
+  targets_equal "$targets" "$fresh_targets" || die 'Target set changed after preflight; mutation aborted'
+  fresh_state=$(capture_operation_state "$fresh_targets") || return 1
+  targets_equal "$confirmed_state" "$fresh_state" || die 'Config, status, lock, or snapshot state changed after preflight; mutation aborted'
+  preflight_operation_state "$fresh_state" "$COMMAND"
+  execute_targets "$fresh_targets" "$confirmed_state"
+}
+
+run_internal_preflight() {
+  local targets operation_state
+
+  require_execution_tools
+  targets=$(resolve_targets) || return 1
+  set_default_description "$targets"
+  operation_state=$(capture_operation_state "$targets") || return 1
+  preflight_operation_state "$operation_state" "$COMMAND"
+  print_planned_actions "$targets"
+  printf '%s\n' "$operation_state"
+}
+
+run_internal_action() {
+  local expected_state expected_targets targets current_state owner mode
+
+  require_execution_tools
+  [[ -f "$EXPECTED_TARGETS_FILE" && ! -L "$EXPECTED_TARGETS_FILE" ]] || die 'Expected target manifest must be a regular non-symlink file'
+  owner=$(stat -c '%u' "$EXPECTED_TARGETS_FILE") || die 'Could not inspect expected target manifest owner'
+  [[ "$owner" -eq "$EUID" ]] || die 'Expected target manifest must be owned by the current user'
+  mode=$(stat -c '%a' "$EXPECTED_TARGETS_FILE") || die 'Could not inspect expected target manifest mode'
+  (((8#$mode & 077) == 0)) || die 'Expected target manifest must not be group- or world-accessible'
+  EXPECTED_TARGETS_JSON=$(<"$EXPECTED_TARGETS_FILE")
+  expected_state=$(canonicalize_operation_state <<<"$EXPECTED_TARGETS_JSON") || die 'Invalid expected operation-state manifest'
+  expected_targets=$(operation_state_targets "$expected_state") || die 'Invalid expected target identities'
+  targets=$(resolve_targets) || return 1
+  targets_equal "$expected_targets" "$targets" || die 'Target set changed after remote preflight; mutation aborted'
+  current_state=$(capture_operation_state "$targets") || return 1
+  targets_equal "$expected_state" "$current_state" || die 'Config, status, lock, or snapshot state changed after remote preflight; mutation aborted'
+  set_default_description "$targets"
+  preflight_operation_state "$current_state" "$COMMAND"
+  execute_targets "$targets" "$expected_state"
+}
+
+build_remote_base_args() {
+  REMOTE_ARGS=("$COMMAND")
+  if [[ -n "$VMID" ]]; then
+    REMOTE_ARGS+=(--vmid "$VMID")
+  elif [[ -n "$VM_NAME" ]]; then
+    REMOTE_ARGS+=(--vm-name "$VM_NAME")
+  else
+    REMOTE_ARGS+=(--environment "$ENVIRONMENT")
+  fi
+
+  if [[ -n "$SNAPSHOT_NAME" ]]; then
+    REMOTE_ARGS+=(--snapshot-name "$SNAPSHOT_NAME")
+  fi
+  if [[ "$DESCRIPTION_SET" == 'true' ]]; then
+    REMOTE_ARGS+=(--description "$DESCRIPTION")
+  fi
+  if [[ "$INCLUDE_MEMORY" == 'true' ]]; then
+    REMOTE_ARGS+=(--include-memory)
+  fi
+  if [[ "$START_AFTER_ROLLBACK" == 'true' ]]; then
+    REMOTE_ARGS+=(--start-after-rollback)
+  fi
+}
+
+prepare_ssh() {
+  local expanded
+
+  command_exists ssh || die 'ssh is required for --ssh'
+  command_exists jq || die 'Local jq is required for --ssh target-manifest validation'
+  SELF_PATH=$(resolve_self_path) || die 'Could not locate this script to stream it over SSH'
+  SSH_ARGS=()
+  if [[ -n "$IDENTITY_FILE" ]]; then
+    expanded=$(expand_path "$IDENTITY_FILE")
+    [[ -f "$expanded" ]] || die "SSH identity file not found: $expanded"
+    SSH_ARGS=(-i "$expanded" -o IdentitiesOnly=yes)
+  fi
+}
+
+run_ssh_stream() {
+  local remote_cmd
+
+  remote_cmd=$(quote_remote_command bash -s -- "$@")
+  # remote_cmd is intentionally assembled and shell-quoted on the client side.
+  # shellcheck disable=SC2029
+  ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "$remote_cmd" <"$SELF_PATH"
+}
+
+run_ssh_action_with_manifest() {
+  local manifest=$1 script_size remote_cmd
+  local wrapper
+  shift
+
+  script_size=$(wc -c <"$SELF_PATH") || die 'Could not determine streamed script size'
+  wrapper=$(cat <<'REMOTE_WRAPPER'
+set -euo pipefail
+script_size=$1
+shift
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/platform-proxmox-vm-snapshot.XXXXXX")
+trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+chmod 700 "$tmp_dir"
+script_path="$tmp_dir/tool"
+manifest_path="$tmp_dir/expected-targets.json"
+dd bs=1 count="$script_size" iflag=fullblock status=none >"$script_path"
+cat >"$manifest_path"
+chmod 600 "$script_path" "$manifest_path"
+bash "$script_path" "$@" --expected-targets-file "$manifest_path"
+REMOTE_WRAPPER
+)
+  remote_cmd=$(quote_remote_command bash -c "$wrapper" bash "$script_size" "$@")
+
+  # remote_cmd is intentionally assembled and shell-quoted on the client side.
+  # shellcheck disable=SC2029
+  { cat "$SELF_PATH"; printf '%s\n' "$manifest"; } |
+    ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "$remote_cmd"
+}
+
+run_over_ssh() {
+  local manifest canonical
+
+  prepare_ssh
+  build_remote_base_args
+
+  if [[ "$COMMAND" == 'list' ]]; then
+    if [[ "$DRY_RUN" == 'true' ]]; then
+      REMOTE_ARGS+=(--dry-run)
+    fi
+    run_ssh_stream "${REMOTE_ARGS[@]}"
+    return
+  fi
+
+  info "Running remote preflight on $SSH_TARGET"
+  if ! manifest=$(run_ssh_stream "${REMOTE_ARGS[@]}" --internal-preflight); then
+    die "Remote preflight failed on $SSH_TARGET"
+  fi
+  canonical=$(canonicalize_operation_state <<<"$manifest") || die 'Remote preflight returned an invalid operation-state manifest'
+
+  if [[ "$DRY_RUN" == 'true' ]]; then
+    ok 'Remote dry-run complete; no mutation commands were executed'
+    return 0
+  fi
+
+  confirm_mutation "$canonical"
+  info "Running remote $COMMAND on $SSH_TARGET"
+  run_ssh_action_with_manifest "$canonical" "${REMOTE_ARGS[@]}" --yes --internal-action
+}
+
+COMMAND=''
+VMID=''
+VM_NAME=''
+ENVIRONMENT=''
+SNAPSHOT_NAME=''
+DESCRIPTION=''
+DESCRIPTION_SET='false'
+INCLUDE_MEMORY='false'
+START_AFTER_ROLLBACK='false'
+SSH_TARGET=''
+IDENTITY_FILE=''
+DRY_RUN='false'
+ASSUME_YES='false'
+INTERNAL_MODE=''
+EXPECTED_TARGETS_FILE=''
+EXPECTED_TARGETS_JSON=''
+SELF_PATH=''
+declare -A SEEN_OPTIONS=()
+declare -a SSH_ARGS=()
+declare -a REMOTE_ARGS=()
+declare -a QM_ARGS=()
+declare -a RESULT_STATUS=()
+declare -a RESULT_DETAIL=()
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+if [[ $1 == '-h' || $1 == '--help' ]]; then
+  usage
+  exit 0
+fi
+
+COMMAND=$1
+shift
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --vmid)
+      mark_once --vmid
+      [[ $# -ge 2 ]] || die '--vmid requires a value'
+      VMID=$2
+      shift 2
+      ;;
+    --vm-name)
+      mark_once --vm-name
+      [[ $# -ge 2 ]] || die '--vm-name requires a value'
+      VM_NAME=$2
+      shift 2
+      ;;
+    --environment)
+      mark_once --environment
+      [[ $# -ge 2 ]] || die '--environment requires a value'
+      ENVIRONMENT=$2
+      shift 2
+      ;;
+    --snapshot-name)
+      mark_once --snapshot-name
+      [[ $# -ge 2 ]] || die '--snapshot-name requires a value'
+      SNAPSHOT_NAME=$2
+      shift 2
+      ;;
+    --description)
+      mark_once --description
+      [[ $# -ge 2 ]] || die '--description requires a value'
+      DESCRIPTION=$2
+      DESCRIPTION_SET='true'
+      shift 2
+      ;;
+    --include-memory)
+      mark_once --include-memory
+      INCLUDE_MEMORY='true'
+      shift
+      ;;
+    --start-after-rollback)
+      mark_once --start-after-rollback
+      START_AFTER_ROLLBACK='true'
+      shift
+      ;;
+    --ssh)
+      mark_once --ssh
+      [[ $# -ge 2 ]] || die '--ssh requires a value'
+      SSH_TARGET=$2
+      shift 2
+      ;;
+    --identity-file)
+      mark_once --identity-file
+      [[ $# -ge 2 ]] || die '--identity-file requires a value'
+      IDENTITY_FILE=$2
+      shift 2
+      ;;
+    --dry-run)
+      mark_once --dry-run
+      DRY_RUN='true'
+      shift
+      ;;
+    --yes)
+      mark_once --yes
+      ASSUME_YES='true'
+      shift
+      ;;
+    --internal-preflight)
+      mark_once --internal-preflight
+      [[ -z "$INTERNAL_MODE" ]] || die 'Only one internal execution mode may be used'
+      INTERNAL_MODE='preflight'
+      shift
+      ;;
+    --internal-action)
+      mark_once --internal-action
+      [[ -z "$INTERNAL_MODE" ]] || die 'Only one internal execution mode may be used'
+      INTERNAL_MODE='action'
+      shift
+      ;;
+    --expected-targets-file)
+      mark_once --expected-targets-file
+      [[ $# -ge 2 ]] || die '--expected-targets-file requires a value'
+      EXPECTED_TARGETS_FILE=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+validate_cli
+
+case $INTERNAL_MODE in
+  preflight) run_internal_preflight ;;
+  action) run_internal_action ;;
+  '')
+    if [[ -n "$SSH_TARGET" ]]; then
+      run_over_ssh
+    else
+      run_local_public
+    fi
+    ;;
+esac

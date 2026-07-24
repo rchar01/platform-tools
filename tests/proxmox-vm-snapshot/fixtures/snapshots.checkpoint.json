@@ -1,0 +1,19 @@
+[
+  {
+    "name": "before-change",
+    "description": "Synthetic fixture snapshot",
+    "snaptime": 1700000000,
+    "vmstate": 0
+  },
+  {
+    "name": "later-change",
+    "description": "Synthetic later fixture snapshot",
+    "snaptime": 1700001000,
+    "vmstate": 0,
+    "parent": "before-change"
+  },
+  {
+    "name": "current",
+    "parent": "later-change"
+  }
+]

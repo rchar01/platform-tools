@@ -1,0 +1,7 @@
+{
+  "name": "fixture-template",
+  "template": 1,
+  "tags": "dev;managed-by-tofu",
+  "scsi0": "fixture-storage:base-9000-disk-0,size=4G",
+  "digest": "3123456789abcdef0123456789abcdef01234567"
+}

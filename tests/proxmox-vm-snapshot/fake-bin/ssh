@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state=${FAKE_PVE_STATE:?FAKE_PVE_STATE is required}
+
+{
+  printf 'CALL ssh\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"$state/ssh.log"
+
+remote_command=${!#}
+exec bash -c "$remote_command"

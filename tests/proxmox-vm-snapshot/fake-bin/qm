@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state=${FAKE_PVE_STATE:?FAKE_PVE_STATE is required}
+operation=${1:-}
+vmid=${2:-}
+name=${3:-}
+
+{
+  printf 'CALL qm\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"$state/qm.log"
+
+if [[ ${FAKE_QM_FAIL_OPERATION:-} == "$operation" && ${FAKE_QM_FAIL_VMID:-} == "$vmid" ]]; then
+  printf 'simulated qm failure for %s %s\n' "$operation" "$vmid" >&2
+  exit 1
+fi
+
+snapshots="$state/snapshots/$vmid.json"
+tmp="$state/snapshots/$vmid.tmp"
+
+case $operation in
+  snapshot)
+    description=''
+    vmstate=0
+    shift 3
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --description) description=$2; shift 2 ;;
+        --vmstate) vmstate=$2; shift 2 ;;
+        *) printf 'unknown fake qm snapshot option: %s\n' "$1" >&2; exit 2 ;;
+      esac
+    done
+    jq --arg name "$name" --arg description "$description" --argjson vmstate "$vmstate" '
+      map(select(.name != "current")) +
+      [{name: $name, description: $description, snaptime: 1700002000, vmstate: $vmstate}] +
+      [{name: "current", parent: $name}]
+    ' "$snapshots" >"$tmp"
+    mv "$tmp" "$snapshots"
+    ;;
+  rollback)
+    start=0
+    shift 3
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --start) start=$2; shift 2 ;;
+        *) printf 'unknown fake qm rollback option: %s\n' "$1" >&2; exit 2 ;;
+      esac
+    done
+    if [[ ${FAKE_QM_SUPPRESS_STATUS_UPDATE:-0} -ne 1 ]]; then
+      if [[ $start -eq 1 ]]; then
+        jq '.status = "running" | .qmpstatus = "running"' "$state/status/$vmid.json" >"$state/status/$vmid.tmp"
+      else
+        jq '.status = "stopped" | .qmpstatus = "stopped"' "$state/status/$vmid.json" >"$state/status/$vmid.tmp"
+      fi
+      mv "$state/status/$vmid.tmp" "$state/status/$vmid.json"
+    fi
+    if [[ ${FAKE_QM_NOOP_ROLLBACK:-0} -ne 1 ]]; then
+      jq --arg name "$name" 'map(if .name == "current" then .parent = $name else . end)' "$snapshots" >"$tmp"
+      mv "$tmp" "$snapshots"
+    fi
+    ;;
+  delsnapshot)
+    shift 3
+    [[ $# -eq 0 ]] || { printf 'fake qm delsnapshot received unexpected options\n' >&2; exit 2; }
+    jq --arg name "$name" 'map(select(.name != $name))' "$snapshots" >"$tmp"
+    mv "$tmp" "$snapshots"
+    ;;
+  *) printf 'unsupported fake qm operation: %s\n' "$operation" >&2; exit 2 ;;
+esac

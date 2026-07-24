@@ -1,0 +1,30 @@
+[
+  {
+    "vmid": 102,
+    "name": "fixture-db",
+    "status": "stopped",
+    "template": 0,
+    "tags": "dev;managed-by-tofu"
+  },
+  {
+    "vmid": 9000,
+    "name": "fixture-template",
+    "status": "stopped",
+    "template": 1,
+    "tags": "dev;managed-by-tofu"
+  },
+  {
+    "vmid": 101,
+    "name": "fixture-app",
+    "status": "running",
+    "template": 0,
+    "tags": "managed-by-tofu;dev"
+  },
+  {
+    "vmid": 103,
+    "name": "fixture-other",
+    "status": "stopped",
+    "template": 0,
+    "tags": "managed-by-tofu;production"
+  }
+]

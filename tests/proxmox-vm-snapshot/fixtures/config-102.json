@@ -1,0 +1,7 @@
+{
+  "name": "fixture-db",
+  "template": 0,
+  "tags": "dev;managed-by-tofu",
+  "virtio0": "fixture-storage:vm-102-disk-0,size=32G",
+  "digest": "1123456789abcdef0123456789abcdef01234567"
+}

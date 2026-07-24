@@ -3,12 +3,12 @@ SHELL := /bin/sh
 
 INSTALL_DIR ?= $(HOME)/.local/bin
 SHARE_DIR ?= $(HOME)/.local/share/platform-tools
-SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-pki-init platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup
+SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot platform-pki-init platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup
 PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 
-.PHONY: help install verify test test-bastion-policy test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
+.PHONY: help install verify test test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -52,11 +52,15 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-bastion-policy test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
+test: test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
 
 ## Run bastion policy render tests
 test-bastion-policy:
 	./tests/bastion-policy/test-render.sh
+
+## Run Proxmox VM snapshot behavior tests
+test-proxmox-vm-snapshot:
+	./tests/proxmox-vm-snapshot/test-snapshot.sh
 
 ## Run PKI passphrase file validation tests
 test-pki-pass-file:
