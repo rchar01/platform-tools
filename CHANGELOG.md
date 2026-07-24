@@ -7,6 +7,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `platform-proxmox-vm-snapshot` with exact VM or dual-tag environment selection, structured Proxmox preflight, dry-run support, destructive confirmation, target-drift protection, and partial-operation summaries. Mutating environment workflows remain gated on reconciled `platform-infra` tags and a manually verified dry-run target set.
+
 ## [1.3.0] - 2026-07-10
 
 ### Added

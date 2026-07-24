@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-proxmox-vm-snapshot` for safe, short-lived Proxmox VE 9 development snapshot creation, listing, rollback, and deletion through local execution or SSH.
+
 ## v1.3.0 - 2026-07-10
 
 - Hardened `platform-vm-env-collect` to write reports and archives under a private random `/tmp` directory with owner-only permissions.

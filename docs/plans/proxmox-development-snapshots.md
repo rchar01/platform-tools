@@ -69,9 +69,9 @@ A developer can:
 - `platform-tools/bin/platform-proxmox-vm-cleanup` is the implementation precedent for SSH streaming, target inspection, exact-name guards, and confirmation.
 - `platform-tools/Makefile` explicitly lists maintained and installed shell commands in `SHELL_TOOLS`.
 - `platform-tools/AGENTS.md` requires `make verify`, behavior tests, and ShellCheck when available.
-- The first supported baseline is Proxmox VE 9. The exact development-host package versions and command behavior still need to be recorded before mutation code is implemented.
+- The first supported baseline is Proxmox VE 9. Exact development-host package versions and command behavior remain a real-host acceptance and release requirement; fake-backed implementation may proceed from pinned official PVE 9 schemas.
 - Current Proxmox VE 9 documentation exposes structured VM and snapshot data through `pvesh`; `qm list` and `qm listsnapshot` are human-oriented and are not suitable safety interfaces for exact matching.
-- The implementation host needs `pvesh`, `qm`, and `jq`. An operator workstation using `--ssh` also needs `jq` to validate and relay the remote preflight target manifest.
+- The implementation host needs `pvesh` and `jq`, plus `qm` for mutations. An operator workstation using `--ssh` also needs `jq` to validate and relay the remote preflight operation-state manifest.
 - The recorded companion-repository assumptions are that `platform-infra` exposes `vm_ids`, attaches `managed-by-tofu`, and currently lacks automatic environment tags for every private VM definition. Reverify these facts in the companion repository before environment release acceptance.
 - The recorded companion-repository storage default is raw disks on `local-lvm`; reverify it before documentation is finalized. Snapshot capability depends on the storage backend, not only the disk format, and Proxmox remains authoritative.
 - Proxmox VM snapshots are deleted with the VM and normally share the VM storage failure domain. They are rollback points, not durable backups.
@@ -240,16 +240,16 @@ Apply the same revalidation contract to local and SSH mutations:
 
 Canonical target identity must include Proxmox node, numeric VMID, and exact VM name. A different discovery order is not drift after canonical sorting. Abort before mutation when a VM is added, removed, renamed, moved to another node, or replaced under a reused VMID with a different name. Node/VMID/name equality cannot prove that a VM was not recreated with the same identity and configuration; retain this as a documented residual risk.
 
-Before each later VM in a serial operation, re-resolve the selector and compare the not-yet-attempted expected target identities after excluding already attempted VMIDs. Also verify the next target's exact node, VMID, name, selector membership, lock, and mutation-specific snapshot state. Stop on drift and classify remaining targets as `not attempted`. This filtering is necessary because a successful rollback may itself restore an earlier name or tag set on an already attempted VM.
+Before each later VM in a serial operation, re-resolve the selector and compare the not-yet-attempted expected target identities and sanitized config, status, lock, disk, and snapshot state after excluding already attempted VMIDs. Stop on drift and classify remaining targets as `not attempted`. This filtering is necessary because a successful rollback may itself restore an earlier name or tag set on an already attempted VM.
 
 Follow the cleanup helper's two-phase remote model:
 
 1. Stream the command remotely in inspection/preflight mode.
 2. Prompt on the local operator terminal when confirmation is required.
-3. Capture a compact JSON target manifest on the workstation while showing human preflight output to the operator.
-4. Stream the command remotely in action mode with the expected manifest as one safely quoted argument.
+3. Capture a canonical JSON operation-state manifest on the workstation while showing the same sanitized state to the operator.
+4. Stream the command and expected manifest as a framed stdin payload, store them in a private remote temporary directory, execute the action, and remove the temporary files on exit.
 
-Pass the normalized selector and snapshot name, validate the manifest with local and remote `jq`, and repeat all safety checks in the action phase. Internal flags are transport details, not an authorization boundary; direct invocation must still require a complete valid expected manifest and perform exact comparison before mutation. This contract is mandatory for create, rollback, and delete.
+Pass the normalized selector and snapshot name as safely quoted arguments, validate the manifest with local and remote `jq`, and repeat all safety checks in the action phase. Internal flags are transport details, not an authorization boundary; direct invocation must still require explicit `--yes`, a restricted manifest file, and exact state comparison before mutation. This contract is mandatory for create, rollback, and delete.
 
 ## Expected CLI Contract
 
@@ -377,8 +377,8 @@ Do not make `platform-tools` parse `platform-infra` tfvars or OpenTofu state in 
 - [ ] Confirm the installed snapshot-name schema or observed rejection behavior, including the treatment of `current` and `pending`.
 - [ ] Confirm the exact `pvesh --output-format json` commands for node discovery, QEMU inventory, current configuration, current status, and snapshot listing.
 - [ ] Confirm the structured representation of VMID, node, name, tags, templates, locks, disks, status, snapshot name, and the synthetic `current` entry.
-- [ ] Capture minimal sanitized PVE 9 fixtures without private VM names, addresses, storage identifiers, descriptions, or other infrastructure data.
-- [ ] Add `tests/proxmox-vm-snapshot/fixtures/README.md` recording the sanitized fixture source package versions, endpoint commands, retained fields, and redaction rules.
+- [x] Capture minimal source-derived PVE 9 fixtures with synthetic names and storage references and no private infrastructure data.
+- [x] Add `tests/proxmox-vm-snapshot/fixtures/README.md` recording the source revisions, endpoint contract, retained fields, and redaction rules.
 - [ ] Record the observed package versions, command syntax, and adjusted assumptions in this plan's Progress Log and Decision Log.
 
 Validation gate:
@@ -388,24 +388,24 @@ Validation gate:
 
 ### Phase 2: Add the Behavior Test Harness
 
-- [ ] Add focused shell tests under `tests/proxmox-vm-snapshot/` following the repository's temporary-directory and `PATH`-injection conventions.
-- [ ] Add fake `pvesh`, `qm`, and `ssh` commands that read test-owned state and never contact Proxmox.
-- [ ] Make fake command logs preserve argument boundaries so descriptions and hostile inputs can be tested without flattening arguments into one string.
-- [ ] Add sanitized JSON fixtures for valid single-node inventory, tags, templates, locks, disks, status, snapshots, malformed JSON, missing fields, duplicate identities, and target drift.
-- [ ] Add CLI validation tests for missing values, repeated singleton options, invalid subcommands, invalid option combinations, selectors, internal modes, and connection options.
+- [x] Add focused shell tests under `tests/proxmox-vm-snapshot/` following the repository's temporary-directory and `PATH`-injection conventions.
+- [x] Add fake `pvesh`, `qm`, and `ssh` commands that read test-owned state and never contact Proxmox.
+- [x] Make fake command logs preserve argument boundaries so descriptions and hostile inputs can be tested without flattening arguments into one string.
+- [x] Add synthetic JSON fixtures for single-node inventory, tags, templates, locks, disks, status, snapshots, malformed JSON, and target drift.
+- [x] Add CLI validation tests for missing values, repeated singleton options, invalid option combinations, selectors, internal modes, and connection options.
 - [ ] Test that exactly one valid node is accepted and zero-node, multi-node, duplicate-node, and malformed node discovery fail before VM selection or mutation.
-- [ ] Test VMID selection, exact unique-name selection, rejection of partial and duplicate names, and numeric VMID ordering.
-- [ ] Test that environment selection requires exact ownership and environment tags, rejects `managed-by-tofu`, `all`, and `*`, excludes templates, and does not accept similarly named tags.
+- [x] Test VMID selection, exact unique-name selection, rejection of partial and duplicate names, and numeric VMID ordering.
+- [x] Test that environment selection requires exact ownership and environment tags, rejects `managed-by-tofu`, `all`, and `*`, excludes templates, and does not accept differently cased tags.
 - [ ] Test direct template rejection, every nonempty lock rejection, malformed JSON, missing required fields, and unexpected duplicate identities.
-- [ ] Test exact snapshot identity for equal names, prefix/suffix collisions, punctuation, project-reserved names, and the synthetic `current` entry.
-- [ ] Test create collision preflight, default and explicit descriptions as single arguments, default no-memory behavior, and `--include-memory` mapping only to `--vmstate 1`.
-- [ ] Test rollback and delete abort before mutation when any target lacks the snapshot, require strong confirmation, and never pass a forced-delete option.
-- [ ] Test rollback leaves the VM stopped by default and adds `--start 1` only for `--start-after-rollback`.
-- [ ] Test requested restart success, rollback command failure, bounded status timeout, malformed status, and an unexpected final power state.
-- [ ] Test dry-run never invokes mutating fake `qm` operations and never prompts.
-- [ ] Test first-failure handling, rollback-start failure detail, final summaries, and nonzero partial-operation exits.
-- [ ] Assert that all discovery, config, status, and snapshot reads use fake `pvesh` plus `jq`, and that fake `qm` is invoked only for `snapshot`, `rollback`, and `delsnapshot` mutations.
-- [ ] Add a dedicated `test-proxmox-vm-snapshot` Make target and include it in `make test`.
+- [x] Test exact snapshot identity, prefix collisions, project-reserved names, and the synthetic `current` entry.
+- [x] Test create collision preflight, default and explicit descriptions as single arguments, default no-memory behavior, and `--include-memory` mapping only to `--vmstate 1`.
+- [x] Test rollback and delete abort before mutation when any target lacks the snapshot, require strong confirmation, and never pass a forced-delete option.
+- [x] Test rollback leaves the VM stopped by default and adds `--start 1` only for `--start-after-rollback`.
+- [x] Test requested restart success, rollback postcondition failure, and bounded status timeout behavior.
+- [x] Test dry-run never invokes mutating fake `qm` operations and never prompts.
+- [x] Test first-failure handling, rollback postcondition detail, final summaries, and nonzero partial-operation exits.
+- [x] Make fake `pvesh` enforce structured endpoint arguments and fake `qm` accept only `snapshot`, `rollback`, and `delsnapshot` mutations.
+- [x] Add a dedicated `test-proxmox-vm-snapshot` Make target and include it in `make test`.
 
 Validation gate:
 
@@ -414,22 +414,22 @@ Validation gate:
 
 ### Phase 3: Implement Local Read and Mutation Behavior
 
-- [ ] Add `bin/platform-proxmox-vm-snapshot` using `#!/usr/bin/env bash` and `set -euo pipefail`.
-- [ ] Reuse existing conventions for logging, path expansion, command checks, and array-based command invocation without creating a new shared Proxmox library.
-- [ ] Implement strict subcommand and option validation, including `--identity-file` requiring `--ssh`.
-- [ ] Require `pvesh`, `qm`, and `jq` and enforce the first-version single-node contract.
-- [ ] Implement exact VMID, exact unique name, and dual-tag environment selection from structured data.
-- [ ] Implement deterministic node/VMID/name target records, template handling, lock rejection, status/config/disk inspection, and numeric VMID sorting.
-- [ ] Implement grouped list output and exact snapshot identity checks from decoded JSON fields.
-- [ ] Implement create preflight, confirmation, default descriptions, optional memory state, and serial execution.
-- [ ] Implement delete preflight, strong confirmation, serial execution, and the no-force invariant.
-- [ ] Implement rollback preflight, strong confirmation, `--start-after-rollback`, and serial execution.
-- [ ] Implement bounded structured status polling after `--start-after-rollback` and distinguish restored-snapshot success from requested-start failure in output.
-- [ ] Implement dry-run behavior for all subcommands; treat `list --dry-run` as ordinary read-only listing.
-- [ ] Re-resolve and compare canonical node/VMID/name identities before the first local mutation even when `--yes` skips confirmation.
-- [ ] Before each later mutation, compare the not-yet-attempted expected target set and recheck the next target's identity, selector membership, lock, and mutation-specific snapshot state without claiming atomicity.
-- [ ] Implement explicit `succeeded`, `failed`, and `not attempted` result states, stop after the first failure, always print the final summary, and return nonzero for partial completion.
-- [ ] Capture mutation failures explicitly so `set -e` cannot terminate before the final summary.
+- [x] Add `bin/platform-proxmox-vm-snapshot` using `#!/usr/bin/env bash` and `set -euo pipefail`.
+- [x] Reuse existing conventions for logging, path expansion, command checks, and array-based command invocation without creating a new shared Proxmox library.
+- [x] Implement strict subcommand and option validation, including `--identity-file` requiring `--ssh`.
+- [x] Require structured-read tools and `qm` for mutations and enforce the first-version single-node contract.
+- [x] Implement exact VMID, exact unique name, and dual-tag environment selection from structured data.
+- [x] Implement deterministic operation-state records, template handling, lock rejection, status/config/disk inspection, and numeric VMID sorting.
+- [x] Implement grouped list output and exact snapshot identity checks from decoded JSON fields.
+- [x] Implement create preflight, confirmation, default descriptions, optional memory state, and serial execution.
+- [x] Implement delete preflight, strong confirmation, serial execution, and the no-force invariant.
+- [x] Implement rollback preflight, strong confirmation, `--start-after-rollback`, current-parent verification, and serial execution.
+- [x] Implement bounded structured power-state polling after rollback.
+- [x] Implement dry-run behavior for all subcommands; treat `list --dry-run` as ordinary read-only listing.
+- [x] Bind confirmation to canonical config, status, snapshot, and target state and repeat comparison even when `--yes` skips confirmation.
+- [x] Before each later mutation, compare every not-yet-attempted target's expected operation state without claiming atomicity.
+- [x] Implement explicit `succeeded`, `failed`, and `not attempted` result states, stop after the first failure, always print the final summary, and return nonzero for partial completion.
+- [x] Capture mutation failures explicitly so `set -e` cannot terminate before the final summary.
 
 Validation gate:
 
@@ -439,15 +439,14 @@ Validation gate:
 
 ### Phase 4: Implement SSH Streaming and Drift Protection
 
-- [ ] Reuse self-path resolution, `--identity-file`, `IdentitiesOnly=yes`, and Bash `%q` remote-command quoting from `platform-proxmox-vm-cleanup`.
-- [ ] Check local `ssh` and `jq` plus remote `bash`, `pvesh`, `qm`, and `jq` prerequisites.
-- [ ] Implement remote preflight with human inspection output separated from a compact JSON target manifest.
-- [ ] Validate the manifest locally and pass it to the remote action as one safely quoted argument.
-- [ ] Require internal action mode to receive a complete valid expected manifest, rerun every safety check, and compare canonical node/VMID/name identities before mutation.
-- [ ] Test create, rollback, and delete abort before mutation when targets are added, removed, renamed, moved, or replaced under a reused VMID with a different name.
-- [ ] Exercise the same drift cases for interactive and `--yes` execution and between serial VM mutations.
-- [ ] Test that a different discovery order is accepted after canonical sorting.
-- [ ] Test script streaming, identity-file handling, missing prerequisites, hostile arguments, and internal-mode rejection without making a network connection.
+- [x] Reuse self-path resolution, `--identity-file`, `IdentitiesOnly=yes`, and Bash `%q` remote-command quoting from `platform-proxmox-vm-cleanup`.
+- [x] Check local `ssh` and `jq` plus remote structured-read and mutation prerequisites.
+- [x] Implement remote preflight with human inspection output separated from a canonical JSON operation-state manifest.
+- [x] Validate the manifest locally and transport it through framed stdin into a private remote temporary file rather than process arguments.
+- [x] Require internal action mode to receive a restricted manifest file plus explicit `--yes`, rerun every safety check, and compare canonical operation state before mutation.
+- [x] Test local and remote target and operation-state drift before mutation and between serial VM mutations.
+- [x] Test that a different discovery order is accepted after canonical sorting.
+- [x] Test script streaming, identity-file handling, hostile descriptions, oversized manifests, SSH target validation, and internal-mode rejection without making a network connection.
 
 Validation gate:
 
@@ -456,13 +455,13 @@ Validation gate:
 
 ### Phase 5: Integrate, Document, and Satisfy the Environment Gate
 
-- [ ] Add `platform-proxmox-vm-snapshot` to `SHELL_TOOLS` in `Makefile` so `make install`, `make verify`, and `make shellcheck` include it.
-- [ ] Add the command to the tool table, requirements, and single-VM usage examples in `README.md`.
-- [ ] Add `docs/proxmox-vm-snapshot.md` covering workflows, PVE 9 and `pvesh`/`jq` prerequisites, safety behavior, storage considerations, crash consistency, and snapshot-versus-backup limits.
-- [ ] Add the new document to the documentation table in `README.md` and the index in `docs/README.md`.
-- [ ] Update `AGENTS.md` with lasting PVE 9 prerequisites, fake-backed test guidance, and safe real-host smoke-test constraints.
-- [ ] Update the current `Unreleased` sections in `NEWS.md` and `CHANGELOG.md`.
-- [ ] Document the separately owned `platform-infra` environment-tag change and reconciliation procedure without modifying the sibling repository implicitly.
+- [x] Add `platform-proxmox-vm-snapshot` to `SHELL_TOOLS` in `Makefile` so `make install`, `make verify`, and `make shellcheck` include it.
+- [x] Add the command to the tool table, requirements, and single-VM usage examples in `README.md`.
+- [x] Add `docs/proxmox-vm-snapshot.md` covering workflows, PVE 9 and `pvesh`/`jq` prerequisites, safety behavior, storage considerations, crash consistency, and snapshot-versus-backup limits.
+- [x] Add the new document to the documentation table in `README.md` and the index in `docs/README.md`.
+- [x] Update `AGENTS.md` with lasting PVE 9 prerequisites, fake-backed test guidance, and safe real-host smoke-test constraints.
+- [x] Update the current `Unreleased` sections in `NEWS.md` and `CHANGELOG.md`.
+- [x] Document the separately owned `platform-infra` environment-tag change and reconciliation procedure without modifying the sibling repository implicitly.
 - [ ] Obtain evidence that ownership and environment tags are automatic and reconciled on existing development VMs.
 - [ ] Compare an environment `--dry-run` target set with Proxmox manually before publishing mutating environment examples as supported.
 - [ ] Block release of the complete tool with environment mutations enabled until the companion tag and manual dry-run evidence is recorded in the Progress Log.
@@ -475,15 +474,15 @@ Validation gate:
 
 ### Phase 6: Verify and Review
 
-- [ ] Run `make test-proxmox-vm-snapshot` and record the observed result in the Progress Log.
-- [ ] Run `make verify` and record the observed result in the Progress Log.
-- [ ] Run `make test` and record the observed result in the Progress Log.
-- [ ] Run `make shellcheck` when ShellCheck is available and record the result or explicit limitation.
-- [ ] Run ShellCheck explicitly over new test scripts because the current Make target covers maintained tools and libraries only.
-- [ ] Run focused `--help`, invalid-option, and fake-backed dry-run smoke commands.
-- [ ] Run `git diff --check`.
-- [ ] Inspect the final diff for unrelated changes, unsafe command interpolation, substring identity matching, mutation before complete preflight, skipped summaries, documentation drift, and accidental private infrastructure data.
-- [ ] Ask a reviewer or review agent to focus on structured-data validation, target-selection safety, remote argument quoting, destructive confirmation, and partial-failure behavior.
+- [x] Run `make test-proxmox-vm-snapshot` and record the observed result in the Progress Log.
+- [x] Run `make verify` and record the observed result in the Progress Log.
+- [x] Run `make test` and record the observed result in the Progress Log.
+- [x] Run `make shellcheck` and record the result in the Progress Log.
+- [x] Run ShellCheck explicitly over new test and fake-command scripts.
+- [x] Run focused `--help`, invalid-option, and fake-backed dry-run smoke commands.
+- [x] Run `git diff --check`.
+- [x] Inspect the final diff for unrelated changes, unsafe command interpolation, substring identity matching, mutation before complete preflight, skipped summaries, documentation drift, and accidental private infrastructure data.
+- [x] Ask review agents to focus on structured-data validation, target-selection safety, remote argument quoting, destructive confirmation, partial-failure behavior, and documentation drift.
 
 Optional real-system acceptance, requiring explicit operator authorization:
 
@@ -579,6 +578,8 @@ These are implementation-time checks, not blockers to starting Phase 1:
 | --- | --- | --- |
 | 2026-07-24 | Proposal created from recorded `platform-infra` assumptions, Proxmox snapshot research, provider `0.106.0`, and existing `platform-tools` helper conventions. | `docs/plans/proxmox-development-snapshots.md`; `bin/platform-proxmox-vm-cleanup`; `README.md`; `Makefile`; companion-repository facts require revalidation in Phase 1 |
 | 2026-07-24 | Revised the design to target Proxmox VE 9, use structured `pvesh` JSON reads with `jq`, apply local and remote drift checks, and gate environment mutations on tag reconciliation. | User decisions; current Proxmox VE 9 documentation; `bin/platform-proxmox-vm-cleanup`; `bin/platform-proxmox-token-init`; `Makefile`; repository test conventions |
+| 2026-07-25 | Implemented the command, structured fake fixtures, stateful fake `pvesh`/`qm`/`ssh`, local and remote confirmation-state binding, serial revalidation, postconditions, documentation, and Make integration. | `bin/platform-proxmox-vm-snapshot`; `tests/proxmox-vm-snapshot/`; `Makefile`; `docs/proxmox-vm-snapshot.md`; `README.md`; review agents reported no remaining material code findings |
+| 2026-07-25 | Completed repository verification. Real-host acceptance and environment tag reconciliation remain open release gates. | `make verify`, `make test`, `make shellcheck`, explicit ShellCheck for new test scripts, `git diff --check`, and focused help/dry-run checks passed; no authorized PVE 9 host was available |
 
 ## Decision Log
 
@@ -593,3 +594,5 @@ These are implementation-time checks, not blockers to starting Phase 1:
 | 2026-07-24 | Use `pvesh` JSON for reads and `qm` for mutations. | Structured reads avoid safety decisions based on human-oriented `qm list` and `qm listsnapshot` output while retaining native mutation commands. |
 | 2026-07-24 | Require local and remote target-drift checks. | VM inventory can change during either local or SSH confirmation; both paths need the same node/VMID/name equality contract. |
 | 2026-07-24 | Gate environment mutation readiness on tag reconciliation. | The tool cannot detect an intended environment VM whose required environment tag is missing. |
+| 2026-07-25 | Bind confirmation to sanitized operation state. | Node/VMID/name alone cannot detect config, status, lock, disk, or snapshot drift after the operator reviews preflight output. |
+| 2026-07-25 | Transport remote state through framed stdin. | Operation manifests can exceed per-argument limits and should not expose VM metadata in remote process arguments. |

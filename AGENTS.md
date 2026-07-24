@@ -41,6 +41,8 @@
 - `make install` copies scripts to `INSTALL_DIR` and PKI shared assets to `SHARE_DIR`; custom installs commonly use `make install INSTALL_DIR="$PWD/.tools/bin" SHARE_DIR="$PWD/.tools/share/platform-tools"`.
 - Installed PKI scripts find shared assets through `PLATFORM_TOOLS_LIB_DIR`, checkout-relative `../lib`, or `PLATFORM_TOOLS_SHARE_DIR`/`~/.local/share/platform-tools`; preserve this lookup behavior when editing wrappers.
 - Proxmox helpers can stream themselves over SSH; remote prerequisites are `pveum` for token bootstrap, `qm` for VM cleanup, and remote `jq` only when `platform-proxmox-token-init --write-token-file` parses JSON output.
+- `platform-proxmox-vm-snapshot` targets single-node Proxmox VE 9 and requires remote `pvesh` and `jq`, plus `qm` for mutations and local `jq` with `--ssh`; run `make test-proxmox-vm-snapshot` for fake-backed behavior checks.
+- Real snapshot create, rollback, or deletion tests require explicit authorization and a disposable development VM. Keep environment mutations gated until `platform-infra` tags are reconciled and a dry-run target set is verified manually.
 - The VM collector usually needs `sudo`; `COLLECT_ENV=1` and `INCLUDE_SENSITIVE=1` intentionally create more sensitive reports.
 
 ## Release And Commit Notes

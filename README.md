@@ -35,6 +35,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-config-init` | Create the local outside-Git secret namespace under `~/.config/platform-infrastructure/`. |
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
+| `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
@@ -87,6 +88,7 @@ SSH and Proxmox helpers require:
 - `ssh` for remote execution modes
 - `pveum` on the Proxmox host for `platform-proxmox-token-init`
 - `qm` on the Proxmox host for `platform-proxmox-vm-cleanup`
+- `pvesh` and `jq` on a single-node Proxmox VE 9 host for `platform-proxmox-vm-snapshot`, plus `qm` for mutations; local `jq` is also required with `--ssh`
 - `jq` on the Proxmox host when `platform-proxmox-token-init --write-token-file` is used over SSH
 
 Bastion policy helpers require:
@@ -172,6 +174,15 @@ Clean up one Proxmox VM by VMID after verifying the printed target:
 platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --vmid 9900
 ```
 
+Create a short-lived development snapshot for one exact VM:
+
+```bash
+platform-proxmox-vm-snapshot create \
+  --ssh root@<proxmox-ip> \
+  --vmid 101 \
+  --snapshot-name before-upgrade
+```
+
 Initialize PKI state and issue a test service certificate from inventory:
 
 ```bash
@@ -222,6 +233,7 @@ sudo ./bin/platform-vm-env-collect
 ./bin/platform-config-init
 ./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
 ./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
+./bin/platform-proxmox-vm-snapshot list --ssh root@<proxmox-ip> --vmid 101
 ./bin/platform-pki-init
 ./bin/platform-bastion-policy validate --input examples/bastion-policy/access-policy.example.yaml
 ```
@@ -237,6 +249,7 @@ sudo ./bin/platform-vm-env-collect
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
+| `docs/proxmox-vm-snapshot.md` | Proxmox VE 9 development snapshot workflows, safety model, and environment-tag gate. |
 | `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |
 | `docs/handoffs/tofu-ansible-handoff.md` | Example OpenTofu/Ansible handoff from a collected VM report. |
 | `assets/brand/` | Project brand assets for release metadata and forge profiles. |

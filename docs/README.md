@@ -20,6 +20,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
+- [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md): How to manage short-lived Proxmox VE 9 development snapshots safely.
 - [`handoffs/config-namespace-handoff.md`](./handoffs/config-namespace-handoff.md): Downstream ownership notes for the local secret namespace.
 - [`handoffs/tofu-ansible-handoff.md`](./handoffs/tofu-ansible-handoff.md): Example handoff that separates OpenTofu infrastructure work from Ansible guest configuration.
 
@@ -35,6 +36,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).
 - Clean up one known Proxmox VM: use [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md).
+- Manage one development VM snapshot: use [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md).
 
 ## Key Repo Paths
 
@@ -43,6 +45,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-config-init`](../bin/platform-config-init): Local outside-Git config initializer.
 - [`../bin/platform-proxmox-token-init`](../bin/platform-proxmox-token-init): Proxmox API token bootstrap helper.
 - [`../bin/platform-proxmox-vm-cleanup`](../bin/platform-proxmox-vm-cleanup): Safe single-VM Proxmox cleanup helper.
+- [`../bin/platform-proxmox-vm-snapshot`](../bin/platform-proxmox-vm-snapshot): Safe Proxmox VE 9 development snapshot helper.
 - [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
 - [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Root CA creation helper.
 - [`../bin/platform-pki-intermediate-create`](../bin/platform-pki-intermediate-create): Intermediate CA creation helper.
