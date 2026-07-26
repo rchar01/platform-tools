@@ -22,13 +22,54 @@ helper streams itself and a private operation-state manifest over SSH, so the
 tool does not need to be installed on the Proxmox host. Use `--identity-file`
 when the key is not already selected by `ssh-agent` or SSH configuration.
 
+## Connection Model
+
+The snapshot helper connects to the Proxmox host, not to guest VMs:
+
+| Connection | Identity | Purpose |
+| --- | --- | --- |
+| Operator workstation to Proxmox | `--ssh root@<proxmox-host>` and the Proxmox SSH key selected by `--identity-file` | Run `pvesh` and `qm` on Proxmox. |
+| Direct execution on Proxmox | Current local Proxmox user; no SSH key | Run `pvesh` and `qm` locally. |
+| Proxmox to QEMU guest agent | Virtual guest-agent channel; no SSH key | For snapshots without saved RAM, Proxmox may freeze and thaw guest filesystems when the agent is enabled, running, and permits filesystem freeze. |
+| Operator workstation to a guest VM | Guest cloud-init or configuration-management key | Separate guest administration; not used by this helper. |
+
+`~/.ssh/platform-template-builder_ed25519` is the public example convention for
+a purpose-specific Proxmox host key. It is not a required filename; users may
+select any suitable Proxmox SSH identity. The `platform-infra` guest-key
+convention, `~/.ssh/platform-infra-<environment>-<vm-key>-cloud-init_ed25519`,
+is unrelated to snapshot transport. See [SSH Identity Helper](./ssh-identity-helper.md)
+for key generation and private configuration examples.
+
+The examples below use the RFC 5737 documentation address `192.0.2.10`. Replace
+it with the Proxmox host address or SSH alias. Keep all private keys outside Git
+with owner-only permissions.
+
+When running directly on the Proxmox host, omit `--ssh` and `--identity-file`:
+
+```bash
+platform-proxmox-vm-snapshot list --vmid 101
+```
+
+## Common Use Cases
+
+- Create a rollback point before an application, package, or operating-system
+  upgrade.
+- Snapshot a complete tagged development environment before a coordinated
+  configuration change, understanding that VM operations are serial rather
+  than atomic.
+- Use `--include-memory` for a short-lived runtime debugging checkpoint when
+  the additional storage and QEMU compatibility constraints are acceptable.
+- Roll back a failed change, verify the restored system, and delete the
+  temporary snapshot after the rollback window closes.
+
 ## Single-VM Workflow
 
 Create a disk and configuration snapshot without saved memory state:
 
 ```bash
 platform-proxmox-vm-snapshot create \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-upgrade \
   --description "Before the application upgrade"
@@ -42,7 +83,8 @@ Select by one exact, unique VM name instead:
 
 ```bash
 platform-proxmox-vm-snapshot create \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vm-name example-dev-app-01 \
   --snapshot-name before-upgrade
 ```
@@ -51,7 +93,8 @@ List snapshots:
 
 ```bash
 platform-proxmox-vm-snapshot list \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101
 ```
 
@@ -59,7 +102,8 @@ Preview a rollback without mutation:
 
 ```bash
 platform-proxmox-vm-snapshot rollback \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-upgrade \
   --dry-run
@@ -69,7 +113,8 @@ Perform the rollback:
 
 ```bash
 platform-proxmox-vm-snapshot rollback \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-upgrade
 ```
@@ -79,7 +124,8 @@ when the VM should start after successful restoration:
 
 ```bash
 platform-proxmox-vm-snapshot rollback \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-upgrade \
   --start-after-rollback
@@ -89,7 +135,8 @@ Delete a validated checkpoint:
 
 ```bash
 platform-proxmox-vm-snapshot delete \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-upgrade
 ```
@@ -114,15 +161,23 @@ is recorded, use environment selection only for listing and dry-run inspection:
 
 ```bash
 platform-proxmox-vm-snapshot list \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --environment dev
 
 platform-proxmox-vm-snapshot create \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --environment dev \
   --snapshot-name before-change \
   --dry-run
 ```
+
+The isolated `snapshot-test` root has separate automatic-tag, exact-target,
+dry-run, and authorized live-acceptance evidence. That acceptance-only exception
+does not enable mutations for broader `dev`, `homelab`, or other environments;
+each still requires reconciled tags and review of its complete dry-run target
+set.
 
 The helper cannot detect an intended environment VM whose environment tag is
 missing. Always compare the complete printed VMID set with Proxmox before an
@@ -146,15 +201,21 @@ to pass `--vmstate 1` to Proxmox:
 
 ```bash
 platform-proxmox-vm-snapshot create \
-  --ssh root@<proxmox-host> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-runtime-change \
   --include-memory
 ```
 
 Saved memory consumes additional storage and can depend on the recorded QEMU
-machine and CPU versions. A live snapshot without application coordination may
-be only crash-consistent. The helper does not freeze guest filesystems.
+machine and CPU versions. The helper does not issue guest freeze or thaw
+commands itself. For snapshots without saved RAM, Proxmox VE 9 may use QEMU
+guest-agent freeze/thaw when the agent is enabled, running, and permits
+filesystem freeze. Do not assume that saved-memory snapshots use the same
+freeze path. Neither behavior coordinates applications or guarantees
+application-consistent state, so a live snapshot may still be only
+crash-consistent.
 
 ## Safety Model
 

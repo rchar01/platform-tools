@@ -178,7 +178,8 @@ Create a short-lived development snapshot for one exact VM:
 
 ```bash
 platform-proxmox-vm-snapshot create \
-  --ssh root@<proxmox-ip> \
+  --ssh root@192.0.2.10 \
+  --identity-file ~/.ssh/platform-template-builder_ed25519 \
   --vmid 101 \
   --snapshot-name before-upgrade
 ```
@@ -233,7 +234,7 @@ sudo ./bin/platform-vm-env-collect
 ./bin/platform-config-init
 ./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
 ./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
-./bin/platform-proxmox-vm-snapshot list --ssh root@<proxmox-ip> --vmid 101
+./bin/platform-proxmox-vm-snapshot list --ssh root@192.0.2.10 --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 101
 ./bin/platform-pki-init
 ./bin/platform-bastion-policy validate --input examples/bastion-policy/access-policy.example.yaml
 ```
