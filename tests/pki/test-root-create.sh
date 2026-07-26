@@ -374,6 +374,15 @@ if [[ ${MV_SIGNAL_AT:-0} == "$count" ]]; then
   kill -TERM "$PPID"
   exit 143
 fi
+if [[ ${MV_REPLACE_AT:-0} == "$count" ]]; then
+  "$REAL_MV" "$@"
+  destination=${!#}
+  foreign="${destination}.foreign-fixture"
+  printf '%s\n' "$MV_REPLACE_SENTINEL" >"$foreign"
+  chmod 600 "$foreign"
+  "$REAL_MV" -f -- "$foreign" "$destination"
+  exit 0
+fi
 exec "$REAL_MV" "$@"
 EOF
 chmod 755 "$EXEC_DIR/publication-bin/mv"
@@ -390,6 +399,35 @@ for fail_at in 2 3; do
   assert_contains "$STDERR" 'Failed to publish root CA material'
   assert_transaction_state_restored
 done
+
+save_transaction_state "$encrypted_pki"
+foreign_root_sentinel='foreign root publication replacement'
+counter="$TMP_DIR/mv-foreign-replacement.counter"
+run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
+  REAL_MV="$REAL_MV" MV_COUNTER="$counter" MV_REPLACE_AT=1 MV_FAIL_AT=2 \
+  MV_REPLACE_SENTINEL="$foreign_root_sentinel" \
+  "$TOOL" --namespace "$encrypted_namespace" \
+  --name 'Foreign Root Replacement' --org Test --country PL \
+  --root-pass-file "$PASS_FILE" --force
+assert_status 1
+assert_contains "$STDERR" 'Published root CA destination identity changed'
+assert_contains "$STDERR" 'preserved staging and locks for recovery'
+[[ $(<"$SAVED_CONF") == "$foreign_root_sentinel" ]] || fail 'foreign root replacement was not preserved'
+assert_same_hash "$SAVED_KEY_HASH" "$SAVED_KEY"
+assert_same_hash "$SAVED_CERT_HASH" "$SAVED_CERT"
+[[ -d $encrypted_pki/root-ca/.platform-pki-root-create.lock ]] || fail 'root create lock was not retained for recovery'
+[[ -d $encrypted_pki/root-ca/.platform-pki-root-operation.lock ]] || fail 'root operation lock was not retained for recovery'
+root_recovery_stage=$(compgen -G "$encrypted_pki/root-ca/.platform-pki-root-create.??????")
+[[ -n $root_recovery_stage && -d $root_recovery_stage ]] || fail 'root staging was not retained for recovery'
+assert_same_hash "$SAVED_CONF_HASH" "$root_recovery_stage/backup-0"
+
+# Complete the documented recovery manually inside this disposable namespace.
+rm -f -- "$SAVED_CONF"
+cp -p -- "$root_recovery_stage/backup-0" "$SAVED_CONF"
+rm -rf -- "$root_recovery_stage"
+rmdir "$encrypted_pki/root-ca/.platform-pki-root-create.lock"
+rmdir "$encrypted_pki/root-ca/.platform-pki-root-operation.lock"
+assert_transaction_state_restored
 
 save_transaction_state "$encrypted_pki"
 counter="$TMP_DIR/mv-signal.counter"

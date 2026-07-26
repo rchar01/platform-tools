@@ -1,0 +1,59 @@
+name: platform-pki-intermediate-create
+help: Create the intermediate CA key, certificate, and CA chain
+version: platform-pki-intermediate-create <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --name
+  arg: cn
+  help: Intermediate CA common name
+  required: true
+  validate: not_empty
+- long: --org
+  arg: org
+  help: Organization name
+  required: true
+  validate: not_empty
+- long: --country
+  arg: country
+  help: Country code
+  required: true
+  validate: not_empty
+- long: --days
+  arg: days
+  help: Intermediate CA lifetime
+  validate: days
+- long: --root-pass-file
+  arg: path
+  help: Restricted file containing the encrypted root-key passphrase
+  validate: not_empty
+- long: --intermediate-pass-file
+  arg: path
+  help: Restricted file containing the encrypted intermediate-key passphrase
+  validate: not_empty
+  conflicts: [--allow-unencrypted-intermediate-key]
+- long: --allow-unencrypted-intermediate-key
+  help: Create an unencrypted intermediate private key
+  conflicts: [--intermediate-pass-file]
+- long: --force
+  help: Replace existing intermediate CA material
+
+examples:
+- platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org "Platform Example" --country PL
+- platform-pki-intermediate-create --namespace /tmp/platform-pki-test --name "Test Intermediate CA" --org Test --country PL --allow-unencrypted-intermediate-key
+
+footer: |-
+  The namespace defaults to platform-infrastructure under the XDG
+  configuration home. The PKI directory defaults to <namespace>/pki.
+  The lifetime defaults to PLATFORM_PKI_INTERMEDIATE_DAYS or 1825 days.
+  Intermediate keys are encrypted unless
+  --allow-unencrypted-intermediate-key is used. Passphrase files must be mode
+  600 or stricter and have a first line of at least 16 characters containing
+  non-whitespace content.

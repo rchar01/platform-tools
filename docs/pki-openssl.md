@@ -171,7 +171,60 @@ platform-pki-intermediate-create \
   --country "PL"
 ```
 
-The intermediate key is encrypted by default. For isolated test namespaces only, use `--allow-unencrypted-intermediate-key`.
+The intermediate key is encrypted by default. `--days` defaults to
+`PLATFORM_PKI_INTERMEDIATE_DAYS`, or 1825 when that environment variable is
+unset. Intermediate configuration, key, CSR, certificate, chain, and the root
+CA database update are staged privately before publication. Existing
+intermediate key or certificate files are refused unless `--force` is used.
+Failed generation, signing, partial publication, and handled interruptions
+restore all original intermediate files and root CA database files. The root
+database is advanced only when the complete transaction is published.
+Missing intermediate CA database files are restored in staging and published
+with the same transaction: an empty `index.txt`, `index.txt.attr` containing
+`unique_subject = no`, and `serial` and `crlnumber` containing `1000`. Restored
+files use mode `600`; valid existing database files are preserved unchanged.
+Rollback tracks only destinations successfully published by the active
+transaction and verifies their device/inode identity before removal. A file
+that appears at a failed no-clobber destination, or replaces a published file,
+is preserved rather than deleted; unresolved identity changes retain staging
+and locks for operator recovery.
+
+CA mutations use cooperative operation locks inside the CA directories. The
+fixed acquisition order is root CA lock first, then intermediate CA lock, with
+release in reverse order. `platform-pki-root-create` holds the root lock for its
+entire generation and publication transaction. `platform-pki-intermediate-create`
+holds both locks for its entire signing and publication transaction, so a
+cooperating consumer cannot observe forced sequential publication. Commands
+that issue or renew service certificates must take the intermediate lock when
+they are migrated to this transaction contract. A command that needs both
+locks must never acquire them in the opposite order.
+
+The PKI path, identity values, CA directories, database files, prerequisites,
+and output destinations are validated before mutation. Symbolic links, hard
+links, foreign-owned files, unsafe writable directories, and unexpected file
+types are rejected. `--force` replaces intermediate material and records a new
+root signing event; it does not replace the root key, root certificate, or
+unrelated PKI state.
+
+`SIGKILL`, host failure, or storage failure cannot run the transaction cleanup
+handler. After an unclean stop, treat operation-lock directories, command-lock
+directories, private `.platform-pki-root-create.*` or
+`.platform-pki-intermediate-create.*` staging directories, and partially
+published sequential state as incident evidence. Do not blindly delete any of
+them. First stop or account for every PKI process, inspect process state and
+artifact timestamps, and make a protected backup of the complete PKI tree.
+Compare configuration, key, certificate, CSR, chain, root `index.txt`, serial,
+database sidecars, and `newcerts/` entries with the staging data and a known-good
+backup. Validate matching keys and certificates and verify the certificate
+chain. If publication is partial or consistency cannot be established, restore
+the complete affected transaction state from a known-good protected backup.
+Only after proving that no operation is active and the published state is
+consistent or restored should an operator remove confirmed-stale lock
+directories and securely remove reviewed staging material. Re-run the relevant
+verification commands before resuming CA mutations.
+
+For isolated test namespaces only, use
+`--allow-unencrypted-intermediate-key`.
 
 For non-interactive automation, provide passphrases through restricted files instead of typing them at OpenSSL prompts:
 

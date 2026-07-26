@@ -248,6 +248,15 @@ restore the existing configuration, key, and certificate. Root keys remain
 encrypted by default, and unencrypted root keys require the explicit
 `--allow-unencrypted-root-key` opt-in.
 
+`platform-pki-intermediate-create` likewise stages its key, CSR, certificate,
+chain, and root CA database update. Existing intermediate key or certificate
+files are refused unless `--force` is used; failed signing or publication
+restores both intermediate material and root database state. Intermediate keys
+remain encrypted by default, and unencrypted keys require the explicit
+`--allow-unencrypted-intermediate-key` opt-in. CA mutation locks use a fixed
+root-before-intermediate acquisition order and cover complete generation,
+signing, and publication transactions.
+
 Validate and render a Kubernetes bastion access policy:
 
 ```bash

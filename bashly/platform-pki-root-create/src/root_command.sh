@@ -47,16 +47,38 @@ require_safe_destination() {
 }
 
 restore_root_material() {
-  local i destination backup
+  local i destination backup expected_identity current_identity rollback_status=0
 
-  for i in "${!TRANSACTION_DESTINATIONS[@]}"; do
+  for ((i = ${#TRANSACTION_DESTINATIONS[@]} - 1; i >= 0; i--)); do
+    [[ ${TRANSACTION_PUBLISHED[i]:-false} == true ]] || continue
     destination=${TRANSACTION_DESTINATIONS[i]}
     backup=${TRANSACTION_BACKUPS[i]}
-    rm -f -- "$destination" || return 1
+    expected_identity=${TRANSACTION_PUBLISHED_IDENTITIES[i]}
+    if [[ -e $destination || -L $destination ]]; then
+      if [[ ! -f $destination || -L $destination ]]; then
+        printf '[ERROR] Published root CA destination was replaced; preserving it and transaction staging: %s\n' "$destination" >&2
+        rollback_status=1
+        continue
+      fi
+      current_identity=$(stat -c '%d:%i' "$destination") || {
+        rollback_status=1
+        continue
+      }
+      if [[ $current_identity != "$expected_identity" ]]; then
+        printf '[ERROR] Published root CA destination identity changed; preserving it and transaction staging: %s\n' "$destination" >&2
+        rollback_status=1
+        continue
+      fi
+      rm -f -- "$destination" || {
+        rollback_status=1
+        continue
+      }
+    fi
     if [[ ${TRANSACTION_ORIGINALS[i]} == true ]]; then
-      cp -p -- "$backup" "$destination" || return 1
+      ln -- "$backup" "$destination" || rollback_status=1
     fi
   done
+  return "$rollback_status"
 }
 
 finish_root_create() {
@@ -67,11 +89,18 @@ finish_root_create() {
   if [[ ${TRANSACTION_ACTIVE:-false} == true && ${TRANSACTION_COMMITTED:-false} != true ]]; then
     restore_root_material || rollback_status=1
   fi
+  if (( rollback_status != 0 )); then
+    printf '[ERROR] Failed to restore root CA transaction; preserved staging and locks for recovery: %s\n' "${STAGE_DIR:-unknown}" >&2
+    exit 1
+  fi
   if [[ -n ${STAGE_DIR:-} ]]; then
     rm -rf -- "$STAGE_DIR" || rollback_status=1
   fi
   if [[ -n ${LOCK_DIR:-} ]]; then
     rmdir "$LOCK_DIR" 2>/dev/null || rollback_status=1
+  fi
+  if [[ ${ROOT_OPERATION_LOCK_HELD:-false} == true ]]; then
+    pki_release_operation_lock "$ROOT_OPERATION_LOCK" 2>/dev/null || rollback_status=1
   fi
   if (( rollback_status != 0 )); then
     printf '[ERROR] Failed to restore or clean up root CA transaction\n' >&2
@@ -81,13 +110,15 @@ finish_root_create() {
 }
 
 publish_root_material() {
-  local i source destination backup
+  local i source destination backup source_identity
   local -a sources
 
   sources=("$STAGE_CONF" "$STAGE_KEY" "$STAGE_CERT")
   TRANSACTION_DESTINATIONS=("$ROOT_CONF" "$ROOT_KEY" "$ROOT_CERT")
   TRANSACTION_BACKUPS=('' '' '')
   TRANSACTION_ORIGINALS=(false false false)
+  TRANSACTION_PUBLISHED=()
+  TRANSACTION_PUBLISHED_IDENTITIES=()
   for i in "${!TRANSACTION_DESTINATIONS[@]}"; do
     destination=${TRANSACTION_DESTINATIONS[i]}
     if [[ -e $destination ]]; then
@@ -102,10 +133,15 @@ publish_root_material() {
   for i in "${!TRANSACTION_DESTINATIONS[@]}"; do
     source=${sources[i]}
     destination=${TRANSACTION_DESTINATIONS[i]}
+    source_identity=$(stat -c '%d:%i' "$source") || pki_die "Cannot inspect staged root CA material identity: $source"
     if [[ $FORCE == true || $destination == "$ROOT_CONF" ]]; then
       mv -f -- "$source" "$destination" || pki_die "Failed to publish root CA material: $destination"
+      TRANSACTION_PUBLISHED[i]=true
+      TRANSACTION_PUBLISHED_IDENTITIES[i]=$source_identity
     else
       ln -- "$source" "$destination" || pki_die "Root CA material appeared during creation; refusing to overwrite: $destination"
+      TRANSACTION_PUBLISHED[i]=true
+      TRANSACTION_PUBLISHED_IDENTITIES[i]=$source_identity
       rm -f -- "$source"
     fi
   done
@@ -143,45 +179,62 @@ if [[ -n $ROOT_PASS_FILE ]]; then
 fi
 
 pki_require_cmd openssl
-pki_require_pki_dir
 ROOT_CA_DIR="$PKI_DIR/root-ca"
 ROOT_KEY=$(pki_root_key)
 ROOT_CERT=$(pki_root_cert)
 ROOT_CONF="$ROOT_CA_DIR/openssl.cnf"
-require_private_ca_dir "$PKI_DIR" 'PKI directory'
-require_private_ca_dir "$ROOT_CA_DIR" 'Root CA directory'
-require_private_ca_dir "$ROOT_CA_DIR/private" 'Root CA private directory'
-require_private_ca_dir "$ROOT_CA_DIR/certs" 'Root CA certificate directory'
-require_safe_destination "$ROOT_CA_DIR/index.txt" 'Root CA index'
-require_safe_destination "$ROOT_CA_DIR/index.txt.attr" 'Root CA index attributes'
-require_safe_destination "$ROOT_CA_DIR/serial" 'Root CA serial'
-require_safe_destination "$ROOT_CA_DIR/crlnumber" 'Root CA CRL number'
-require_safe_destination "$ROOT_CONF" 'Root CA configuration'
-require_safe_destination "$ROOT_KEY" 'Root CA key'
-require_safe_destination "$ROOT_CERT" 'Root CA certificate'
 
-if [[ $FORCE != true ]]; then
-  [[ ! -e $ROOT_KEY ]] || pki_die "Root key exists; use --force to overwrite: $ROOT_KEY"
-  [[ ! -e $ROOT_CERT ]] || pki_die "Root certificate exists; use --force to overwrite: $ROOT_CERT"
-fi
+validate_root_operation_state() {
+  pki_require_no_symlink_path_components "$NAMESPACE" 'Namespace'
+  pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
+  pki_require_pki_dir
+  require_private_ca_dir "$PKI_DIR" 'PKI directory'
+  require_private_ca_dir "$ROOT_CA_DIR" 'Root CA directory'
+  require_private_ca_dir "$ROOT_CA_DIR/private" 'Root CA private directory'
+  require_private_ca_dir "$ROOT_CA_DIR/certs" 'Root CA certificate directory'
+  require_safe_destination "$ROOT_CA_DIR/index.txt" 'Root CA index'
+  require_safe_destination "$ROOT_CA_DIR/index.txt.attr" 'Root CA index attributes'
+  require_safe_destination "$ROOT_CA_DIR/serial" 'Root CA serial'
+  require_safe_destination "$ROOT_CA_DIR/crlnumber" 'Root CA CRL number'
+  require_safe_destination "$ROOT_CONF" 'Root CA configuration'
+  require_safe_destination "$ROOT_KEY" 'Root CA key'
+  require_safe_destination "$ROOT_CERT" 'Root CA certificate'
+
+  if [[ $FORCE != true ]]; then
+    [[ ! -e $ROOT_KEY ]] || pki_die "Root key exists; use --force to overwrite: $ROOT_KEY"
+    [[ ! -e $ROOT_CERT ]] || pki_die "Root certificate exists; use --force to overwrite: $ROOT_CERT"
+  fi
+}
+
+validate_root_operation_state
 
 umask 077
-pki_init_ca_db "$ROOT_CA_DIR"
-LOCK_DIR="$ROOT_CA_DIR/.platform-pki-root-create.lock"
-mkdir "$LOCK_DIR" 2>/dev/null || pki_die "Another root CA creation is in progress: $LOCK_DIR"
-STAGE_DIR=$(mktemp -d "$ROOT_CA_DIR/.platform-pki-root-create.XXXXXX") || {
-  rmdir "$LOCK_DIR"
-  pki_die 'Cannot create root CA staging directory'
-}
+ROOT_OPERATION_LOCK=$(pki_root_operation_lock)
+ROOT_OPERATION_LOCK_HELD=false
+LOCK_DIR=''
+STAGE_DIR=''
 TRANSACTION_ACTIVE=false
 TRANSACTION_COMMITTED=false
 TRANSACTION_DESTINATIONS=()
 TRANSACTION_BACKUPS=()
 TRANSACTION_ORIGINALS=()
+TRANSACTION_PUBLISHED=()
+TRANSACTION_PUBLISHED_IDENTITIES=()
 trap finish_root_create EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# CA mutation locks are always acquired root first, then intermediate when needed.
+pki_acquire_operation_lock "$ROOT_OPERATION_LOCK" 'root CA operation'
+ROOT_OPERATION_LOCK_HELD=true
+validate_root_operation_state
+pki_init_ca_db "$ROOT_CA_DIR"
+LOCK_DIR="$ROOT_CA_DIR/.platform-pki-root-create.lock"
+mkdir "$LOCK_DIR" 2>/dev/null || pki_die "Another root CA creation is in progress: $LOCK_DIR"
+STAGE_DIR=$(mktemp -d "$ROOT_CA_DIR/.platform-pki-root-create.XXXXXX") || {
+  pki_die 'Cannot create root CA staging directory'
+}
 
 STAGE_KEY="$STAGE_DIR/root-ca.key"
 STAGE_CERT="$STAGE_DIR/root-ca.crt"

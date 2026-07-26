@@ -254,6 +254,49 @@ pki_require_pki_dir() {
   [[ -d "$PKI_DIR" ]] || pki_die "PKI directory does not exist; run platform-pki-init first: $PKI_DIR"
 }
 
+pki_require_no_symlink_path_components() {
+  local path=$1 label=$2 current='' component
+  local -a components
+
+  IFS='/' read -r -a components <<<"$path"
+  [[ $path != /* ]] || current=/
+  for component in "${components[@]}"; do
+    [[ -n $component ]] || continue
+    if [[ $current == / ]]; then
+      current="/$component"
+    elif [[ -n $current ]]; then
+      current="$current/$component"
+    else
+      current=$component
+    fi
+    [[ ! -L $current ]] || pki_die "$label path component must not be a symlink: $current"
+  done
+}
+
+pki_root_operation_lock() {
+  printf '%s/root-ca/.platform-pki-root-operation.lock\n' "$PKI_DIR"
+}
+
+pki_intermediate_operation_lock() {
+  printf '%s/intermediate-ca/.platform-pki-intermediate-operation.lock\n' "$PKI_DIR"
+}
+
+pki_acquire_operation_lock() {
+  local path=$1 label=$2
+
+  mkdir -- "$path" 2>/dev/null || pki_die "Another $label is in progress: $path"
+  chmod 700 "$path" || {
+    rmdir "$path" 2>/dev/null || true
+    pki_die "Cannot secure $label lock: $path"
+  }
+}
+
+pki_release_operation_lock() {
+  local path=$1
+
+  rmdir "$path"
+}
+
 pki_prepare_dir() {
   mkdir -p "$1"
   chmod 700 "$1"
