@@ -120,6 +120,17 @@ Run all maintained checks in a one-shot container:
 make container-check
 ```
 
+Generate Bashly-backed executables and verify that committed output is current:
+
+```bash
+make generate
+make verify-generated
+```
+
+Edit Bashly source under `bashly/<tool>/`, not the corresponding generated file
+under `bin/`. See [`docs/development.md`](docs/development.md) for the full
+workflow.
+
 Set `PLATFORM_TOOLS_DEV_IMAGE` to override the local image name. The wrapper
 targets require Podman, Bash, and Make on the host.
 

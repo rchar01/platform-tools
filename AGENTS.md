@@ -15,7 +15,7 @@
 
 ## Repository Shape
 
-- This repo is a collection of maintained Bash and Python helper tools in `bin/`; `Makefile` is the source of truth for supported tools and local targets.
+- This repo is a collection of maintained Bash and Python helper tools in `bin/`; `Makefile` is the source of truth for supported tools and local targets. Bashly-backed source lives under `bashly/<tool>/`, while its generated and committed executable lives under `bin/`.
 - PKI commands share logic in `lib/platform-pki-common.sh` and install templates from `templates/pki/`; keep all three areas aligned when changing PKI behavior.
 - `platform-bastion-policy` is a Python helper for public bastion access-policy validation and rendering; real policy data belongs in `platform-private`.
 - User-facing behavior is documented in `README.md` and topic docs under `docs/`; update both the command help text and docs when changing flags, defaults, paths, or safety rules.
@@ -24,6 +24,7 @@
 ## Verification
 
 - Use `make shell` for interactive development in the rootless Podman container, or `make container-check` to run all maintained checks in a one-shot container. Do not mount host SSH keys, private config, PKI state, or the Podman socket into routine development containers.
+- Run `make generate` after changing Bashly source and `make verify-generated` to prove committed executables are deterministic and current. Never edit a Bashly-generated `bin/` file directly.
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
 - Run `make test` after behavior changes; it runs maintained repository tests such as bastion policy rendering checks.
 - Run `make shellcheck` when ShellCheck is available; it lint-checks maintained shell tools and libraries.

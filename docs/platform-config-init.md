@@ -44,6 +44,13 @@ Use a custom directory for testing or non-default setups:
 platform-config-init --config-dir /tmp/platform-infrastructure-test
 ```
 
+Inspect generated help or the embedded repository CLI version:
+
+```bash
+platform-config-init --help
+platform-config-init --version
+```
+
 ## Created Layout
 
 ```text

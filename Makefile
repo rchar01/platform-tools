@@ -7,9 +7,10 @@ SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init pl
 PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
-DEV_SCRIPTS := scripts/check scripts/devshell scripts/in-container
+DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
+BASHLY_TOOLS := platform-config-init
 
-.PHONY: help shell container-check install verify test test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -33,6 +34,14 @@ shell:
 ## Run all maintained checks in the development container
 container-check:
 	./scripts/in-container ./scripts/check
+
+## Generate committed Bash CLI artifacts
+generate:
+	./scripts/generate $(BASHLY_TOOLS)
+
+## Verify committed Bash CLI artifacts are current
+verify-generated:
+	./scripts/verify-generated $(BASHLY_TOOLS)
 
 ## Install platform tools into INSTALL_DIR
 install:
@@ -64,7 +73,11 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
+test: test-platform-config-init test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
+
+## Run platform config initializer behavior tests
+test-platform-config-init:
+	./tests/cli/test-platform-config-init.sh
 
 ## Run bastion policy render tests
 test-bastion-policy:

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+make verify-generated
 make verify
 make test
 make shellcheck

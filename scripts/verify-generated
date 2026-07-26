@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+  printf '%s\n' 'Usage: scripts/verify-generated <tool> [tool ...]' >&2
+  exit 2
+fi
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+version=$(<"$repo_root/VERSION")
+first_dir=$(mktemp -d)
+second_dir=$(mktemp -d)
+trap 'rm -rf "$first_dir" "$second_dir"' EXIT
+
+generate_into() {
+  local target_dir=$1
+  local tool workspace
+
+  shift
+  for tool in "$@"; do
+    workspace="$repo_root/bashly/$tool"
+    (
+      cd "$workspace"
+      BASHLY_TARGET_DIR=$target_dir \
+        PLATFORM_TOOLS_VERSION=$version \
+        bashly generate --env production --quiet
+    )
+  done
+}
+
+generate_into "$first_dir" "$@"
+generate_into "$second_dir" "$@"
+
+for tool in "$@"; do
+  cmp "$first_dir/$tool" "$second_dir/$tool" || {
+    printf 'Generated output is not deterministic: %s\n' "$tool" >&2
+    exit 1
+  }
+  cmp "$first_dir/$tool" "$repo_root/bin/$tool" || {
+    printf 'Generated output is stale: bin/%s; run make generate\n' "$tool" >&2
+    exit 1
+  }
+  [[ -x $repo_root/bin/$tool ]] || {
+    printf 'Generated output is not executable: bin/%s\n' "$tool" >&2
+    exit 1
+  }
+done

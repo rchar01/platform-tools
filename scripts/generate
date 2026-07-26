@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+  printf '%s\n' 'Usage: scripts/generate <tool> [tool ...]' >&2
+  exit 2
+fi
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+version=$(<"$repo_root/VERSION")
+
+[[ -n $version ]] || {
+  printf '%s\n' 'VERSION must not be empty' >&2
+  exit 1
+}
+
+for tool in "$@"; do
+  workspace="$repo_root/bashly/$tool"
+  [[ -f $workspace/src/bashly.yml ]] || {
+    printf 'Missing Bashly configuration for %s\n' "$tool" >&2
+    exit 1
+  }
+
+  (
+    cd "$workspace"
+    PLATFORM_TOOLS_VERSION=$version bashly validate
+    PLATFORM_TOOLS_VERSION=$version bashly generate --env production --quiet
+  )
+  chmod 755 "$repo_root/bin/$tool"
+done

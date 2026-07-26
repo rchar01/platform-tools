@@ -1,0 +1,25 @@
+name: platform-config-init
+help: Create the local platform secret namespace outside Git
+version: platform-config-init <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --config-dir
+  arg: path
+  help: Config directory to create
+  validate: not_empty
+
+examples:
+- platform-config-init
+- platform-config-init --config-dir /tmp/platform-infrastructure-test
+
+footer: |-
+  Created layout:
+    README.md
+    infra/
+    config/
+    pki/
+
+  The default is platform-infrastructure under the XDG configuration home,
+  which normally resolves to ~/.config/platform-infrastructure.
+  Existing README.md is not overwritten. Directories are mode 700 and
+  README.md is mode 600.

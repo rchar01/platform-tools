@@ -10,6 +10,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 
 - [`../README.md`](../README.md): Tool overview, install command, and high-level usage.
 - [`../Makefile`](../Makefile): Supported local entry points. Run `make help` to see them.
+- [`development.md`](./development.md): Podman development, Bashly generation, and generated-file verification.
 
 ## Docs In This Tree
 
