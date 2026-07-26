@@ -1,0 +1,30 @@
+FROM docker.io/dannyben/bashly:1.4.0@sha256:96525735128a8ac9433a60b1333d85b40b5157f68e2e7eb5d0a16bb71ba94e3c
+
+# Direct packages are pinned so repository updates fail visibly instead of
+# silently changing the toolchain. Refresh them with the base digest and a
+# reviewed no-cache build because Alpine does not provide immutable snapshots.
+RUN apk add --no-cache \
+    age=1.2.1-r15 \
+    bash=5.3.3-r1 \
+    coreutils=9.8-r1 \
+    file=5.46-r2 \
+    findutils=4.10.0-r0 \
+    git=2.52.0-r0 \
+    grep=3.12-r0 \
+    gzip=1.14-r2 \
+    jq=1.8.1-r0 \
+    make=4.4.1-r3 \
+    openssh-client-default=10.2_p1-r0 \
+    openssl=3.5.7-r0 \
+    py3-yaml=6.0.3-r0 \
+    python3=3.12.13-r0 \
+    sed=4.9-r2 \
+    shellcheck=0.11.0-r0 \
+    shfmt=3.11.0-r10 \
+    tar=1.35-r4 \
+    util-linux=2.41.4-r0
+
+WORKDIR /workspace
+
+ENTRYPOINT []
+CMD ["/bin/bash"]

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+image=${PLATFORM_TOOLS_DEV_IMAGE:-localhost/platform-tools-dev:1.4.0}
+
+podman build --file "$repo_root/Containerfile.dev" --tag "$image" "$repo_root"
+
+exec podman run --rm --interactive --tty \
+  --userns=keep-id \
+  --security-opt=no-new-privileges \
+  --env HOME=/tmp/platform-tools-home \
+  --env PLATFORM_TOOLS_DEV_CONTAINER=1 \
+  --volume "$repo_root:/workspace:Z" \
+  --workdir /workspace \
+  "$image" \
+  /bin/sh -c 'mkdir -p "$HOME" && exec /bin/bash'

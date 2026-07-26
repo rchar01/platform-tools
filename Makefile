@@ -7,8 +7,9 @@ SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init pl
 PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
+DEV_SCRIPTS := scripts/check scripts/devshell scripts/in-container
 
-.PHONY: help install verify test test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
+.PHONY: help shell container-check install verify test test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -24,6 +25,14 @@ help:
 			} \
 		} \
 	' $(MAKEFILE_LIST) | sort
+
+## Open a shell in the Podman development container
+shell:
+	./scripts/devshell
+
+## Run all maintained checks in the development container
+container-check:
+	./scripts/in-container ./scripts/check
 
 ## Install platform tools into INSTALL_DIR
 install:
@@ -46,6 +55,9 @@ verify:
 	done
 	@for lib in $(LIBS); do \
 		bash -n "$$lib"; \
+	done
+	@for script in $(DEV_SCRIPTS); do \
+		bash -n "$$script"; \
 	done
 	@for tool in $(PYTHON_TOOLS); do \
 		python3 -m py_compile "bin/$$tool"; \
@@ -81,4 +93,4 @@ test-pki-inventory:
 ## Run ShellCheck for maintained tool scripts
 shellcheck:
 	@command -v shellcheck >/dev/null 2>&1 || { printf '%s\n' 'shellcheck not found; install ShellCheck or skip this target' >&2; exit 1; }
-	shellcheck $(addprefix bin/,$(SHELL_TOOLS)) $(LIBS)
+	shellcheck $(addprefix bin/,$(SHELL_TOOLS)) $(LIBS) $(DEV_SCRIPTS)

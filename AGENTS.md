@@ -23,6 +23,7 @@
 
 ## Verification
 
+- Use `make shell` for interactive development in the rootless Podman container, or `make container-check` to run all maintained checks in a one-shot container. Do not mount host SSH keys, private config, PKI state, or the Podman socket into routine development containers.
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
 - Run `make test` after behavior changes; it runs maintained repository tests such as bastion policy rendering checks.
 - Run `make shellcheck` when ShellCheck is available; it lint-checks maintained shell tools and libraries.
@@ -38,6 +39,7 @@
 
 ## Tooling Notes
 
+- `Containerfile.dev` pins the base digest and direct APK versions; Alpine repositories remain mutable, so refresh the base and package pins together and verify with a reviewed `podman build --no-cache -f Containerfile.dev .`.
 - `make install` copies scripts to `INSTALL_DIR` and PKI shared assets to `SHARE_DIR`; custom installs commonly use `make install INSTALL_DIR="$PWD/.tools/bin" SHARE_DIR="$PWD/.tools/share/platform-tools"`.
 - Installed PKI scripts find shared assets through `PLATFORM_TOOLS_LIB_DIR`, checkout-relative `../lib`, or `PLATFORM_TOOLS_SHARE_DIR`/`~/.local/share/platform-tools`; preserve this lookup behavior when editing wrappers.
 - Proxmox helpers can stream themselves over SSH; remote prerequisites are `pveum` for token bootstrap, `qm` for VM cleanup, and remote `jq` only when `platform-proxmox-token-init --write-token-file` parses JSON output.

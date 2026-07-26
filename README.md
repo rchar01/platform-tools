@@ -101,6 +101,28 @@ Optional verification tools:
 - `shellcheck` for `make shellcheck`
 - `gitleaks` for local secret scanning
 
+## Development Container
+
+The canonical development environment is a rootless Podman container with the
+repository mounted at `/workspace`. It includes the pinned Bashly generator and
+the tools needed by the maintained checks without mounting host SSH keys,
+private configuration, or PKI state.
+
+Open an interactive development shell:
+
+```bash
+make shell
+```
+
+Run all maintained checks in a one-shot container:
+
+```bash
+make container-check
+```
+
+Set `PLATFORM_TOOLS_DEV_IMAGE` to override the local image name. The wrapper
+targets require Podman, Bash, and Make on the host.
+
 ## Verify
 
 Run syntax checks for maintained scripts:
