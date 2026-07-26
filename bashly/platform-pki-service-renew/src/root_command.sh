@@ -1,0 +1,351 @@
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+COMMON_PATH=${PLATFORM_TOOLS_LIB_DIR:-}
+if [[ -n $COMMON_PATH ]]; then
+  COMMON_PATH=${COMMON_PATH}/platform-pki-common.sh
+elif [[ -r ${SCRIPT_DIR}/../lib/platform-pki-common.sh ]]; then
+  COMMON_PATH=${SCRIPT_DIR}/../lib/platform-pki-common.sh
+else
+  COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/platform-tools}/lib/platform-pki-common.sh
+fi
+[[ -r $COMMON_PATH ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
+# shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
+source "$COMMON_PATH"
+
+require_private_dir() {
+  local path=$1 label=$2 mode owner current_uid
+  [[ -d $path && ! -L $path ]] || pki_die "$label must be a non-symlink directory: $path"
+  mode=$(stat -c '%a' "$path") || pki_die "Cannot inspect $label permissions: $path"
+  owner=$(stat -c '%u' "$path") || pki_die "Cannot inspect $label owner: $path"
+  current_uid=$(id -u)
+  [[ $mode =~ ^[0-7]+$ && $owner =~ ^[0-9]+$ ]] || pki_die "Cannot parse $label metadata: $path"
+  [[ $owner == "$current_uid" ]] || pki_die "$label is not owned by the current user: $path"
+  (( (8#$mode & 022) == 0 )) || pki_die "$label is group- or world-writable: $path"
+}
+
+require_safe_file() {
+  local path=$1 label=$2 private=${3:-false} mode owner links current_uid
+  [[ ! -L $path ]] || pki_die "$label must not be a symlink: $path"
+  [[ ! -e $path || -f $path ]] || pki_die "$label must be a regular file: $path"
+  [[ ! -e $path ]] && return 0
+  mode=$(stat -c '%a' "$path") || pki_die "Cannot inspect $label permissions: $path"
+  owner=$(stat -c '%u' "$path") || pki_die "Cannot inspect $label owner: $path"
+  links=$(stat -c '%h' "$path") || pki_die "Cannot inspect $label link count: $path"
+  current_uid=$(id -u)
+  [[ $mode =~ ^[0-7]+$ && $owner =~ ^[0-9]+$ && $links =~ ^[0-9]+$ ]] || pki_die "Cannot parse $label metadata: $path"
+  [[ $owner == "$current_uid" ]] || pki_die "$label is not owned by the current user: $path"
+  [[ $links == 1 ]] || pki_die "$label must not be hard-linked: $path"
+  (( (8#$mode & 022) == 0 )) || pki_die "$label is group- or world-writable: $path"
+  [[ $private != true ]] || (( (8#$mode & 077) == 0 )) || pki_die "$label permissions are too open; use chmod 600 or stricter: $path"
+}
+
+require_trusted_ancestors() {
+  local path=$1 label=$2 current='' component mode owner current_uid
+  local -a components
+  current_uid=$(id -u)
+  IFS='/' read -r -a components <<<"$path"
+  [[ $path != /* ]] && current=. || current=/
+  for component in "${components[@]}"; do
+    [[ -n $component ]] || continue
+    if [[ $current == / ]]; then current="/$component"; else current="$current/$component"; fi
+    [[ -d $current && ! -L $current ]] || pki_die "$label ancestor must be a non-symlink directory: $current"
+    mode=$(stat -c '%a' "$current") || pki_die "Cannot inspect $label ancestor permissions: $current"
+    owner=$(stat -c '%u' "$current") || pki_die "Cannot inspect $label ancestor owner: $current"
+    [[ $owner == "$current_uid" || $owner == 0 ]] || pki_die "$label ancestor is not owned by the current user or root: $current"
+    (( (8#$mode & 022) == 0 || (8#$mode & 01000) != 0 )) || pki_die "$label ancestor is group- or world-writable without sticky bit: $current"
+  done
+}
+
+canonicalize_openssl_serial() {
+  local serial=${1^^}
+  while [[ $serial == 00* && ${#serial} -gt 2 ]]; do serial=${serial#00}; done
+  printf '%s\n' "$serial"
+}
+
+process_intermediate_signing_config() {
+  local source=$1 destination=${2:-} line trimmed section='' key value expected
+  local ca_sections=0 ca_default_sections=0 default_ca_count=0
+  local -A required_seen=()
+  [[ -z $destination ]] || : >"$destination"
+  while IFS= read -r line || [[ -n $line ]]; do
+    trimmed=${line#"${line%%[![:space:]]*}"}
+    [[ ! $trimmed =~ ^\.include([[:space:]=]|$) ]] || pki_die "Intermediate CA configuration must not contain include directives: $source"
+    if [[ $trimmed =~ ^\[[[:space:]]*([^]]+)[[:space:]]*\][[:space:]]*($|[#\;]) ]]; then
+      section=${BASH_REMATCH[1]}; section=${section%"${section##*[![:space:]]}"}
+      case $section in
+        ca) ca_sections=$((ca_sections + 1)); (( ca_sections == 1 )) || pki_die "Intermediate CA configuration contains duplicate ca sections: $source" ;;
+        CA_default) ca_default_sections=$((ca_default_sections + 1)); (( ca_default_sections == 1 )) || pki_die "Intermediate CA configuration contains duplicate CA_default sections: $source" ;;
+      esac
+    elif [[ $trimmed =~ ^([A-Za-z0-9_.]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      key=${BASH_REMATCH[1]}; value=${BASH_REMATCH[2]}; value=${value%"${value##*[![:space:]]}"}
+      if [[ $section == ca && $key == default_ca ]]; then
+        [[ $value == CA_default ]] || pki_die "Intermediate CA configuration must select CA_default: $source"
+        default_ca_count=$((default_ca_count + 1)); (( default_ca_count == 1 )) || pki_die "Intermediate CA configuration contains duplicate default_ca settings: $source"
+      fi
+      case ${key,,} in
+        dir|certs|crl_dir|new_certs_dir|database|serial|crlnumber|private_key|certificate|crl|randfile|oid_file)
+          [[ $section == CA_default ]] || pki_die "Intermediate CA signing path '$key' must be in CA_default: $source"
+          [[ ! -v required_seen[${key,,}] ]] || pki_die "Intermediate CA configuration contains duplicate signing path '$key': $source"
+          required_seen[${key,,}]=1
+          case ${key,,} in
+            dir) expected=$INTERMEDIATE_CA_DIR ;; certs) expected="\${dir}/certs" ;; crl_dir) expected="\${dir}/crl" ;;
+            new_certs_dir) expected="\${dir}/newcerts" ;; database) expected="\${dir}/index.txt" ;; serial) expected="\${dir}/serial" ;;
+            crlnumber) expected="\${dir}/crlnumber" ;; private_key) expected="\${dir}/private/intermediate-ca.key" ;;
+            certificate) expected="\${dir}/certs/intermediate-ca.crt" ;; crl) expected="\${dir}/crl/intermediate-ca.crl" ;;
+            randfile) expected="\${dir}/private/.rand" ;; oid_file) pki_die "Intermediate CA configuration must not use oid_file during staged signing: $source" ;;
+          esac
+          value=${value//\$dir/\$\{dir\}}
+          [[ $value == "$expected" ]] || pki_die "Intermediate CA signing path '$key' escapes the managed CA directory: $source"
+          [[ ${key,,} != dir || -z $destination ]] || line="dir = $STAGE_INT_DIR"
+          ;;
+      esac
+      if [[ $section == CA_default ]]; then
+        case ${key,,} in
+          dir|certs|crl_dir|new_certs_dir|database|serial|crlnumber|private_key|certificate|crl|randfile|oid_file) ;;
+          default_md) [[ $value == sha384 ]] || pki_die "Intermediate CA configuration has an unsafe default_md: $source" ;;
+          policy) [[ $value == policy_platform ]] || pki_die "Intermediate CA configuration has an unsafe policy section: $source" ;;
+          email_in_dn) [[ $value == no ]] || pki_die "Intermediate CA configuration has an unsafe email_in_dn setting: $source" ;;
+          copy_extensions) [[ $value == none ]] || pki_die "Intermediate CA configuration has an unsafe copy_extensions setting: $source" ;;
+          unique_subject) [[ $value == no ]] || pki_die "Intermediate CA configuration has an unsafe unique_subject setting: $source" ;;
+          *) pki_die "Intermediate CA configuration contains unsupported CA_default directive '$key': $source" ;;
+        esac
+      elif [[ -z $section ]]; then pki_die "Intermediate CA configuration contains a global directive '$key': $source"; fi
+    fi
+    [[ -z $destination ]] || printf '%s\n' "$line" >>"$destination"
+  done <"$source"
+  [[ $ca_sections -eq 1 && $ca_default_sections -eq 1 && $default_ca_count -eq 1 ]] || pki_die "Intermediate CA configuration is missing the required ca signing contract: $source"
+  for key in dir certs crl_dir new_certs_dir database serial private_key certificate; do
+    [[ -v required_seen[$key] ]] || pki_die "Intermediate CA configuration is missing signing path '$key': $source"
+  done
+}
+
+snapshot_destinations() {
+  local i destination
+  EXPECTED_STATES=()
+  for i in "${!DESTINATIONS[@]}"; do
+    destination=${DESTINATIONS[i]}
+    if [[ -e $destination || -L $destination ]]; then
+      EXPECTED_STATES[i]="present:$(stat -c '%d:%i' "$destination")" || pki_die "Cannot snapshot renewal destination identity: $destination"
+    else EXPECTED_STATES[i]=absent; fi
+  done
+}
+
+require_snapshot() {
+  local i=$1 destination=${DESTINATIONS[$1]} expected=${EXPECTED_STATES[$1]} current
+  if [[ -e $destination || -L $destination ]]; then
+    [[ $expected == present:* ]] || pki_die "Renewal destination appeared after validation; refusing to overwrite: $destination"
+    [[ -f $destination && ! -L $destination ]] || pki_die "Renewal destination type changed after validation: $destination"
+    current=$(stat -c '%d:%i' "$destination") || pki_die "Cannot recheck renewal destination identity: $destination"
+    [[ $current == "${expected#present:}" ]] || pki_die "Renewal destination identity changed after validation: $destination"
+  else [[ $expected == absent ]] || pki_die "Renewal destination disappeared after validation: $destination"; fi
+}
+
+require_archive_snapshot() {
+  local current
+  if [[ -e $ARCHIVE_ROOT || -L $ARCHIVE_ROOT ]]; then
+    [[ $ARCHIVE_ROOT_STATE == present:* && -d $ARCHIVE_ROOT && ! -L $ARCHIVE_ROOT ]] || pki_die "Service archive root changed after validation: $ARCHIVE_ROOT"
+    current=$(stat -c '%d:%i' "$ARCHIVE_ROOT") || pki_die "Cannot recheck service archive root identity: $ARCHIVE_ROOT"
+    [[ $current == "${ARCHIVE_ROOT_STATE#present:}" ]] || pki_die "Service archive root identity changed after validation: $ARCHIVE_ROOT"
+  else [[ $ARCHIVE_ROOT_STATE == absent ]] || pki_die "Service archive root disappeared after validation: $ARCHIVE_ROOT"; fi
+}
+
+restore_transaction() {
+  local i destination current rollback_status=0
+  for ((i = ${#DESTINATIONS[@]} - 1; i >= 0; i--)); do
+    [[ ${PUBLISHED[i]:-false} == true ]] || continue
+    destination=${DESTINATIONS[i]}
+    if [[ -e $destination || -L $destination ]]; then
+      if [[ ! -f $destination || -L $destination ]] || ! current=$(stat -c '%d:%i' "$destination") || [[ $current != "${PUBLISHED_IDENTITIES[i]}" ]]; then
+        printf '[ERROR] Published renewal destination identity changed; preserving it and transaction staging: %s\n' "$destination" >&2
+        rollback_status=1; continue
+      fi
+      rm -f -- "$destination" || { rollback_status=1; continue; }
+    fi
+    [[ ${ORIGINALS[i]} != true ]] || ln -- "${BACKUPS[i]}" "$destination" || rollback_status=1
+  done
+  return "$rollback_status"
+}
+
+restore_archive_container() {
+  local current
+  if [[ -e $ARCHIVE_DIR || -L $ARCHIVE_DIR ]]; then
+    if [[ ! -d $ARCHIVE_DIR || -L $ARCHIVE_DIR ]] || ! current=$(stat -c '%d:%i' "$ARCHIVE_DIR") || [[ $current != "$ARCHIVE_DIR_IDENTITY" ]]; then
+      printf '[ERROR] Renewal archive destination identity changed; preserving it and transaction staging: %s\n' "$ARCHIVE_DIR" >&2
+      return 1
+    fi
+    rmdir "$ARCHIVE_DIR" || {
+      printf '[ERROR] Renewal archive destination contains foreign state; preserving it and transaction staging: %s\n' "$ARCHIVE_DIR" >&2
+      return 1
+    }
+  fi
+  if [[ $ARCHIVE_ROOT_STATE == present:* ]]; then
+    require_archive_snapshot || return 1
+    touch -r "$ARCHIVE_ROOT_REFERENCE" "$ARCHIVE_ROOT" || return 1
+  fi
+}
+
+finish_renewal() {
+  local status=$? cleanup_status=0 i
+  trap - EXIT; trap '' HUP INT TERM
+  [[ -z ${INVENTORY_TMP_DIR:-} ]] || { rm -rf -- "$INVENTORY_TMP_DIR" || cleanup_status=1; INVENTORY_TMP_DIR=''; }
+  if [[ ${TRANSACTION_ACTIVE:-false} == true && ${TRANSACTION_COMMITTED:-false} != true ]]; then restore_transaction || cleanup_status=1; fi
+  if (( cleanup_status != 0 )); then
+    printf '[ERROR] Failed to restore service renewal transaction; preserved staging and locks for recovery: %s\n' "${STAGE_DIR:-unknown}" >&2
+    exit 1
+  fi
+  if [[ ${TRANSACTION_COMMITTED:-false} != true ]]; then
+    [[ -z ${ARCHIVE_DIR_IDENTITY:-} ]] || restore_archive_container || cleanup_status=1
+    if (( cleanup_status == 0 )); then
+      for ((i = ${#CREATED_DIRS[@]} - 1; i >= 0; i--)); do rmdir "${CREATED_DIRS[i]}" 2>/dev/null || cleanup_status=1; done
+    fi
+  fi
+  if (( cleanup_status != 0 )); then
+    printf '[ERROR] Failed to clean up service renewal transaction; preserved staging and locks for recovery: %s\n' "${STAGE_DIR:-unknown}" >&2
+    exit 1
+  fi
+  [[ -z ${STAGE_DIR:-} ]] || rm -rf -- "$STAGE_DIR" || cleanup_status=1
+  [[ ${INTERMEDIATE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INTERMEDIATE_LOCK" 2>/dev/null || cleanup_status=1
+  [[ ${ROOT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$ROOT_LOCK" 2>/dev/null || cleanup_status=1
+  (( cleanup_status == 0 )) || status=1
+  exit "$status"
+}
+
+publish_transaction() {
+  local i source destination backup source_identity
+  BACKUPS=(); ORIGINALS=(); PUBLISHED=(); PUBLISHED_IDENTITIES=()
+  for i in "${!DESTINATIONS[@]}"; do
+    destination=${DESTINATIONS[i]}; require_snapshot "$i"
+    if [[ -e $destination ]]; then backup="$STAGE_DIR/backup-$i"; cp -p -- "$destination" "$backup"; BACKUPS[i]=$backup; ORIGINALS[i]=true
+    else BACKUPS[i]=''; ORIGINALS[i]=false; fi
+  done
+  TRANSACTION_ACTIVE=true
+  for i in "${!DESTINATIONS[@]}"; do
+    source=${SOURCES[i]}; destination=${DESTINATIONS[i]}; require_snapshot "$i"
+    if [[ $i -eq $FIRST_ARCHIVE_INDEX ]]; then
+      require_archive_snapshot
+      if [[ ! -d $ARCHIVE_ROOT ]]; then mkdir -m 700 -- "$ARCHIVE_ROOT"; CREATED_DIRS+=("$ARCHIVE_ROOT"); fi
+      mkdir -m 700 -- "$ARCHIVE_DIR" || pki_die "Service archive destination appeared during publication: $ARCHIVE_DIR"
+      ARCHIVE_DIR_IDENTITY=$(stat -c '%d:%i' "$ARCHIVE_DIR") || pki_die "Cannot inspect renewal archive destination identity: $ARCHIVE_DIR"
+    fi
+    source_identity=$(stat -c '%d:%i' "$source") || pki_die "Cannot inspect staged renewal state identity: $source"
+    if [[ ${REPLACE[i]} == true ]]; then mv -f -- "$source" "$destination" || pki_die "Failed to publish renewal state: $destination"
+    else ln -- "$source" "$destination" || pki_die "Renewal state appeared during publication; refusing to overwrite: $destination"; rm -f -- "$source"; fi
+    PUBLISHED[i]=true; PUBLISHED_IDENTITIES[i]=$source_identity
+  done
+}
+
+SERVICE=${args[service]}
+NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
+PKI_DIR=${args[--pki-dir]:-}
+DAYS_OVERRIDE=${args[--days]:-}
+INTERMEDIATE_PASS_FILE=${args[--intermediate-pass-file]:-}
+ROTATE_KEY=false; [[ -v args[--rotate-key] ]] && ROTATE_KEY=true
+pki_validate_service_name "$SERVICE"
+[[ -z $DAYS_OVERRIDE ]] || pki_validate_days "$DAYS_OVERRIDE"
+NAMESPACE=$(pki_expand_path "$NAMESPACE"); PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}; PKI_DIR=$(pki_expand_path "$PKI_DIR")
+pki_validate_openssl_config_value 'PKI directory' "$PKI_DIR"
+if [[ -n $INTERMEDIATE_PASS_FILE ]]; then INTERMEDIATE_PASS_FILE=$(pki_expand_path "$INTERMEDIATE_PASS_FILE"); pki_require_pass_file "$INTERMEDIATE_PASS_FILE"; fi
+pki_require_cmd openssl
+
+ROOT_CA_DIR="$PKI_DIR/root-ca"; INTERMEDIATE_CA_DIR="$PKI_DIR/intermediate-ca"; SERVICES_DIR="$PKI_DIR/services"
+SERVICE_DIR=$(pki_service_dir "$SERVICE"); KEY=$(pki_service_key "$SERVICE"); CSR="$SERVICE_DIR/csr/tls.csr"
+CERT=$(pki_service_cert "$SERVICE"); CHAIN=$(pki_service_chain "$SERVICE"); FULLCHAIN=$(pki_service_fullchain "$SERVICE")
+CONF="$SERVICE_DIR/openssl.cnf"; ROOT_CERT=$(pki_root_cert); INT_KEY=$(pki_intermediate_key); INT_CERT=$(pki_intermediate_cert)
+INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"; INVENTORY=$(pki_inventory_file); VERIFY_TOOL="$SCRIPT_DIR/platform-pki-service-verify"
+DNS_FILE=''; IPS_FILE=''
+
+validate_renewal_state() {
+  local specification label sidecar
+  pki_require_no_symlink_path_components "$NAMESPACE" 'Namespace'; pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
+  require_trusted_ancestors "$(dirname -- "$INVENTORY")" 'Service inventory'; pki_require_pki_dir
+  for specification in "$PKI_DIR|PKI directory" "$ROOT_CA_DIR|Root CA directory" "$ROOT_CA_DIR/certs|Root CA certificate directory" "$INTERMEDIATE_CA_DIR|Intermediate CA directory" "$INTERMEDIATE_CA_DIR/private|Intermediate CA private directory" "$INTERMEDIATE_CA_DIR/certs|Intermediate CA certificate directory" "$INTERMEDIATE_CA_DIR/newcerts|Intermediate CA new-certificates directory" "$PKI_DIR/inventory|Service inventory directory" "$SERVICES_DIR|Services directory"; do require_private_dir "${specification%%|*}" "${specification#*|}"; done
+  [[ -e $SERVICE_DIR || -L $SERVICE_DIR ]] && require_private_dir "$SERVICE_DIR" 'Service directory'
+  for specification in private csr certs chain archive; do [[ ! -e $SERVICE_DIR/$specification && ! -L $SERVICE_DIR/$specification ]] || require_private_dir "$SERVICE_DIR/$specification" "Service $specification directory"; done
+  for specification in "$INVENTORY|Service inventory|false" "$ROOT_CERT|Root CA certificate|false" "$INT_KEY|Intermediate CA key|true" "$INT_CERT|Intermediate CA certificate|false" "$INT_CONF|Intermediate CA configuration|true" "$INTERMEDIATE_CA_DIR/index.txt|Intermediate CA index|true" "$INTERMEDIATE_CA_DIR/index.txt.attr|Intermediate CA index attributes|true" "$INTERMEDIATE_CA_DIR/serial|Intermediate CA serial|true" "$INTERMEDIATE_CA_DIR/crlnumber|Intermediate CA CRL number|true" "$KEY|Service private key|true" "$CSR|Service CSR|true" "$CERT|Service certificate|false" "$CHAIN|Service chain|false" "$FULLCHAIN|Service full chain|false" "$CONF|Service configuration|true"; do label=${specification#*|}; require_safe_file "${specification%%|*}" "${label%|*}" "${specification##*|}"; done
+  for sidecar in index.txt.old index.txt.attr.old serial.old; do require_safe_file "$INTERMEDIATE_CA_DIR/$sidecar" "Intermediate CA $sidecar" true; done
+  for specification in "$INVENTORY" "$ROOT_CERT" "$INT_KEY" "$INT_CERT" "$INT_CONF" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/crlnumber"; do pki_require_file "$specification"; done
+  process_intermediate_signing_config "$INT_CONF"
+  [[ -f $VERIFY_TOOL && ! -L $VERIFY_TOOL ]] || pki_die "Service verification command is missing or unsafe: $VERIFY_TOOL"
+  [[ -f $KEY ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
+  pki_require_service_in_inventory "$SERVICE"; COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name); [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
+  DAYS=$DAYS_OVERRIDE; [[ -n $DAYS ]] || DAYS=$(pki_inventory_scalar "$SERVICE" days); DAYS=${DAYS:-${PLATFORM_PKI_SERVICE_DAYS:-397}}; pki_validate_days "$DAYS"
+  : >"$DNS_FILE"; : >"$IPS_FILE"; pki_inventory_array "$SERVICE" dns >"$DNS_FILE"; pki_inventory_array "$SERVICE" ips >"$IPS_FILE"
+  [[ -s $DNS_FILE || -s $IPS_FILE ]] || pki_die "Service must define at least one DNS or IP SAN: $SERVICE"
+  pki_validate_service_inventory_values "$SERVICE" "$COMMON_NAME" "$DNS_FILE" "$IPS_FILE"
+  ISSUED_SERIAL=$(<"$INTERMEDIATE_CA_DIR/serial"); [[ $ISSUED_SERIAL =~ ^[0-9A-Fa-f]+$ ]] || pki_die "Intermediate CA serial is invalid: $ISSUED_SERIAL"
+  (( ${#ISSUED_SERIAL} >= 2 && ${#ISSUED_SERIAL} % 2 == 0 )) || pki_die "Intermediate CA serial must contain an even number of hexadecimal digits: $ISSUED_SERIAL"
+  ISSUED_SERIAL=$(canonicalize_openssl_serial "$ISSUED_SERIAL"); INT_NEWCERT="$INTERMEDIATE_CA_DIR/newcerts/$ISSUED_SERIAL.pem"
+  require_safe_file "$INT_NEWCERT" 'Intermediate CA issued-certificate destination' false
+  [[ ! -e $INT_NEWCERT && ! -L $INT_NEWCERT ]] || pki_die "Intermediate CA issued-certificate destination already exists: $INT_NEWCERT"
+}
+
+ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock)
+ROOT_LOCK_HELD=false; INTERMEDIATE_LOCK_HELD=false; STAGE_DIR=''; ARCHIVE_DIR=''; ARCHIVE_DIR_IDENTITY=''; INVENTORY_TMP_DIR=''
+TRANSACTION_ACTIVE=false; TRANSACTION_COMMITTED=false; DESTINATIONS=(); SOURCES=(); REPLACE=(); EXPECTED_STATES=(); CREATED_DIRS=()
+ARCHIVE_SOURCES=(); ARCHIVE_NAMES=()
+trap finish_renewal EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+umask 077
+INVENTORY_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-service-renew.XXXXXX") || pki_die 'Cannot create inventory staging directory'
+DNS_FILE="$INVENTORY_TMP_DIR/dns"; IPS_FILE="$INVENTORY_TMP_DIR/ips"; : >"$DNS_FILE"; : >"$IPS_FILE"
+validate_renewal_state
+pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
+pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
+validate_renewal_state
+
+for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DIR/certs" "$SERVICE_DIR/chain"; do
+  if [[ ! -e $dir ]]; then mkdir -m 700 -- "$dir" || pki_die "Cannot create service directory: $dir"; CREATED_DIRS+=("$dir"); fi
+done
+ARCHIVE_ROOT="$SERVICE_DIR/archive"; archive_base="$ARCHIVE_ROOT/$(date -u '+%Y%m%d-%H%M%S')"; ARCHIVE_DIR=$archive_base; archive_n=1
+while [[ -e $ARCHIVE_DIR || -L $ARCHIVE_DIR ]]; do ARCHIVE_DIR=$(printf '%s-%02d' "$archive_base" "$archive_n"); archive_n=$((archive_n + 1)); done
+if [[ -e $ARCHIVE_ROOT || -L $ARCHIVE_ROOT ]]; then ARCHIVE_ROOT_STATE="present:$(stat -c '%d:%i' "$ARCHIVE_ROOT")"; else ARCHIVE_ROOT_STATE=absent; fi
+
+DESTINATIONS=("$CONF" "$CSR" "$CERT" "$CHAIN" "$FULLCHAIN" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/index.txt.old" "$INTERMEDIATE_CA_DIR/index.txt.attr.old" "$INTERMEDIATE_CA_DIR/serial.old" "$INT_NEWCERT")
+REPLACE=(true true true true true true true true true true true false)
+[[ $ROTATE_KEY != true ]] || { DESTINATIONS+=("$KEY"); REPLACE+=(true); }
+FIRST_ARCHIVE_INDEX=${#DESTINATIONS[@]}
+ARCHIVE_MARKER="$ARCHIVE_DIR/.platform-pki-renew-archive"
+DESTINATIONS+=("$ARCHIVE_MARKER"); REPLACE+=(false)
+archive_candidates=("$CERT|tls.crt" "$CSR|tls.csr" "$CHAIN|ca-chain.crt" "$FULLCHAIN|fullchain.crt" "$CONF|openssl.cnf")
+[[ $ROTATE_KEY != true ]] || archive_candidates+=("$KEY|tls.key")
+for specification in "${archive_candidates[@]}"; do
+  [[ -e ${specification%%|*} ]] || continue
+  ARCHIVE_SOURCES+=("${specification%%|*}"); ARCHIVE_NAMES+=("${specification#*|}")
+done
+for i in "${!ARCHIVE_SOURCES[@]}"; do
+  DESTINATIONS+=("$ARCHIVE_DIR/${ARCHIVE_NAMES[i]}"); REPLACE+=(false)
+done
+snapshot_destinations
+
+STAGE_DIR=$(mktemp -d "$INTERMEDIATE_CA_DIR/.platform-pki-service-renew.XXXXXX") || pki_die 'Cannot create service renewal staging directory'
+STAGE_INT_DIR="$STAGE_DIR/intermediate-ca"; STAGE_SERVICE_DIR="$STAGE_DIR/service"; STAGE_ARCHIVE_DIR="$STAGE_DIR/archive"
+mkdir -m 700 "$STAGE_INT_DIR" "$STAGE_INT_DIR/private" "$STAGE_INT_DIR/certs" "$STAGE_INT_DIR/crl" "$STAGE_INT_DIR/newcerts" "$STAGE_SERVICE_DIR" "$STAGE_ARCHIVE_DIR"
+: >"$STAGE_ARCHIVE_DIR/.platform-pki-renew-archive"
+ARCHIVE_ROOT_REFERENCE="$STAGE_DIR/archive-root-reference"
+[[ $ARCHIVE_ROOT_STATE != present:* ]] || touch -r "$ARCHIVE_ROOT" "$ARCHIVE_ROOT_REFERENCE"
+cp -p -- "$INT_KEY" "$STAGE_INT_DIR/private/intermediate-ca.key"; cp -p -- "$INT_CERT" "$STAGE_INT_DIR/certs/intermediate-ca.crt"
+for file in index.txt index.txt.attr serial crlnumber; do cp -p -- "$INTERMEDIATE_CA_DIR/$file" "$STAGE_INT_DIR/$file"; done
+process_intermediate_signing_config "$INT_CONF" "$STAGE_INT_DIR/openssl.cnf"; chmod 600 "$STAGE_INT_DIR/openssl.cnf"
+STAGE_KEY="$STAGE_SERVICE_DIR/tls.key"; STAGE_CSR="$STAGE_SERVICE_DIR/tls.csr"; STAGE_CERT="$STAGE_SERVICE_DIR/tls.crt"
+STAGE_CHAIN="$STAGE_SERVICE_DIR/ca-chain.crt"; STAGE_FULLCHAIN="$STAGE_SERVICE_DIR/fullchain.crt"; STAGE_CONF="$STAGE_SERVICE_DIR/openssl.cnf"
+if [[ $ROTATE_KEY == true ]]; then openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$STAGE_KEY"
+else cp -p -- "$KEY" "$STAGE_KEY"; pki_info "Reusing existing service private key: $KEY"; fi
+chmod 600 "$STAGE_KEY"; pki_write_service_config "$STAGE_CONF" "$COMMON_NAME" "$DNS_FILE" "$IPS_FILE"; chmod 600 "$STAGE_CONF"
+openssl req -config "$STAGE_CONF" -key "$STAGE_KEY" -new -sha384 -out "$STAGE_CSR"; chmod 600 "$STAGE_CSR"
+CA_CMD=(openssl ca -batch -config "$STAGE_INT_DIR/openssl.cnf" -extfile "$STAGE_CONF" -extensions server_cert -days "$DAYS" -notext -md sha384 -in "$STAGE_CSR" -out "$STAGE_CERT")
+[[ -z $INTERMEDIATE_PASS_FILE ]] || CA_CMD+=(-passin "file:$INTERMEDIATE_PASS_FILE")
+"${CA_CMD[@]}"; chmod 644 "$STAGE_CERT"; cat "$INT_CERT" "$ROOT_CERT" >"$STAGE_CHAIN"; cat "$STAGE_CERT" "$INT_CERT" >"$STAGE_FULLCHAIN"; chmod 644 "$STAGE_CHAIN" "$STAGE_FULLCHAIN"
+SOURCES=("$STAGE_CONF" "$STAGE_CSR" "$STAGE_CERT" "$STAGE_CHAIN" "$STAGE_FULLCHAIN" "$STAGE_INT_DIR/index.txt" "$STAGE_INT_DIR/index.txt.attr" "$STAGE_INT_DIR/serial" "$STAGE_INT_DIR/index.txt.old" "$STAGE_INT_DIR/index.txt.attr.old" "$STAGE_INT_DIR/serial.old" "$STAGE_INT_DIR/newcerts/$ISSUED_SERIAL.pem")
+[[ $ROTATE_KEY != true ]] || SOURCES+=("$STAGE_KEY")
+SOURCES+=("$STAGE_ARCHIVE_DIR/.platform-pki-renew-archive")
+for i in "${!ARCHIVE_SOURCES[@]}"; do
+  cp -p -- "${ARCHIVE_SOURCES[i]}" "$STAGE_ARCHIVE_DIR/${ARCHIVE_NAMES[i]}"
+  SOURCES+=("$STAGE_ARCHIVE_DIR/${ARCHIVE_NAMES[i]}")
+done
+publish_transaction
+bash "$VERIFY_TOOL" "$SERVICE" --pki-dir "$PKI_DIR"
+rm -f -- "$ARCHIVE_MARKER"
+TRANSACTION_COMMITTED=true; TRANSACTION_ACTIVE=false
+for i in "${!ARCHIVE_SOURCES[@]}"; do
+  pki_info "Archived ${ARCHIVE_SOURCES[i]} to $ARCHIVE_DIR/${ARCHIVE_NAMES[i]}"
+done
+[[ $ROTATE_KEY != true ]] || pki_warn "Rotated service private key: $KEY"
+pki_ok "Renewed service certificate: $CERT"

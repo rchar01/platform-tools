@@ -246,6 +246,11 @@ key unless `--rotate-key` is requested, and transactionally publishes service
 artifacts with the intermediate CA database only after successful signing and
 verification.
 
+Service renewal requires an existing private key, reuses it unless
+`--rotate-key` is requested, and archives previous service material while
+transactionally replacing the certificate and intermediate CA database. Both
+operations hold ordered root and intermediate CA locks through verification.
+
 `platform-pki-root-create` generates its key and certificate in private staging
 before publishing them. Existing root material is refused unless `--force` is
 used; forced generation or publication failures and handled interruptions

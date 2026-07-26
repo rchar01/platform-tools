@@ -340,6 +340,16 @@ Rotate the service private key explicitly when needed:
 platform-pki-service-renew platform-example --rotate-key
 ```
 
+Renewal requires existing service private-key state and validates inventory,
+CA state, path ancestry, file ownership, modes, links, and the closed OpenSSL
+signing contract before mutation. It holds root and intermediate operation
+locks in that order while signing against staged CA state, archiving previous
+service files, publishing replacements, and verifying the result. Signing,
+publication, verification, and handled signal failures restore the CA database,
+service key, certificate files, and archive state. If a published destination
+is replaced by foreign state during recovery, that state and the locked staging
+directory are preserved for manual recovery rather than overwritten.
+
 The renew command does not deploy anything to remote hosts. Deployment belongs in `platform-config`.
 
 ## Print Certificate Details

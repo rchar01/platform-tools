@@ -14,6 +14,7 @@ This file gives a short, release-oriented view of what changed between versions.
 - Migrated `platform-pki-root-create` with staged, guarded root CA replacement.
 - Migrated `platform-pki-intermediate-create` with staged intermediate material, missing database initialization, root CA database updates, and ordered CA operation locks.
 - Migrated `platform-pki-service-issue` with transactional service and intermediate CA publication, ordered operation locks, and rollback-safe verification.
+- Migrated `platform-pki-service-renew` with transactional archival, service and intermediate CA replacement, ordered operation locks, and rollback-safe verification.
 - Migrated and hardened `platform-ssh-init` with generated parsing, strict config loading, safe key and SSH-config path checks, no-clobber public-key reconstruction, key reuse, SSH config output, and controlled access testing.
 - `platform-config-init` now provides generated, consistent help and repository version output through `--help` and `--version`.
 - `platform-vm-env-collect` now uses the same generated help, version, and environment validation conventions.
