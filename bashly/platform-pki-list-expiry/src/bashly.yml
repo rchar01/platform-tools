@@ -1,0 +1,39 @@
+name: platform-pki-list-expiry
+help: List expiry dates for generated service certificates
+version: platform-pki-list-expiry <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --warn-days
+  arg: days
+  help: Warning threshold
+  default: "90"
+  validate: days
+- long: --critical-days
+  arg: days
+  help: Critical threshold
+  default: "30"
+  validate: days
+
+examples:
+- platform-pki-list-expiry
+- platform-pki-list-expiry --warn-days 90 --critical-days 30
+
+footer: |-
+  The namespace defaults to platform-infrastructure under the XDG
+  configuration home. The PKI directory defaults to <namespace>/pki.
+
+  Certificate status exit codes:
+    0 all OK
+    1 warning threshold reached
+    2 critical threshold reached
+    3 generated certificate missing
+
+  Parser and configuration errors exit 1.

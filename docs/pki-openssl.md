@@ -319,9 +319,14 @@ Exit codes:
 | Code | Meaning |
 | --- | --- |
 | `0` | All certificates are OK. |
-| `1` | At least one certificate is within the warning threshold. |
+| `1` | Warning threshold reached, or a parser/configuration error occurred. |
 | `2` | At least one certificate is within the critical threshold. |
-| `3` | Script/config error or missing generated certificate. |
+| `3` | A generated certificate is missing. |
+
+The shared generated CLI contract uses status 1 for parser and configuration
+errors. Inspect stderr to distinguish those errors from a warning report.
+Missing status 3 takes precedence when other certificates are warning or
+critical.
 
 ## Safety Rules
 

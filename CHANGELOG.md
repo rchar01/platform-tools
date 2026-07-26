@@ -19,6 +19,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Migrated `platform-config-init` argument parsing and help generation to Bashly while preserving namespace creation, permissions, existing-file handling, and legacy-path warnings.
 - Migrated `platform-vm-env-collect` CLI and environment validation to Bashly while preserving report format version `1.1.0`, collection, redaction, and archive behavior.
 - Migrated `platform-pki-print-cert` parsing and help generation to Bashly while preserving external PKI library discovery and certificate detail output.
+- Migrated `platform-pki-list-expiry` parsing, help, and threshold validation to Bashly, and fixed missing-certificate status 3 being overwritten by a later critical status.
 
 ## [1.3.0] - 2026-07-10
 
