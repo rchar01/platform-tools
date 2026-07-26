@@ -197,6 +197,10 @@ platform-pki-service-issue \
 platform-pki-service-verify platform-example
 ```
 
+Use `--min-days` to set the required remaining validity. Verification checks
+chain trust, the private-key match, certificate purpose, inventory SANs, and
+remaining lifetime.
+
 Generated files:
 
 ```text

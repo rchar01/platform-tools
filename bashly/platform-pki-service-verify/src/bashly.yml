@@ -1,0 +1,31 @@
+name: platform-pki-service-verify
+help: Verify a generated service certificate
+version: platform-pki-service-verify <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+args:
+- name: service
+  help: Inventory service name
+  required: true
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --min-days
+  arg: days
+  help: Required remaining validity
+  default: "30"
+  validate: days
+
+examples:
+- platform-pki-service-verify platform-example
+- platform-pki-service-verify platform-example --min-days 60
+
+footer: |-
+  Verifies chain trust, private-key match, CA:false, serverAuth, inventory
+  SANs, and remaining validity. The PKI directory defaults to <namespace>/pki.
