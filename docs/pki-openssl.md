@@ -297,7 +297,15 @@ Output layout:
 ```
 
 The export directory contains service private keys and must stay outside Git.
-Custom `--export-dir` values must be absolute paths. Existing export path components must be owned by the current user or root, must not be unsafe writable directories, and must not contain symlink components. The immediate export parent must already exist, be owned by the current user, and must not be group- or world-writable. The helper creates a fresh private export tree and writes files through temporary files before renaming them into place.
+Custom `--export-dir` values must be absolute paths. Existing export path components must be owned by the current user or root, must not be unsafe writable directories, and must not contain symlink components. The immediate export parent must already exist, be owned by the current user, and must not be group- or world-writable. The helper creates a fresh private export tree and publishes temporary files with exact-target, no-clobber hard links.
+
+An export inside the PKI tree must stay under its `export/` directory. Forced
+replacement of an existing custom export requires the marker written by this
+version of the helper; the default `export/ansible` path remains compatible
+with exports created by earlier versions.
+
+Use `platform-pki-export-ansible --help` for generated option details and
+`platform-pki-export-ansible --version` for the installed version.
 
 ## Back Up PKI State
 

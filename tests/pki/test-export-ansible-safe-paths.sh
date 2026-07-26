@@ -5,17 +5,39 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 TMP_DIR=$(mktemp -d)
 EXEC_TMP_DIR=$(mktemp -d "$ROOT_DIR/.test-export-ansible.XXXXXX")
 trap 'rm -rf "$TMP_DIR" "$EXEC_TMP_DIR"' EXIT HUP INT TERM
+VERSION=$(<"$ROOT_DIR/VERSION")
+
+if ! "$ROOT_DIR/bin/platform-pki-export-ansible" --help \
+  >"$TMP_DIR/help.out" 2>"$TMP_DIR/help.err"; then
+  printf '%s\n' 'export help failed' >&2
+  exit 1
+fi
+grep -q 'Usage:' "$TMP_DIR/help.out"
+grep -q 'platform-pki-export-ansible --version | -v' "$TMP_DIR/help.out"
+[[ ! -s $TMP_DIR/help.err ]] || { printf '%s\n' 'export help wrote stderr' >&2; exit 1; }
+
+if [[ $("$ROOT_DIR/bin/platform-pki-export-ansible" --version) != \
+  "platform-pki-export-ansible $VERSION" ]]; then
+  printf '%s\n' 'unexpected export version output' >&2
+  exit 1
+fi
+
+literal_service="platform-\$(touch $TMP_DIR/eval-injected)"
+if "$ROOT_DIR/bin/platform-pki-export-ansible" "$literal_service" \
+  >"$TMP_DIR/literal.out" 2>&1; then
+  printf '%s\n' 'export accepted an invalid literal service' >&2
+  exit 1
+fi
+grep -q 'Invalid service name:' "$TMP_DIR/literal.out"
+[[ ! -e $TMP_DIR/eval-injected ]] || { printf '%s\n' 'service value executed shell content' >&2; exit 1; }
 
 create_generated_pki_tree() {
   local pki_dir=$1
-  local service=platform-example
+  local service
 
   mkdir -p \
     "$pki_dir/inventory" \
     "$pki_dir/root-ca/certs" \
-    "$pki_dir/services/$service/private" \
-    "$pki_dir/services/$service/certs" \
-    "$pki_dir/services/$service/chain" \
     "$pki_dir/export/ansible"
   chmod 700 "$(dirname -- "$pki_dir")"
   chmod 700 "$pki_dir" "$pki_dir/export" "$pki_dir/export/ansible"
@@ -23,12 +45,19 @@ create_generated_pki_tree() {
 services:
   platform-example:
     common_name: platform-example.internal
+  platform-second:
+    common_name: platform-second.internal
 YAML
   printf '%s\n' 'root certificate' >"$pki_dir/root-ca/certs/root-ca.crt"
-  printf '%s\n' 'service certificate' >"$pki_dir/services/$service/certs/tls.crt"
-  printf '%s\n' 'service private key' >"$pki_dir/services/$service/private/tls.key"
-  printf '%s\n' 'ca chain' >"$pki_dir/services/$service/chain/ca-chain.crt"
-  printf '%s\n' 'full chain' >"$pki_dir/services/$service/chain/fullchain.crt"
+  for service in platform-example platform-second; do
+    mkdir -p "$pki_dir/services/$service/private" \
+      "$pki_dir/services/$service/certs" \
+      "$pki_dir/services/$service/chain"
+    printf '%s\n' "$service certificate" >"$pki_dir/services/$service/certs/tls.crt"
+    printf '%s\n' "$service private key" >"$pki_dir/services/$service/private/tls.key"
+    printf '%s\n' "$service ca chain" >"$pki_dir/services/$service/chain/ca-chain.crt"
+    printf '%s\n' "$service full chain" >"$pki_dir/services/$service/chain/fullchain.crt"
+  done
 }
 
 assert_mode() {
@@ -82,7 +111,193 @@ assert_mode "$pki_dir/export/ansible/services" 700
 assert_mode "$pki_dir/export/ansible/services/platform-example" 700
 assert_mode "$pki_dir/export/ansible/services/platform-example/tls.key" 600
 assert_mode "$pki_dir/export/ansible/services/platform-example/tls.crt" 644
-assert_file_content "$pki_dir/export/ansible/services/platform-example/tls.key" 'service private key'
+assert_file_content "$pki_dir/export/ansible/services/platform-example/tls.key" 'platform-example private key'
+[[ -f $pki_dir/export/ansible/services/platform-second/tls.key ]] || { printf '%s\n' 'default export omitted generated second service' >&2; exit 1; }
+
+selected_export="$pki_dir/export/selected"
+"$ROOT_DIR/bin/platform-pki-export-ansible" \
+  platform-example platform-second \
+  --pki-dir "$pki_dir" --export-dir "$selected_export" >/dev/null
+[[ -f $selected_export/services/platform-example/tls.key ]] || { printf '%s\n' 'explicit export omitted first service' >&2; exit 1; }
+[[ -f $selected_export/services/platform-second/tls.key ]] || { printf '%s\n' 'explicit export omitted second service' >&2; exit 1; }
+"$ROOT_DIR/bin/platform-pki-export-ansible" \
+  platform-example platform-second --pki-dir "$pki_dir" \
+  --export-dir "$selected_export" --force >/dev/null
+
+if "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$pki_dir" --export-dir "$pki_dir" --force \
+  >"$TMP_DIR/equal-scope.out" 2>&1; then
+  printf '%s\n' 'export accepted the PKI directory as replacement scope' >&2
+  exit 1
+fi
+grep -q 'Export directory must not equal or contain the PKI directory' \
+  "$TMP_DIR/equal-scope.out"
+[[ -f $pki_dir/inventory/services.yml ]] || { printf '%s\n' 'equal-scope check deleted PKI state' >&2; exit 1; }
+
+if "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$pki_dir" --export-dir "$(dirname -- "$pki_dir")" --force \
+  >"$TMP_DIR/ancestor-scope.out" 2>&1; then
+  printf '%s\n' 'export accepted a PKI ancestor as replacement scope' >&2
+  exit 1
+fi
+grep -q 'Export directory must not equal or contain the PKI directory' \
+  "$TMP_DIR/ancestor-scope.out"
+[[ -f $pki_dir/inventory/services.yml ]] || { printf '%s\n' 'ancestor-scope check deleted PKI state' >&2; exit 1; }
+
+if "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$pki_dir" --export-dir "$pki_dir/services" --force \
+  >"$TMP_DIR/source-scope.out" 2>&1; then
+  printf '%s\n' 'export accepted a PKI source directory as replacement scope' >&2
+  exit 1
+fi
+grep -q 'Export directory inside the PKI tree must be under its export directory' \
+  "$TMP_DIR/source-scope.out"
+[[ -f $pki_dir/services/platform-example/private/tls.key ]] || { printf '%s\n' 'source-scope check deleted private key' >&2; exit 1; }
+
+if "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$pki_dir" --export-dir "$pki_dir/export" --force \
+  >"$TMP_DIR/export-root.out" 2>&1; then
+  printf '%s\n' 'export accepted the structural PKI export root' >&2
+  exit 1
+fi
+grep -q 'Export directory must be below the PKI export directory' \
+  "$TMP_DIR/export-root.out"
+[[ -f $selected_export/services/platform-example/tls.key ]] || { printf '%s\n' 'export-root check deleted nested export' >&2; exit 1; }
+
+unmarked_export="$pki_dir/export/unmarked"
+mkdir -m 700 "$unmarked_export"
+printf '%s\n' 'unmarked sentinel' >"$unmarked_export/sentinel"
+if "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  --pki-dir "$pki_dir" --export-dir "$unmarked_export" --force \
+  >"$TMP_DIR/unmarked.out" 2>&1; then
+  printf '%s\n' 'export replaced an unmarked custom directory' >&2
+  exit 1
+fi
+grep -q 'Refusing to replace unmarked custom export directory' "$TMP_DIR/unmarked.out"
+assert_file_content "$unmarked_export/sentinel" 'unmarked sentinel'
+
+zero_pki="$TMP_DIR/zero-generated/pki"
+mkdir -p "$zero_pki/inventory" "$zero_pki/root-ca/certs" \
+  "$zero_pki/export/ansible"
+chmod 700 "$TMP_DIR/zero-generated" "$zero_pki" "$zero_pki/export" \
+  "$zero_pki/export/ansible"
+cat >"$zero_pki/inventory/services.yml" <<'YAML'
+services:
+  missing-service:
+    common_name: missing.internal
+YAML
+printf '%s\n' 'root certificate' >"$zero_pki/root-ca/certs/root-ca.crt"
+printf '%s\n' 'zero sentinel' >"$zero_pki/export/ansible/sentinel"
+if "$ROOT_DIR/bin/platform-pki-export-ansible" --pki-dir "$zero_pki" --force \
+  >"$TMP_DIR/zero.out" 2>&1; then
+  printf '%s\n' 'export accepted an inventory without generated services' >&2
+  exit 1
+fi
+grep -q 'No generated service certificates found to export' "$TMP_DIR/zero.out"
+assert_file_content "$zero_pki/export/ansible/sentinel" 'zero sentinel'
+
+copy_fail_bin="$EXEC_TMP_DIR/copy-fail-bin"
+mkdir -p "$copy_fail_bin"
+real_cp=$(command -v cp)
+cat >"$copy_fail_bin/cp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == */private/tls.key ]]; then
+  printf '%s\n' 'partial private key' >"$2"
+  exit 1
+fi
+exec "$REAL_CP" "$@"
+EOF
+chmod 755 "$copy_fail_bin/cp"
+copy_fail_export="$pki_dir/export/copy-fail"
+if REAL_CP=$real_cp PATH="$copy_fail_bin:$PATH" \
+  "$ROOT_DIR/bin/platform-pki-export-ansible" platform-example \
+  --pki-dir "$pki_dir" --export-dir "$copy_fail_export" \
+  >"$TMP_DIR/copy-fail.out" 2>&1; then
+  printf '%s\n' 'export succeeded after private-key copy failure' >&2
+  exit 1
+fi
+grep -q 'Failed to publish export file without overwriting' \
+  "$TMP_DIR/copy-fail.out"
+if find "$copy_fail_export" -name '.tls.key.tmp.*' -print -quit | grep -q .; then
+  printf '%s\n' 'failed private-key copy left a temporary file' >&2
+  exit 1
+fi
+[[ ! -e $copy_fail_export/services/platform-example/tls.key ]] || { printf '%s\n' 'failed copy published a private key' >&2; exit 1; }
+
+race_bin="$EXEC_TMP_DIR/race-bin"
+mkdir -p "$race_bin"
+real_ln=$(command -v ln)
+cat >"$race_bin/ln" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+target=${!#}
+if { [[ ${RACE_TARGET_KIND:-payload} == payload && $target == */ca/root-ca.crt ]] ||
+  [[ ${RACE_TARGET_KIND:-payload} == marker && $target == */.platform-pki-ansible-export ]]; } &&
+  [[ ! -e $RACE_MARKER ]]; then
+  case ${RACE_KIND:-file} in
+    file) printf '%s\n' 'attacker target' >"$target" ;;
+    directory) mkdir "$target" ;;
+    symlink)
+      [[ -e $RACE_VICTIM ]] || mkdir "$RACE_VICTIM"
+      "$REAL_LN" -s "$RACE_VICTIM" "$target"
+      ;;
+  esac
+  : >"$RACE_MARKER"
+fi
+exec "$REAL_LN" "$@"
+EOF
+chmod 755 "$race_bin/ln"
+race_export="$pki_dir/export/race"
+if REAL_LN=$real_ln RACE_MARKER="$TMP_DIR/race-marker" \
+  PATH="$race_bin:$PATH" "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  platform-example --pki-dir "$pki_dir" --export-dir "$race_export" \
+  >"$TMP_DIR/race.out" 2>&1; then
+  printf '%s\n' 'export overwrote a target that appeared during copy' >&2
+  exit 1
+fi
+assert_file_content "$race_export/ca/root-ca.crt" 'attacker target'
+if find "$race_export" -name '.root-ca.crt.tmp.*' -print -quit | grep -q .; then
+  printf '%s\n' 'target race left a temporary file' >&2
+  exit 1
+fi
+
+directory_race_export="$pki_dir/export/directory-race"
+if REAL_LN=$real_ln RACE_MARKER="$TMP_DIR/directory-race-marker" \
+  RACE_KIND=directory PATH="$race_bin:$PATH" \
+  "$ROOT_DIR/bin/platform-pki-export-ansible" platform-example \
+  --pki-dir "$pki_dir" --export-dir "$directory_race_export" \
+  >"$TMP_DIR/directory-race.out" 2>&1; then
+  printf '%s\n' 'export published into a raced-in target directory' >&2
+  exit 1
+fi
+[[ -d $directory_race_export/ca/root-ca.crt ]] || { printf '%s\n' 'directory race target disappeared' >&2; exit 1; }
+[[ -z $(find "$directory_race_export/ca/root-ca.crt" -mindepth 1 -print -quit) ]] || { printf '%s\n' 'directory race received exported content' >&2; exit 1; }
+
+symlink_race_export="$pki_dir/export/symlink-race"
+if REAL_LN=$real_ln RACE_MARKER="$TMP_DIR/symlink-race-marker" \
+  RACE_KIND=symlink RACE_VICTIM="$TMP_DIR/symlink-race-victim" \
+  PATH="$race_bin:$PATH" "$ROOT_DIR/bin/platform-pki-export-ansible" \
+  platform-example --pki-dir "$pki_dir" --export-dir "$symlink_race_export" \
+  >"$TMP_DIR/symlink-race.out" 2>&1; then
+  printf '%s\n' 'export published through a raced-in target symlink' >&2
+  exit 1
+fi
+[[ -L $symlink_race_export/ca/root-ca.crt ]] || { printf '%s\n' 'symlink race target disappeared' >&2; exit 1; }
+[[ -z $(find "$TMP_DIR/symlink-race-victim" -mindepth 1 -print -quit) ]] || { printf '%s\n' 'symlink race victim received exported content' >&2; exit 1; }
+
+marker_race_export="$pki_dir/export/marker-race"
+printf '%s\n' 'marker victim sentinel' >"$TMP_DIR/marker-race-victim"
+if REAL_LN=$real_ln RACE_MARKER="$TMP_DIR/marker-target-race-marker" \
+  RACE_TARGET_KIND=marker RACE_KIND=symlink \
+  RACE_VICTIM="$TMP_DIR/marker-race-victim" PATH="$race_bin:$PATH" \
+  "$ROOT_DIR/bin/platform-pki-export-ansible" platform-example \
+  --pki-dir "$pki_dir" --export-dir "$marker_race_export" \
+  >"$TMP_DIR/marker-race.out" 2>&1; then
+  printf '%s\n' 'export overwrote a raced-in marker symlink' >&2
+  exit 1
+fi
+assert_file_content "$TMP_DIR/marker-race-victim" 'marker victim sentinel'
 
 shared_parent="$TMP_DIR/shared-parent"
 shared_pki="$TMP_DIR/shared-pki/pki"
@@ -217,6 +432,6 @@ ln -s "$attacker_file" "$target_symlink_pki/export/ansible/services/platform-exa
   --force >/dev/null
 
 assert_file_content "$attacker_file" 'attacker content'
-assert_file_content "$target_symlink_pki/export/ansible/services/platform-example/tls.key" 'service private key'
+assert_file_content "$target_symlink_pki/export/ansible/services/platform-example/tls.key" 'platform-example private key'
 
 printf '%s\n' 'test-export-ansible-safe-paths.sh: ok'

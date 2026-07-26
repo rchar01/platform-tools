@@ -1,0 +1,32 @@
+name: platform-pki-export-ansible
+help: Export generated PKI files into an Ansible-consumable layout
+version: platform-pki-export-ansible <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+args:
+- name: services
+  help: Inventory service names; defaults to all generated services
+  repeatable: true
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --export-dir
+  arg: path
+  help: Export directory
+  validate: not_empty
+- long: --force
+  help: Replace an existing trusted export directory
+
+examples:
+- platform-pki-export-ansible --force
+- platform-pki-export-ansible platform-example --force
+
+footer: |-
+  The export contains service private keys. Custom export directories must be
+  absolute and pass ownership, permission, and symlink safety checks.
