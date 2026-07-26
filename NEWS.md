@@ -5,6 +5,7 @@ This file gives a short, release-oriented view of what changed between versions.
 ## Unreleased
 
 - Added `platform-proxmox-vm-snapshot` for safe, short-lived Proxmox VE 9 development snapshot creation, listing, rollback, and deletion through local execution or SSH.
+- Added a disposable-VM live-acceptance runbook for the snapshot helper.
 
 ## v1.3.0 - 2026-07-10
 

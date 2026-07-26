@@ -179,6 +179,10 @@ does not enable mutations for broader `dev`, `homelab`, or other environments;
 each still requires reconciled tags and review of its complete dry-run target
 set.
 
+Use [Proxmox VM Snapshot Live Acceptance](./proxmox-vm-snapshot-acceptance.md)
+for the repeatable disposable-VM acceptance procedure. Infrastructure
+provisioning and destruction remain owned by `platform-infra`.
+
 The helper cannot detect an intended environment VM whose environment tag is
 missing. Always compare the complete printed VMID set with Proxmox before an
 environment mutation is approved for operational use.

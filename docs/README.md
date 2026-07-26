@@ -21,6 +21,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
 - [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md): How to manage short-lived Proxmox VE 9 development snapshots safely.
+- [`proxmox-vm-snapshot-acceptance.md`](./proxmox-vm-snapshot-acceptance.md): How to run live acceptance against the isolated disposable VM environment.
 - [`handoffs/config-namespace-handoff.md`](./handoffs/config-namespace-handoff.md): Downstream ownership notes for the local secret namespace.
 - [`handoffs/tofu-ansible-handoff.md`](./handoffs/tofu-ansible-handoff.md): Example handoff that separates OpenTofu infrastructure work from Ansible guest configuration.
 
@@ -37,6 +38,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).
 - Clean up one known Proxmox VM: use [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md).
 - Manage one development VM snapshot: use [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md).
+- Validate snapshot behavior on disposable VMs: use [`proxmox-vm-snapshot-acceptance.md`](./proxmox-vm-snapshot-acceptance.md).
 
 ## Key Repo Paths
 
