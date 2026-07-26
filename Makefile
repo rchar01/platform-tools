@@ -8,9 +8,9 @@ PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
-BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-backup platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-ssh-init
+BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-backup platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-ssh-init
 
-.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -73,7 +73,7 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
+test: test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:
@@ -110,6 +110,10 @@ test-pki-root-create:
 ## Run PKI intermediate CA creation behavior tests
 test-pki-intermediate-create:
 	./tests/pki/test-intermediate-create.sh
+
+## Run PKI service certificate issuance behavior tests
+test-pki-service-issue:
+	./tests/pki/test-service-issue.sh
 
 ## Run PKI certificate printing behavior tests
 test-pki-print-cert:

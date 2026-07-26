@@ -300,6 +300,23 @@ Generated files:
 ```
 
 `platform-pki-service-issue` refuses to overwrite an existing service certificate. Use `platform-pki-service-renew` after the first issuance.
+Issuance validates inventory, CA state, paths, ownership, modes, links, file
+types, and the next CA serial destination before mutation. It then holds the
+root and intermediate operation locks in fixed order while staging signing,
+publishing the service artifacts and intermediate database update, and running
+`platform-pki-service-verify`. Signing, publication, verification, and handled
+signal failures restore identity-matched prior state. Existing private keys are
+reused by default; `--rotate-key` archives the old key only when the complete
+transaction commits.
+
+The intermediate OpenSSL configuration used for issuance must retain the
+managed signing contract. Include directives, global directives, external or
+escaping CA paths, unsupported `CA_default` directives, and alternate CA or
+policy selection are rejected before signing. Database, serial, issued-certificate,
+private-key, certificate, and optional CRL or random-state paths must remain
+under the intermediate CA directory and are redirected to private staging.
+Every publication destination is identity-checked against its locked preflight
+snapshot immediately before replacement or no-clobber publication.
 
 ## Renew A Service Certificate
 

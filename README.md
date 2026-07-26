@@ -241,6 +241,11 @@ be owned by the current user and must not be group- or world-writable.
 
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
 
+Service issuance refuses an existing certificate, reuses an existing private
+key unless `--rotate-key` is requested, and transactionally publishes service
+artifacts with the intermediate CA database only after successful signing and
+verification.
+
 `platform-pki-root-create` generates its key and certificate in private staging
 before publishing them. Existing root material is refused unless `--force` is
 used; forced generation or publication failures and handled interruptions

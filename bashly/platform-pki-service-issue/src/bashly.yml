@@ -1,0 +1,42 @@
+name: platform-pki-service-issue
+help: Issue a service certificate from PKI inventory
+version: platform-pki-service-issue <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+args:
+- name: service
+  help: Inventory service name
+  required: true
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --days
+  arg: days
+  help: Service certificate lifetime
+  validate: days
+- long: --intermediate-pass-file
+  arg: path
+  help: Restricted file containing the encrypted intermediate-key passphrase
+  validate: not_empty
+- long: --rotate-key
+  help: Archive and replace an existing service private key
+
+examples:
+- platform-pki-service-issue platform-example
+- platform-pki-service-issue platform-example --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+
+footer: |-
+  The namespace defaults to platform-infrastructure under the XDG
+  configuration home. The PKI directory defaults to <namespace>/pki.
+  The lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397
+  days, in that order. Existing private keys are reused unless --rotate-key
+  is used. Existing certificates are never overwritten; use
+  platform-pki-service-renew after initial issuance. Passphrase files must be
+  mode 600 or stricter and have a first line of at least 16 characters
+  containing non-whitespace content.
