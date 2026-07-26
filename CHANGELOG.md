@@ -21,6 +21,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Migrated `platform-pki-print-cert` parsing and help generation to Bashly while preserving external PKI library discovery and certificate detail output.
 - Migrated `platform-pki-list-expiry` parsing, help, and threshold validation to Bashly, and fixed missing-certificate status 3 being overwritten by a later critical status.
 - Migrated `platform-pki-service-verify` parsing, help, and minimum-lifetime validation to Bashly while preserving all certificate verification checks.
+- Migrated `platform-pki-init` parsing and help generation to Bashly, added pre-mutation path and template validation, removed broad recursive permission mutation, and made forced template replacement atomic.
 
 ## [1.3.0] - 2026-07-10
 

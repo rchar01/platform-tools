@@ -228,6 +228,11 @@ platform-pki-service-verify platform-example
 platform-pki-list-expiry
 ```
 
+PKI initialization paths must be absolute, non-root, and symlink-free.
+`platform-pki-init --force` refreshes templates and examples only; it does not
+replace CA keys, certificates, or database state. Existing PKI directories must
+be owned by the current user and must not be group- or world-writable.
+
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
 
 Validate and render a Kubernetes bastion access policy:

@@ -1,0 +1,24 @@
+name: platform-pki-init
+help: Create the local outside-Git PKI working directory
+version: platform-pki-init <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --force
+  help: Overwrite template and example files
+
+examples:
+- platform-pki-init
+- platform-pki-init --namespace /tmp/platform-pki-test
+
+footer: |-
+  The namespace defaults to platform-infrastructure under the XDG
+  configuration home. The PKI directory defaults to <namespace>/pki.
+  --force never overwrites CA keys, certificates, or database state.

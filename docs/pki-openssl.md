@@ -106,6 +106,25 @@ Use a temporary namespace for testing:
 platform-pki-init --namespace /tmp/platform-pki-test
 ```
 
+Existing templates and examples are preserved by default. Use `--force` to
+refresh only those files; CA keys, certificates, and database state are never
+overwritten by the initializer.
+
+Namespace and PKI paths must be absolute, must not be the filesystem root, and
+must not traverse symbolic links. Existing PKI state containing symbolic links
+or hard-linked files is rejected before permissions or files are changed.
+The PKI directory may be inside the namespace, as it is by default, but it must
+not equal or contain the namespace.
+Missing path components are created atomically and existing components must be
+owned by the current user or root without unsafe writable permissions.
+Existing private directories and key files are also checked before
+initialization continues; private keys must already be mode `600` or stricter.
+
+The path checks protect against replacement by other local users. Processes
+running as the same user, and privileged root processes, are inside the trusted
+boundary because portable Bash cannot perform all mutations relative to locked
+directory descriptors.
+
 ## Create CA Material
 
 Create the root CA:
