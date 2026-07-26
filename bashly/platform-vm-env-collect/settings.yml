@@ -1,0 +1,6 @@
+source_dir: src
+config_path: src/bashly.yml
+target_dir: ../../bin
+strict: set -Eeuo pipefail
+enable_deps_array: never
+enable_env_var_names_array: never

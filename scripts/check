@@ -4,4 +4,5 @@ set -euo pipefail
 make verify-generated
 make verify
 make test
+make test-vm-env-collect-archive
 make shellcheck

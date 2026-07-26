@@ -1,0 +1,23 @@
+name: platform-vm-env-collect
+help: Collect VM environment facts for rebuild planning
+version: platform-vm-env-collect <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+environment_variables:
+- name: include_sensitive
+  help: Disable default redaction of obvious secrets
+  default: "0"
+  allowed: ["0", "1"]
+- name: collect_env
+  help: Include the raw process environment
+  default: "0"
+  allowed: ["0", "1"]
+
+examples:
+- sudo platform-vm-env-collect
+- sudo INCLUDE_SENSITIVE=1 platform-vm-env-collect
+- sudo COLLECT_ENV=1 platform-vm-env-collect
+
+footer: |-
+  Output is written under a private
+  /tmp/platform-vm-env-collect.XXXXXX directory. Review archives before
+  moving them outside the trusted environment.

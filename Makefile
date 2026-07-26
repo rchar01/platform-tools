@@ -8,9 +8,9 @@ PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
-BASHLY_TOOLS := platform-config-init
+BASHLY_TOOLS := platform-config-init platform-vm-env-collect
 
-.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -73,11 +73,19 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-platform-config-init test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
+test: test-platform-config-init test-vm-env-collect-cli test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:
 	./tests/cli/test-platform-config-init.sh
+
+## Run VM environment collector CLI tests
+test-vm-env-collect-cli:
+	./tests/cli/test-vm-env-collect-cli.sh
+
+## Run VM collector archive smoke tests in the dev container
+test-vm-env-collect-archive:
+	./tests/cli/test-vm-env-collect-archive.sh
 
 ## Run bastion policy render tests
 test-bastion-policy:

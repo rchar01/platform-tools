@@ -40,6 +40,16 @@ Checkout usage:
 sudo ./bin/platform-vm-env-collect
 ```
 
+Inspect generated help or the embedded repository CLI version:
+
+```bash
+platform-vm-env-collect --help
+platform-vm-env-collect --version
+```
+
+`INCLUDE_SENSITIVE` and `COLLECT_ENV` accept only `0` or `1`. Invalid values
+are rejected before the collector creates its temporary output directory.
+
 The output is created under:
 
 ```text
