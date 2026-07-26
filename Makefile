@@ -8,9 +8,9 @@ PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
-BASHLY_TOOLS := platform-config-init platform-vm-env-collect
+BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert
 
-.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-vm-snapshot test-pki-print-cert test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
 ## Show available commands
 help:
@@ -73,7 +73,7 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-platform-config-init test-vm-env-collect-cli test-bastion-policy test-proxmox-vm-snapshot test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
+test: test-platform-config-init test-vm-env-collect-cli test-bastion-policy test-proxmox-vm-snapshot test-pki-print-cert test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:
@@ -94,6 +94,10 @@ test-bastion-policy:
 ## Run Proxmox VM snapshot behavior tests
 test-proxmox-vm-snapshot:
 	./tests/proxmox-vm-snapshot/test-snapshot.sh
+
+## Run PKI certificate printing behavior tests
+test-pki-print-cert:
+	./tests/pki/test-print-cert.sh
 
 ## Run PKI passphrase file validation tests
 test-pki-pass-file:

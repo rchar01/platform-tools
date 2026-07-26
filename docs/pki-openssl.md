@@ -242,6 +242,9 @@ platform-pki-print-cert platform-example
 
 The command prints subject, issuer, serial, validity dates, SANs, key usage, extended key usage, and SHA-256 fingerprint.
 
+Use `platform-pki-print-cert --help` for the generated command reference and
+`platform-pki-print-cert --version` for the installed platform-tools version.
+
 ## Export For Ansible
 
 Export all generated inventory services by default:

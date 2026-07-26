@@ -5,6 +5,7 @@ This file gives a short, release-oriented view of what changed between versions.
 ## Unreleased
 
 - Added a pinned Podman development environment and Bashly generation workflow.
+- Migrated `platform-pki-print-cert` to the shared Bashly CLI contract.
 - `platform-config-init` now provides generated, consistent help and repository version output through `--help` and `--version`.
 - `platform-vm-env-collect` now uses the same generated help, version, and environment validation conventions.
 - Added `platform-proxmox-vm-snapshot` for safe, short-lived Proxmox VE 9 development snapshot creation, listing, rollback, and deletion through local execution or SSH.

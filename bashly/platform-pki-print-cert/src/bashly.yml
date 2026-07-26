@@ -1,0 +1,26 @@
+name: platform-pki-print-cert
+help: Print readable details for a generated service certificate
+version: platform-pki-print-cert <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+args:
+- name: service
+  help: Inventory service name
+  required: true
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+
+examples:
+- platform-pki-print-cert platform-example
+- platform-pki-print-cert platform-example --pki-dir /tmp/platform-pki
+
+footer: |-
+  The namespace defaults to platform-infrastructure under the XDG
+  configuration home. The PKI directory defaults to <namespace>/pki.
