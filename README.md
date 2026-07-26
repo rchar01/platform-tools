@@ -241,6 +241,13 @@ be owned by the current user and must not be group- or world-writable.
 
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
 
+`platform-pki-root-create` generates its key and certificate in private staging
+before publishing them. Existing root material is refused unless `--force` is
+used; forced generation or publication failures and handled interruptions
+restore the existing configuration, key, and certificate. Root keys remain
+encrypted by default, and unencrypted root keys require the explicit
+`--allow-unencrypted-root-key` opt-in.
+
 Validate and render a Kubernetes bastion access policy:
 
 ```bash

@@ -136,7 +136,22 @@ platform-pki-root-create \
   --country "PL"
 ```
 
-The root key is encrypted by default. For isolated test namespaces only, use:
+The root key is encrypted by default. `--days` defaults to
+`PLATFORM_PKI_ROOT_DAYS`, or 3650 when that environment variable is unset.
+Root key, certificate, and configuration generation is staged in a private
+directory before publication. Existing key or certificate files are refused
+unless `--force` is used. Failed generation, partial publication, and handled
+interruptions restore all original root configuration, key, and certificate
+files before removing transaction state. The expanded PKI path must not contain
+OpenSSL variable expansion syntax, newlines, or control characters. Before any
+mutation, the PKI and root directory chain, CA database files, and root output
+destinations are checked for expected types, links, ownership, and safe modes.
+Root and database destinations must be regular, singly linked files in
+owner-controlled, non-writable directories; symbolic and hard links are
+rejected. The CA database and unrelated PKI files are not replaced by
+`--force`.
+
+For isolated test namespaces only, use:
 
 ```bash
 platform-pki-root-create \

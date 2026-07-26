@@ -1,0 +1,54 @@
+name: platform-pki-root-create
+help: Create the root CA key and certificate
+version: platform-pki-root-create <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --name
+  arg: cn
+  help: Root CA common name
+  required: true
+  validate: not_empty
+- long: --org
+  arg: org
+  help: Organization name
+  required: true
+  validate: not_empty
+- long: --country
+  arg: country
+  help: Country code
+  required: true
+  validate: not_empty
+- long: --days
+  arg: days
+  help: Root CA lifetime
+  validate: days
+- long: --root-pass-file
+  arg: path
+  help: Restricted file containing the encrypted-key passphrase
+  validate: not_empty
+  conflicts: [--allow-unencrypted-root-key]
+- long: --allow-unencrypted-root-key
+  help: Create an unencrypted root private key
+  conflicts: [--root-pass-file]
+- long: --force
+  help: Replace existing root CA key and certificate
+
+examples:
+- platform-pki-root-create --name "Platform Example Root CA" --org "Platform Example" --country PL
+- platform-pki-root-create --namespace /tmp/platform-pki-test --name "Test Root CA" --org "Test" --country PL --allow-unencrypted-root-key
+
+footer: |-
+  The namespace defaults to platform-infrastructure under the XDG
+  configuration home. The PKI directory defaults to <namespace>/pki.
+  The lifetime defaults to PLATFORM_PKI_ROOT_DAYS or 3650 days.
+  Root keys are encrypted unless --allow-unencrypted-root-key is used.
+  Passphrase files must be mode 600 or stricter and have a first line of at
+  least 16 characters containing non-whitespace content.
