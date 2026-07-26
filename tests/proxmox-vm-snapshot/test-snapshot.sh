@@ -194,10 +194,75 @@ assert_failure
 assert_contains "$OUTPUT" 'Exactly one Proxmox node is required; discovered: 2'
 
 create_state
+printf '%s\n' '[]' >"$STATE/nodes.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Exactly one Proxmox node is required; discovered: 0'
+
+create_state
+printf '%s\n' '[{"node":"pve-a"},{"node":"pve-a"}]' >"$STATE/nodes.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Exactly one Proxmox node is required; discovered: 2'
+
+create_state
+printf '%s\n' '{not-json' >"$STATE/nodes.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Invalid JSON returned by pvesh node discovery'
+
+create_state
 run_tool list --vmid 9000
 assert_failure
 assert_contains "$OUTPUT" 'is a template'
 
+create_state
+printf '%s\n' '{not-json' >"$STATE/inventory.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Invalid QEMU inventory JSON'
+
+create_state
+jq '. + [.[0]]' "$STATE/inventory.json" >"$STATE/inventory.tmp"
+mv "$STATE/inventory.tmp" "$STATE/inventory.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Invalid QEMU inventory JSON'
+
+create_state
+printf '%s\n' '{not-json' >"$STATE/configs/101.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Invalid current config JSON for VMID 101'
+
+create_state
+jq 'del(.digest)' "$STATE/configs/101.json" >"$STATE/configs/101.tmp"
+mv "$STATE/configs/101.tmp" "$STATE/configs/101.json"
+run_tool create --vmid 101 --snapshot-name missing-digest --dry-run
+assert_failure
+assert_contains "$OUTPUT" 'current config has no valid digest'
+assert_not_contains "$(qm_log)" 'CALL qm'
+
+create_state
+printf '%s\n' '{}' >"$STATE/status/101.json"
+run_tool create --vmid 101 --snapshot-name invalid-status --dry-run
+assert_failure
+assert_contains "$OUTPUT" 'Invalid current status JSON for VMID 101'
+assert_not_contains "$(qm_log)" 'CALL qm'
+
+create_state
+printf '%s\n' '[{"description":"missing name"},{"name":"current"}]' >"$STATE/snapshots/101.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Invalid snapshot JSON for VMID 101'
+
+create_state
+printf '%s\n' '[{"name":"duplicate"},{"name":"duplicate"},{"name":"current"}]' >"$STATE/snapshots/101.json"
+run_tool list --vmid 101
+assert_failure
+assert_contains "$OUTPUT" 'Invalid snapshot JSON for VMID 101'
+
+create_state
 printf '%s\n' '{not-json' >"$STATE/snapshots/101.json"
 run_tool list --vmid 101
 assert_failure
@@ -209,6 +274,14 @@ mv "$STATE/configs/101.tmp" "$STATE/configs/101.json"
 run_tool create --vmid 101 --snapshot-name before-change --dry-run
 assert_failure
 assert_contains "$OUTPUT" "has Proxmox lock 'snapshot'"
+assert_not_contains "$(qm_log)" 'CALL qm'
+
+create_state
+jq '.lock = "backup"' "$STATE/configs/101.json" >"$STATE/configs/101.tmp"
+mv "$STATE/configs/101.tmp" "$STATE/configs/101.json"
+run_tool create --vmid 101 --snapshot-name before-change --dry-run
+assert_failure
+assert_contains "$OUTPUT" "has Proxmox lock 'backup'"
 assert_not_contains "$(qm_log)" 'CALL qm'
 
 create_state
