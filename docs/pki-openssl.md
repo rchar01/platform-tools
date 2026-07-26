@@ -329,6 +329,9 @@ Plain unencrypted archives require an explicit override:
 platform-pki-backup --allow-plain-backup
 ```
 
+Use `platform-pki-backup --help` for generated option details and
+`platform-pki-backup --version` for the installed platform-tools version.
+
 Plain backup output uses `.tar.gz` and still contains secrets. Keep it outside Git and move it to encrypted storage as soon as practical.
 
 ## List Expiry

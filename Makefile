@@ -8,7 +8,7 @@ PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
-BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init
+BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-backup
 
 .PHONY: help shell container-check generate verify-generated install verify test test-platform-config-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-vm-snapshot test-pki-init test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory shellcheck
 
@@ -118,6 +118,7 @@ test-pki-pass-file:
 ## Run PKI backup archive exclusion tests
 test-pki-backup:
 	./tests/pki/test-backup-excludes-backups.sh
+	./tests/pki/test-backup-cli.sh
 
 ## Run PKI Ansible export path safety tests
 test-pki-export:

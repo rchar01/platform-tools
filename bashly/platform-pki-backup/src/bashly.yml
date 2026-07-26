@@ -1,0 +1,33 @@
+name: platform-pki-backup
+help: Create a backup archive of the outside-Git PKI directory
+version: platform-pki-backup <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --backup-dir
+  arg: path
+  help: Backup output directory
+  validate: not_empty
+- long: --age-recipient
+  arg: value
+  help: Encrypt to an age recipient
+  repeatable: true
+  validate: not_empty
+- long: --allow-plain-backup
+  help: Create an unencrypted .tar.gz archive
+
+examples:
+- platform-pki-backup --age-recipient age1example
+- platform-pki-backup --allow-plain-backup
+
+footer: |-
+  Encryption with age is the default. Without a recipient, age prompts in
+  passphrase mode. Plain archives require --allow-plain-backup and still
+  contain private keys and other secrets.
