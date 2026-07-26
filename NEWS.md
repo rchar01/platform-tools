@@ -11,6 +11,7 @@ This file gives a short, release-oriented view of what changed between versions.
 - Migrated `platform-pki-init` with guarded paths and atomic template replacement.
 - Migrated `platform-pki-backup` with generated repeatable recipient parsing.
 - Migrated `platform-pki-export-ansible` with generated service selection.
+- Migrated and hardened `platform-ssh-init` with generated parsing, strict config loading, safe key and SSH-config path checks, no-clobber public-key reconstruction, key reuse, SSH config output, and controlled access testing.
 - `platform-config-init` now provides generated, consistent help and repository version output through `--help` and `--version`.
 - `platform-vm-env-collect` now uses the same generated help, version, and environment validation conventions.
 - Added `platform-proxmox-vm-snapshot` for safe, short-lived Proxmox VE 9 development snapshot creation, listing, rollback, and deletion through local execution or SSH.

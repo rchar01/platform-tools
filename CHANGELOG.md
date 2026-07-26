@@ -24,6 +24,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Migrated `platform-pki-init` parsing and help generation to Bashly, added pre-mutation path and template validation, removed broad recursive permission mutation, and made forced template replacement atomic.
 - Migrated `platform-pki-backup` parsing and help generation to Bashly while preserving encrypted defaults, repeatable recipients, output modes, and recursive-backup exclusions; output is now published atomically without overwriting concurrent backups.
 - Migrated `platform-pki-export-ansible` parsing and help generation to Bashly while preserving service selection and private-key modes; forced replacement now rejects source-overlapping or unmarked custom directories and file publication is no-clobber.
+- Migrated `platform-ssh-init` parsing and help generation to Bashly while preserving interspersed config-file input, strict non-evaluating config loading, CLI precedence, key creation and reuse, public-key output, SSH config writing, and access testing. Invalid action prerequisites, directive-injection values, unsafe key or SSH-config paths, and duplicate aliases are now rejected before key generation; reconstructed public keys use cleanup-safe no-clobber publication.
 
 ## [1.3.0] - 2026-07-10
 

@@ -154,6 +154,12 @@ Run maintained behavior tests:
 make test
 ```
 
+Run only the isolated SSH identity helper tests:
+
+```bash
+make test-platform-ssh-init
+```
+
 ## Quick Usage
 
 Create a purpose-specific SSH key directly:

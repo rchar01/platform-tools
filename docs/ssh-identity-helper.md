@@ -43,7 +43,9 @@ Do not pass secrets through CLI flags. SSH key path, comment, host, user, and al
 
 Config files are optional, but they remain useful for repeatable repository workflows. Real operator config files belong in private repositories such as `platform-private`, not in `platform-tools` or `~/.config/platform-infrastructure/`.
 
-Config files use a strict `NAME=value` parser, not shell execution. Only the variables in the schema below are accepted. Blank lines and full-line comments are allowed; arbitrary shell commands, command substitution, and unsupported variable names are rejected. `${HOME}`, `$HOME`, and leading `~` are expanded for convenience.
+Config files use a strict `NAME=value` parser, not shell execution. Only the variables in the schema below are accepted. Blank lines, full-line comments, and an optional `export` prefix are allowed; arbitrary shell commands, command substitution, unmatched quotes, and unsupported variable names are rejected. `${HOME}`, `$HOME`, and leading `~` are expanded for convenience.
+
+The optional config-file positional may appear before or after flags, but only one config file is accepted. Nonempty `--flag=value` forms are also supported. `--help` and `--version` follow the shared generated CLI contract and must be the first argument when used.
 
 Example private layout:
 
@@ -158,7 +160,11 @@ Do not use one shared SSH key for every platform purpose. Prefer purpose-specifi
 ~/.ssh/platform-config-ansible_ed25519
 ```
 
-Existing private keys are reused, but their mode is corrected to `600`. Public key files are corrected to `644`.
+Existing current-user-owned regular private keys are reused, but their mode is corrected to `600`. Current-user-owned regular public key files are corrected to `644`. Private and public key symlinks, including dangling links, and nonregular key paths are refused. Existing key-directory components are checked before creation for links, unexpected types, untrusted ownership, and unsafe writable permissions. Relative key paths remain supported from a safely owned current directory. A missing public key is derived into a private temporary file beside the key and published without replacing a concurrently created path.
+
+All argument and action prerequisites are validated before key generation. Host, user, and alias values are restricted to single safe SSH/config tokens; key paths and comments cannot contain control characters. Paths containing spaces remain supported and are quoted in generated SSH config blocks. In particular, `--test` requires a host, and `--write-config` requires both a host and alias and refuses an alias already present in `~/.ssh/config`.
+
+Before `--write-config` creates a key, it checks `~/.ssh` and `~/.ssh/config` for symlinks, unexpected file types, current-user ownership, unsafe writable permissions, and required owner access. Existing safe directory and config modes are normalized to `700` and `600` when the Host block is written.
 
 ## Action Flags
 

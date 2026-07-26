@@ -1,0 +1,62 @@
+name: platform-ssh-init
+help: Create or reuse a purpose-specific local SSH identity
+version: platform-ssh-init <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+args:
+- name: config_file
+  help: Optional strict NAME=value configuration file
+  validate: not_empty
+
+flags:
+- long: --key-path
+  arg: path
+  help: Private key path to create or reuse
+  validate: not_empty
+- long: --comment
+  arg: text
+  help: Comment stored in a generated public key
+  validate: not_empty
+- long: --host
+  arg: host
+  help: SSH host or IP for host config and testing
+  validate: not_empty
+- long: --user
+  arg: user
+  help: SSH user; defaults to the current user
+  validate: not_empty
+- long: --alias
+  arg: alias
+  help: SSH config Host alias; requires --host for config output
+  validate: not_empty
+- long: --test-command
+  arg: command
+  help: Remote command used by --test; defaults to hostname
+  validate: not_empty
+- long: --empty-passphrase
+  help: Create a new key without a passphrase
+- long: --write-config
+  help: Append the Host block to ~/.ssh/config
+- long: --test
+  help: Test direct SSH access with the selected identity
+- long: --print-public-key
+  help: Print the generated or existing public key
+
+examples:
+- platform-ssh-init --key-path ~/.ssh/platform-example_ed25519
+- platform-ssh-init ssh-config.env --print-public-key
+- platform-ssh-init --host 192.0.2.10 ssh-config.env --test
+
+footer: |-
+  Config variables:
+    SSH_KEY_PATH       Required unless --key-path is used.
+    SSH_KEY_COMMENT    Optional public-key comment.
+    SSH_HOST           Optional host or IP.
+    SSH_USER           Optional SSH user.
+    SSH_ALIAS          Optional SSH config Host alias.
+    SSH_TEST_COMMAND   Optional remote command for --test.
+
+  Config files are parsed as data and are never evaluated as shell code.
+  CLI flags override config values. This tool creates only local SSH client
+  material and never installs public keys on remote hosts. Key and SSH config
+  symlinks or nonregular targets are refused; host, user, and alias values must
+  each be one safe SSH config token.
