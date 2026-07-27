@@ -20,6 +20,13 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 ACCESS_API_VERSION = "bastion.access/v1"
 CSR_API_VERSION = "bastion.csr-policy/v1"
 LINUX_NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+VERSION = "1.4.0-dev"
+COMMANDS = {"validate", "render-host", "render-csr-configmap"}
+SUBCOMMAND_VALUE_OPTIONS = {
+    "validate": {"--input"},
+    "render-host": {"--input", "--output"},
+    "render-csr-configmap": {"--input", "--output", "--name", "--namespace"},
+}
 
 
 class PolicyError(Exception):
@@ -33,24 +40,40 @@ class IndentDumper(yaml.SafeDumper):
         return super().increase_indent(flow, False)
 
 
+class ContractArgumentParser(argparse.ArgumentParser):
+    """Use the repository parser-error status while retaining argparse output."""
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(1, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Validate and render Kubernetes bastion access policy"
+    parser = ContractArgumentParser(
+        description="Validate and render Kubernetes bastion access policy",
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"%(prog)s {VERSION}"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    validate = subparsers.add_parser("validate", help="validate a source policy")
+    validate = subparsers.add_parser(
+        "validate", help="validate a source policy", allow_abbrev=False
+    )
     add_common_io(validate, output=False)
     validate.set_defaults(func=command_validate)
 
     render_host = subparsers.add_parser(
-        "render-host", help="render the full host access policy"
+        "render-host", help="render the full host access policy", allow_abbrev=False
     )
     add_common_io(render_host)
     render_host.set_defaults(func=command_render_host)
 
     render_configmap = subparsers.add_parser(
-        "render-csr-configmap", help="render the CSR policy ConfigMap"
+        "render-csr-configmap",
+        help="render the CSR policy ConfigMap",
+        allow_abbrev=False,
     )
     add_common_io(render_configmap)
     render_configmap.add_argument(
@@ -71,6 +94,40 @@ def add_common_io(parser: argparse.ArgumentParser, *, output: bool = True) -> No
             "--output",
             help="output file created with mode 0600; must not already exist; defaults to stdout",
         )
+
+
+def enforce_subcommand_action_precedence(
+    parser: argparse.ArgumentParser, argv: list[str]
+) -> None:
+    if not argv or argv[0] not in COMMANDS:
+        return
+
+    action_index = next(
+        (
+            index
+            for index, value in enumerate(argv[1:], start=1)
+            if value in {"--help", "-h", "--version", "-v"}
+        ),
+        None,
+    )
+    if action_index is None:
+        return
+
+    value_options = SUBCOMMAND_VALUE_OPTIONS[argv[0]]
+    index = 1
+    while index < action_index:
+        value = argv[index]
+        option, has_equals, option_value = value.partition("=")
+        if option not in value_options:
+            parser.error(f"unrecognized arguments: {value}")
+        if has_equals:
+            if not option_value:
+                parser.error(f"argument {option}: expected one argument")
+            index += 1
+            continue
+        if index + 1 >= action_index or argv[index + 1].startswith("-"):
+            parser.error(f"argument {option}: expected one argument")
+        index += 2
 
 
 def load_policy(path: str) -> dict[str, Any]:
@@ -288,7 +345,11 @@ def command_render_configmap(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+    if argv and argv[0] not in COMMANDS | {"--help", "-h", "--version", "-v"}:
+        parser.parse_args(argv[:1])
+    enforce_subcommand_action_precedence(parser, argv)
+    args = parser.parse_args(argv)
     try:
         return args.func(args)
     except PolicyError as exc:

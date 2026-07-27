@@ -11,6 +11,16 @@ Real policies can reveal users, groups, cluster endpoints, and access intent. Ke
 - `python3`
 - `PyYAML`
 
+## Command Contract
+
+`--help`/`-h` and `--version`/`-v` are leading global actions that write to
+stdout and exit 0. Parser errors write to stderr and exit 1. Use
+`platform-bastion-policy COMMAND --help` for command-specific help. Policy
+validation and rendering errors also write to stderr and exit 1. Within a
+subcommand, an invalid option encountered before help or version remains a
+parser error rather than being hidden by the later action. Long options must be
+written in full; argparse-style option abbreviations are not accepted.
+
 ## Render Flow
 
 ```text

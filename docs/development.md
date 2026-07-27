@@ -58,11 +58,33 @@ with the committed executable. It does not rewrite the working tree.
 executables so installed commands do not need Ruby, Bashly, or repository
 source files at runtime.
 
-The generated parser treats `--help` and `--version` as global options when
-they appear before command-specific options. Nonempty `--flag=value` forms are
-accepted; an empty equals-form value is an invalid option. Keep these stock
-Bashly rules consistent across migrated tools rather than maintaining custom
-generator templates.
+Every maintained shell command is Bashly-backed. The generated parsers treat
+`--help`/`-h` and `--version`/`-v` as global options when they appear before
+command-specific options. These actions write to stdout and exit 0; parser and
+validation errors write to stderr and exit 1. Commands with subcommands also
+provide `COMMAND --help` and `COMMAND -h`. Nonempty `--flag=value` forms are
+accepted; an empty equals-form value is invalid. Long option abbreviations are
+not accepted. Keep these stock Bashly rules consistent across shell tools
+rather than maintaining custom generator templates. The Python
+`platform-bastion-policy` command implements the same public help, version,
+stream, exact-option, and parser-error contract with argparse.
+
+Run the focused cross-tool and installed-layout checks directly when changing
+the command inventory, installation, or parser contract:
+
+```bash
+make test-command-contract
+make test-installed-tools
+```
+
+The installation check first verifies a disposable repository `.tmp` install,
+then installs and executes an isolated runtime copy from an outside-checkout
+state directory under an empty environment with isolated HOME/XDG paths and a
+minimal runtime `PATH`. Ruby, Bashly, checkout paths and source workspaces,
+shell startup hooks, Python import overrides, and PKI source overrides are
+unavailable. It smokes every installed command and initializes PKI only under
+an explicit temporary namespace; installed PKI library and templates resolve
+through the runtime `SHARE_DIR` as the isolated XDG data location.
 
 ## Generator Updates
 

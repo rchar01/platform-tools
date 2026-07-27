@@ -131,6 +131,12 @@ Edit Bashly source under `bashly/<tool>/`, not the corresponding generated file
 under `bin/`. See [`docs/development.md`](docs/development.md) for the full
 workflow.
 
+All maintained shell commands use the same generated CLI contract: leading
+`--help`/`-h` and `--version`/`-v` write to stdout and exit 0, while parser
+errors write to stderr and exit 1. `platform-bastion-policy` follows the same
+public contract through Python argparse. Commands with subcommands provide
+command-specific help as `COMMAND --help` or `COMMAND -h`.
+
 Set `PLATFORM_TOOLS_DEV_IMAGE` to override the local image name. The wrapper
 targets require Podman, Bash, and Make on the host.
 
@@ -153,6 +159,10 @@ Run maintained behavior tests:
 ```bash
 make test
 ```
+
+The maintained tests include the cross-command CLI contract and a disposable
+installation smoke test for every command, including installed PKI shared-asset
+lookup without Ruby, Bashly, or checkout source paths at runtime.
 
 Run only the isolated SSH identity helper tests:
 

@@ -9,6 +9,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added maintained cross-command contract and disposable installed-layout smoke tests covering every shell command and `platform-bastion-policy`, including installed PKI shared-asset discovery without runtime generator dependencies.
 - Added a pinned Podman development environment with Bashly, test, lint, and generated-artifact verification tooling.
 - Added repository version `1.4.0-dev` and generated `--version` support to `platform-config-init`.
 - Added `platform-proxmox-vm-snapshot` with exact VM or dual-tag environment selection, structured Proxmox preflight, dry-run support, destructive confirmation, target-drift protection, and partial-operation summaries. Mutating environment workflows remain gated on reconciled `platform-infra` tags and a manually verified dry-run target set.
@@ -16,6 +17,8 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Completed the Bashly migration for all 16 maintained shell commands and standardized leading `--help`/`-h`, `--version`/`-v`, parser-error streams and statuses, and subcommand help coverage. Aligned the Python `platform-bastion-policy` parser with the same public contract while preserving policy validation and rendering APIs.
+- Disabled argparse long-option abbreviations in `platform-bastion-policy` so root and subcommand parsing, including help/version precedence, matches the Bashly command contract.
 - Migrated `platform-config-init` argument parsing and help generation to Bashly while preserving namespace creation, permissions, existing-file handling, and legacy-path warnings.
 - Migrated `platform-vm-env-collect` CLI and environment validation to Bashly while preserving report format version `1.1.0`, collection, redaction, and archive behavior.
 - Migrated `platform-pki-print-cert` parsing and help generation to Bashly while preserving external PKI library discovery and certificate detail output.

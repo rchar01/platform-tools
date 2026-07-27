@@ -4,6 +4,10 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Completed the Bashly migration for all 16 maintained shell commands and added one shared CLI contract for help, version, parser errors, and subcommand help.
+- Aligned `platform-bastion-policy` help, version, parser-error status, and output streams with the shared command contract.
+- `platform-bastion-policy` now rejects abbreviated long options consistently with the Bashly-backed commands.
+- Added disposable installed-command smoke coverage for every maintained tool and installed PKI shared assets without runtime Ruby, Bashly, or checkout source paths.
 - Added a pinned Podman development environment and Bashly generation workflow.
 - Migrated `platform-pki-print-cert` to the shared Bashly CLI contract.
 - Migrated `platform-pki-list-expiry` and made missing-certificate status 3 independent of inventory order.

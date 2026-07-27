@@ -15,7 +15,7 @@
 
 ## Repository Shape
 
-- This repo is a collection of maintained Bash and Python helper tools in `bin/`; `Makefile` is the source of truth for supported tools and local targets. Bashly-backed source lives under `bashly/<tool>/`, while its generated and committed executable lives under `bin/`.
+- This repo is a collection of maintained Bash and Python helper tools in `bin/`; `Makefile` is the source of truth for supported tools and local targets. Every maintained shell tool is Bashly-backed: source lives under `bashly/<tool>/`, while its generated and committed executable lives under `bin/`.
 - PKI commands share logic in `lib/platform-pki-common.sh` and install templates from `templates/pki/`; keep all three areas aligned when changing PKI behavior.
 - `platform-bastion-policy` is a Python helper for public bastion access-policy validation and rendering; real policy data belongs in `platform-private`.
 - User-facing behavior is documented in `README.md` and topic docs under `docs/`; update both the command help text and docs when changing flags, defaults, paths, or safety rules.
@@ -27,6 +27,7 @@
 - Run `make generate` after changing Bashly source and `make verify-generated` to prove committed executables are deterministic and current. Never edit a Bashly-generated `bin/` file directly.
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
 - Run `make test` after behavior changes; it runs maintained repository tests such as bastion policy rendering checks.
+- Run `make test-command-contract` after command inventory or parser changes, and `make test-installed-tools` after installation or shared-asset changes. The latter uses a disposable `.tmp` install and an isolated runtime `PATH`.
 - Run `make shellcheck` when ShellCheck is available; it lint-checks maintained shell tools and libraries.
 - There is no repo test suite or CI workflow in this tree. For behavior changes, run focused smoke commands in `/tmp/opencode` or another temporary namespace instead of the default `~/.config/platform-infrastructure/` paths.
 - For PKI smoke tests, use `platform-pki-init --namespace <temp-dir>` and pass `--namespace <temp-dir>` to every following PKI command so real CA material is never touched.
