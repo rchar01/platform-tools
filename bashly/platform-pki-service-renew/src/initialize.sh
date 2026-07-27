@@ -1,3 +1,5 @@
+enable_auto_colors
+
 # Preserve the handwritten command's post-service help without changing Bashly's
 # handling of leading global help/version options or option arguments.
 service_seen=false

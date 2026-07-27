@@ -1,3 +1,5 @@
+enable_auto_colors
+
 declare -A snapshot_seen_options=()
 snapshot_command=${command_line_args[0]:-}
 snapshot_index=1

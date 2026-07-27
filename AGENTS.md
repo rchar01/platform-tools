@@ -16,6 +16,7 @@
 ## Repository Shape
 
 - This repo is a collection of maintained Bash and Python helper tools in `bin/`; `Makefile` is the source of truth for supported tools and local targets. Every maintained shell tool is Bashly-backed: source lives under `bashly/<tool>/`, while its generated and committed executable lives under `bin/`.
+- Bashly workspaces use the standard colors library and `usage_colors` for TTY-only generated help. Preserve automatic pipe/redirect suppression and nonempty `NO_COLOR` support; this does not apply to application logs.
 - PKI commands share logic in `lib/platform-pki-common.sh` and install templates from `templates/pki/`; keep all three areas aligned when changing PKI behavior.
 - `platform-bastion-policy` is a Python helper for public bastion access-policy validation and rendering; real policy data belongs in `platform-private`.
 - User-facing behavior is documented in `README.md` and topic docs under `docs/`; update both the command help text and docs when changing flags, defaults, paths, or safety rules.

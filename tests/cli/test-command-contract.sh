@@ -9,6 +9,8 @@ trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 STDOUT="$TMP_DIR/stdout"
 STDERR="$TMP_DIR/stderr"
 VERSION=$(cat "$ROOT_DIR/VERSION")
+ESC=$(printf '\033')
+PTY_CAPTURE="$ROOT_DIR/tests/cli/pty-capture.py"
 
 fail() {
   printf 'test-command-contract.sh: %s\n' "$*" >&2
@@ -59,6 +61,9 @@ for tool in $SHELL_TOOLS $PYTHON_TOOLS; do
   for flag in --help -h; do
     run_command "$command" "$flag"
     assert_success_stdout "$tool $flag"
+    case $(cat "$STDOUT") in
+      *"$ESC"*) fail "non-TTY help contained color escapes for $tool $flag" ;;
+    esac
   done
   for flag in --version -v; do
     run_command "$command" "$flag"
@@ -80,6 +85,22 @@ for tool in $SHELL_TOOLS $PYTHON_TOOLS; do
   assert_parser_error "$tool invalid option before --help"
   run_command "$command" --contract-invalid-option --version
   assert_parser_error "$tool invalid option before --version"
+done
+
+for tool in $SHELL_TOOLS; do
+  command="$ROOT_DIR/bin/$tool"
+  run_command python3 "$PTY_CAPTURE" "$command" --help
+  assert_success_stdout "$tool TTY --help"
+  case $(cat "$STDOUT") in
+    *"$ESC"*) ;;
+    *) fail "expected colored TTY help for $tool" ;;
+  esac
+
+  run_command env NO_COLOR=1 python3 "$PTY_CAPTURE" "$command" --help
+  assert_success_stdout "$tool NO_COLOR TTY --help"
+  case $(cat "$STDOUT") in
+    *"$ESC"*) fail "NO_COLOR help contained color escapes for $tool" ;;
+  esac
 done
 
 for subcommand in create list rollback delete; do

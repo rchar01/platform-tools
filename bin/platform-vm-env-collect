@@ -639,7 +639,7 @@ version_command() {
 platform_vm_env_collect_usage() {
   printf "platform-vm-env-collect - Collect VM environment facts for rebuild planning\n\n"
 
-  printf "%s\n" "Usage:"
+  printf "%s\n" "$(bold "Usage:")"
   printf "  platform-vm-env-collect\n"
   printf "  platform-vm-env-collect --help | -h\n"
   printf "  platform-vm-env-collect --version | -v\n"
@@ -647,30 +647,30 @@ platform_vm_env_collect_usage() {
 
   if [[ -n "$long_usage" ]]; then
 
-    printf "%s\n" "Options:"
+    printf "%s\n" "$(bold "Options:")"
 
-    printf "  %s\n" "--help, -h"
+    printf "  %s\n" "$(magenta "--help, -h")"
     printf "    Show this help\n"
     echo
-    printf "  %s\n" "--version, -v"
+    printf "  %s\n" "$(magenta "--version, -v")"
     printf "    Show version number\n"
     echo
 
-    printf "%s\n" "Environment Variables:"
+    printf "%s\n" "$(bold "Environment Variables:")"
 
-    printf "  %s\n" "INCLUDE_SENSITIVE"
+    printf "  %s\n" "$(cyan "INCLUDE_SENSITIVE")"
     printf "    Disable default redaction of obvious secrets\n"
     printf "    %s\n" "Allowed: 0, 1"
     printf "    %s\n" "Default: 0"
     echo
 
-    printf "  %s\n" "COLLECT_ENV"
+    printf "  %s\n" "$(cyan "COLLECT_ENV")"
     printf "    Include the raw process environment\n"
     printf "    %s\n" "Allowed: 0, 1"
     printf "    %s\n" "Default: 0"
     echo
 
-    printf "%s\n" "Examples:"
+    printf "%s\n" "$(bold "Examples:")"
     printf "  sudo platform-vm-env-collect\n"
     printf "  sudo INCLUDE_SENSITIVE=1 platform-vm-env-collect\n"
     printf "  sudo COLLECT_ENV=1 platform-vm-env-collect\n"
@@ -711,6 +711,53 @@ normalize_input() {
     shift
   done
 }
+
+enable_auto_colors() {
+  if [[ -z ${NO_COLOR+x} && ! -t 1 ]]; then
+    NO_COLOR=1
+  fi
+}
+
+print_in_color() {
+  local color="$1"
+  shift
+  if [[ "${NO_COLOR:-}" == "" ]]; then
+    printf "$color%b\e[0m\n" "$*"
+  else
+    printf "%b\n" "$*"
+  fi
+}
+
+red() { print_in_color "\e[31m" "$*"; }
+green() { print_in_color "\e[32m" "$*"; }
+yellow() { print_in_color "\e[33m" "$*"; }
+blue() { print_in_color "\e[34m" "$*"; }
+magenta() { print_in_color "\e[35m" "$*"; }
+cyan() { print_in_color "\e[36m" "$*"; }
+black() { print_in_color "\e[30m" "$*"; }
+white() { print_in_color "\e[37m" "$*"; }
+
+bold() { print_in_color "\e[1m" "$*"; }
+underlined() { print_in_color "\e[4m" "$*"; }
+bold_underlined() { print_in_color "\e[1;4m" "$*"; }
+
+red_bold() { print_in_color "\e[1;31m" "$*"; }
+green_bold() { print_in_color "\e[1;32m" "$*"; }
+yellow_bold() { print_in_color "\e[1;33m" "$*"; }
+blue_bold() { print_in_color "\e[1;34m" "$*"; }
+magenta_bold() { print_in_color "\e[1;35m" "$*"; }
+cyan_bold() { print_in_color "\e[1;36m" "$*"; }
+black_bold() { print_in_color "\e[1;30m" "$*"; }
+white_bold() { print_in_color "\e[1;37m" "$*"; }
+
+red_underlined() { print_in_color "\e[4;31m" "$*"; }
+green_underlined() { print_in_color "\e[4;32m" "$*"; }
+yellow_underlined() { print_in_color "\e[4;33m" "$*"; }
+blue_underlined() { print_in_color "\e[4;34m" "$*"; }
+magenta_underlined() { print_in_color "\e[4;35m" "$*"; }
+cyan_underlined() { print_in_color "\e[4;36m" "$*"; }
+black_underlined() { print_in_color "\e[4;30m" "$*"; }
+white_underlined() { print_in_color "\e[4;37m" "$*"; }
 
 parse_requirements() {
   local key
@@ -777,6 +824,8 @@ initialize() {
 
   export INCLUDE_SENSITIVE="${INCLUDE_SENSITIVE:-0}"
   export COLLECT_ENV="${COLLECT_ENV:-0}"
+
+  enable_auto_colors
 
 }
 

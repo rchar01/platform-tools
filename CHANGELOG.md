@@ -17,6 +17,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Added TTY-aware colors to generated help for all 16 Bashly-backed commands. Piped and redirected help remains plain, and a nonempty `NO_COLOR` value disables color explicitly; application logs are unchanged.
 - Completed the Bashly migration for all 16 maintained shell commands and standardized leading `--help`/`-h`, `--version`/`-v`, parser-error streams and statuses, and subcommand help coverage. Aligned the Python `platform-bastion-policy` parser with the same public contract while preserving policy validation and rendering APIs.
 - Disabled argparse long-option abbreviations in `platform-bastion-policy` so root and subcommand parsing, including help/version precedence, matches the Bashly command contract.
 - Migrated `platform-config-init` argument parsing and help generation to Bashly while preserving namespace creation, permissions, existing-file handling, and legacy-path warnings.

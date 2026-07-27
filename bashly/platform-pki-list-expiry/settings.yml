@@ -4,3 +4,9 @@ target_dir: ../../bin
 strict: true
 enable_deps_array: never
 enable_env_var_names_array: never
+usage_colors:
+  caption: bold
+  command: green
+  arg: blue
+  flag: magenta
+  environment_variable: cyan

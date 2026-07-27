@@ -136,6 +136,10 @@ All maintained shell commands use the same generated CLI contract: leading
 errors write to stderr and exit 1. `platform-bastion-policy` follows the same
 public contract through Python argparse. Commands with subcommands provide
 command-specific help as `COMMAND --help` or `COMMAND -h`.
+Generated shell-command help uses a restrained color palette on interactive
+terminals. Colors are disabled automatically for pipes and redirects; set
+`NO_COLOR=1` to disable them explicitly. Command result, warning, and error
+logs remain uncolored.
 
 Set `PLATFORM_TOOLS_DEV_IMAGE` to override the local image name. The wrapper
 targets require Podman, Bash, and Make on the host.

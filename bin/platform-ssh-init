@@ -114,7 +114,7 @@ version_command() {
 platform_ssh_init_usage() {
   printf "platform-ssh-init - Create or reuse a purpose-specific local SSH identity\n\n"
 
-  printf "%s\n" "Usage:"
+  printf "%s\n" "$(bold "Usage:")"
   printf "  platform-ssh-init [CONFIG_FILE] [OPTIONS]\n"
   printf "  platform-ssh-init --help | -h\n"
   printf "  platform-ssh-init --version | -v\n"
@@ -122,62 +122,62 @@ platform_ssh_init_usage() {
 
   if [[ -n "$long_usage" ]]; then
 
-    printf "%s\n" "Options:"
+    printf "%s\n" "$(bold "Options:")"
 
-    printf "  %s\n" "--key-path PATH"
+    printf "  %s\n" "$(magenta "--key-path PATH")"
     printf "    Private key path to create or reuse\n"
     echo
 
-    printf "  %s\n" "--comment TEXT"
+    printf "  %s\n" "$(magenta "--comment TEXT")"
     printf "    Comment stored in a generated public key\n"
     echo
 
-    printf "  %s\n" "--host HOST"
+    printf "  %s\n" "$(magenta "--host HOST")"
     printf "    SSH host or IP for host config and testing\n"
     echo
 
-    printf "  %s\n" "--user USER"
+    printf "  %s\n" "$(magenta "--user USER")"
     printf "    SSH user; defaults to the current user\n"
     echo
 
-    printf "  %s\n" "--alias ALIAS"
+    printf "  %s\n" "$(magenta "--alias ALIAS")"
     printf "    SSH config Host alias; requires --host for config output\n"
     echo
 
-    printf "  %s\n" "--test-command COMMAND"
+    printf "  %s\n" "$(magenta "--test-command COMMAND")"
     printf "    Remote command used by --test; defaults to hostname\n"
     echo
 
-    printf "  %s\n" "--empty-passphrase"
+    printf "  %s\n" "$(magenta "--empty-passphrase")"
     printf "    Create a new key without a passphrase\n"
     echo
 
-    printf "  %s\n" "--write-config"
+    printf "  %s\n" "$(magenta "--write-config")"
     printf "    Append the Host block to ~/.ssh/config\n"
     echo
 
-    printf "  %s\n" "--test"
+    printf "  %s\n" "$(magenta "--test")"
     printf "    Test direct SSH access with the selected identity\n"
     echo
 
-    printf "  %s\n" "--print-public-key"
+    printf "  %s\n" "$(magenta "--print-public-key")"
     printf "    Print the generated or existing public key\n"
     echo
 
-    printf "  %s\n" "--help, -h"
+    printf "  %s\n" "$(magenta "--help, -h")"
     printf "    Show this help\n"
     echo
-    printf "  %s\n" "--version, -v"
+    printf "  %s\n" "$(magenta "--version, -v")"
     printf "    Show version number\n"
     echo
 
-    printf "%s\n" "Arguments:"
+    printf "%s\n" "$(bold "Arguments:")"
 
-    printf "  %s\n" "CONFIG_FILE"
+    printf "  %s\n" "$(blue "CONFIG_FILE")"
     printf "    Optional strict NAME=value configuration file\n"
     echo
 
-    printf "%s\n" "Examples:"
+    printf "%s\n" "$(bold "Examples:")"
     printf "  platform-ssh-init --key-path ~/.ssh/platform-example_ed25519\n"
     printf "  platform-ssh-init ssh-config.env --print-public-key\n"
     printf "  platform-ssh-init --host 192.0.2.10 ssh-config.env --test\n"
@@ -218,6 +218,53 @@ normalize_input() {
     shift
   done
 }
+
+enable_auto_colors() {
+  if [[ -z ${NO_COLOR+x} && ! -t 1 ]]; then
+    NO_COLOR=1
+  fi
+}
+
+print_in_color() {
+  local color="$1"
+  shift
+  if [[ "${NO_COLOR:-}" == "" ]]; then
+    printf "$color%b\e[0m\n" "$*"
+  else
+    printf "%b\n" "$*"
+  fi
+}
+
+red() { print_in_color "\e[31m" "$*"; }
+green() { print_in_color "\e[32m" "$*"; }
+yellow() { print_in_color "\e[33m" "$*"; }
+blue() { print_in_color "\e[34m" "$*"; }
+magenta() { print_in_color "\e[35m" "$*"; }
+cyan() { print_in_color "\e[36m" "$*"; }
+black() { print_in_color "\e[30m" "$*"; }
+white() { print_in_color "\e[37m" "$*"; }
+
+bold() { print_in_color "\e[1m" "$*"; }
+underlined() { print_in_color "\e[4m" "$*"; }
+bold_underlined() { print_in_color "\e[1;4m" "$*"; }
+
+red_bold() { print_in_color "\e[1;31m" "$*"; }
+green_bold() { print_in_color "\e[1;32m" "$*"; }
+yellow_bold() { print_in_color "\e[1;33m" "$*"; }
+blue_bold() { print_in_color "\e[1;34m" "$*"; }
+magenta_bold() { print_in_color "\e[1;35m" "$*"; }
+cyan_bold() { print_in_color "\e[1;36m" "$*"; }
+black_bold() { print_in_color "\e[1;30m" "$*"; }
+white_bold() { print_in_color "\e[1;37m" "$*"; }
+
+red_underlined() { print_in_color "\e[4;31m" "$*"; }
+green_underlined() { print_in_color "\e[4;32m" "$*"; }
+yellow_underlined() { print_in_color "\e[4;33m" "$*"; }
+blue_underlined() { print_in_color "\e[4;34m" "$*"; }
+magenta_underlined() { print_in_color "\e[4;35m" "$*"; }
+cyan_underlined() { print_in_color "\e[4;36m" "$*"; }
+black_underlined() { print_in_color "\e[4;30m" "$*"; }
+white_underlined() { print_in_color "\e[4;37m" "$*"; }
 
 info() { printf '[INFO] %s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
@@ -819,6 +866,8 @@ parse_requirements() {
 initialize() {
   declare -g version="platform-ssh-init 1.4.0-dev"
   set -euo pipefail
+
+  enable_auto_colors
 
 }
 

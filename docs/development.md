@@ -69,6 +69,13 @@ rather than maintaining custom generator templates. The Python
 `platform-bastion-policy` command implements the same public help, version,
 stream, exact-option, and parser-error contract with argparse.
 
+Generated shell-command usage uses Bashly's standard color library for section
+captions, commands, arguments, flags, and environment-variable labels. Every
+workspace calls `enable_auto_colors`, so redirected and piped help remains plain
+text, and a nonempty `NO_COLOR` value disables color explicitly. This applies
+only to generated usage; application result and log output is intentionally
+unchanged.
+
 Run the focused cross-tool and installed-layout checks directly when changing
 the command inventory, installation, or parser contract:
 

@@ -418,7 +418,7 @@ version_command() {
 platform_pki_intermediate_create_usage() {
   printf "platform-pki-intermediate-create - Create the intermediate CA key, certificate, and CA chain\n\n"
 
-  printf "%s\n" "Usage:"
+  printf "%s\n" "$(bold "Usage:")"
   printf "  platform-pki-intermediate-create [OPTIONS]\n"
   printf "  platform-pki-intermediate-create --help | -h\n"
   printf "  platform-pki-intermediate-create --version | -v\n"
@@ -426,58 +426,58 @@ platform_pki_intermediate_create_usage() {
 
   if [[ -n "$long_usage" ]]; then
 
-    printf "%s\n" "Options:"
+    printf "%s\n" "$(bold "Options:")"
 
-    printf "  %s\n" "--namespace PATH"
+    printf "  %s\n" "$(magenta "--namespace PATH")"
     printf "    Platform namespace root\n"
     echo
 
-    printf "  %s\n" "--pki-dir PATH"
+    printf "  %s\n" "$(magenta "--pki-dir PATH")"
     printf "    PKI directory\n"
     echo
 
-    printf "  %s\n" "--name CN (required)"
+    printf "  %s\n" "$(magenta "--name CN (required)")"
     printf "    Intermediate CA common name\n"
     echo
 
-    printf "  %s\n" "--org ORG (required)"
+    printf "  %s\n" "$(magenta "--org ORG (required)")"
     printf "    Organization name\n"
     echo
 
-    printf "  %s\n" "--country COUNTRY (required)"
+    printf "  %s\n" "$(magenta "--country COUNTRY (required)")"
     printf "    Country code\n"
     echo
 
-    printf "  %s\n" "--days DAYS"
+    printf "  %s\n" "$(magenta "--days DAYS")"
     printf "    Intermediate CA lifetime\n"
     echo
 
-    printf "  %s\n" "--root-pass-file PATH"
+    printf "  %s\n" "$(magenta "--root-pass-file PATH")"
     printf "    Restricted file containing the encrypted root-key passphrase\n"
     echo
 
-    printf "  %s\n" "--intermediate-pass-file PATH"
+    printf "  %s\n" "$(magenta "--intermediate-pass-file PATH")"
     printf "    Restricted file containing the encrypted intermediate-key passphrase\n"
     printf "    %s\n" "Conflicts: --allow-unencrypted-intermediate-key"
     echo
 
-    printf "  %s\n" "--allow-unencrypted-intermediate-key"
+    printf "  %s\n" "$(magenta "--allow-unencrypted-intermediate-key")"
     printf "    Create an unencrypted intermediate private key\n"
     printf "    %s\n" "Conflicts: --intermediate-pass-file"
     echo
 
-    printf "  %s\n" "--force"
+    printf "  %s\n" "$(magenta "--force")"
     printf "    Replace existing intermediate CA material\n"
     echo
 
-    printf "  %s\n" "--help, -h"
+    printf "  %s\n" "$(magenta "--help, -h")"
     printf "    Show this help\n"
     echo
-    printf "  %s\n" "--version, -v"
+    printf "  %s\n" "$(magenta "--version, -v")"
     printf "    Show version number\n"
     echo
 
-    printf "%s\n" "Examples:"
+    printf "%s\n" "$(bold "Examples:")"
     printf "  platform-pki-intermediate-create --name \"Platform Example Intermediate CA\"\n  --org \"Platform Example\" --country PL\n"
     printf "  platform-pki-intermediate-create --namespace /tmp/platform-pki-test --name\n  \"Test Intermediate CA\" --org Test --country PL\n  --allow-unencrypted-intermediate-key\n"
     echo
@@ -517,6 +517,53 @@ normalize_input() {
     shift
   done
 }
+
+enable_auto_colors() {
+  if [[ -z ${NO_COLOR+x} && ! -t 1 ]]; then
+    NO_COLOR=1
+  fi
+}
+
+print_in_color() {
+  local color="$1"
+  shift
+  if [[ "${NO_COLOR:-}" == "" ]]; then
+    printf "$color%b\e[0m\n" "$*"
+  else
+    printf "%b\n" "$*"
+  fi
+}
+
+red() { print_in_color "\e[31m" "$*"; }
+green() { print_in_color "\e[32m" "$*"; }
+yellow() { print_in_color "\e[33m" "$*"; }
+blue() { print_in_color "\e[34m" "$*"; }
+magenta() { print_in_color "\e[35m" "$*"; }
+cyan() { print_in_color "\e[36m" "$*"; }
+black() { print_in_color "\e[30m" "$*"; }
+white() { print_in_color "\e[37m" "$*"; }
+
+bold() { print_in_color "\e[1m" "$*"; }
+underlined() { print_in_color "\e[4m" "$*"; }
+bold_underlined() { print_in_color "\e[1;4m" "$*"; }
+
+red_bold() { print_in_color "\e[1;31m" "$*"; }
+green_bold() { print_in_color "\e[1;32m" "$*"; }
+yellow_bold() { print_in_color "\e[1;33m" "$*"; }
+blue_bold() { print_in_color "\e[1;34m" "$*"; }
+magenta_bold() { print_in_color "\e[1;35m" "$*"; }
+cyan_bold() { print_in_color "\e[1;36m" "$*"; }
+black_bold() { print_in_color "\e[1;30m" "$*"; }
+white_bold() { print_in_color "\e[1;37m" "$*"; }
+
+red_underlined() { print_in_color "\e[4;31m" "$*"; }
+green_underlined() { print_in_color "\e[4;32m" "$*"; }
+yellow_underlined() { print_in_color "\e[4;33m" "$*"; }
+blue_underlined() { print_in_color "\e[4;34m" "$*"; }
+magenta_underlined() { print_in_color "\e[4;35m" "$*"; }
+cyan_underlined() { print_in_color "\e[4;36m" "$*"; }
+black_underlined() { print_in_color "\e[4;30m" "$*"; }
+white_underlined() { print_in_color "\e[4;37m" "$*"; }
 
 validate_not_empty() {
   [[ -n $1 ]] || printf '%s\n' 'must not be empty'
@@ -775,6 +822,8 @@ parse_requirements() {
 initialize() {
   declare -g version="platform-pki-intermediate-create 1.4.0-dev"
   set -euo pipefail
+
+  enable_auto_colors
 
 }
 

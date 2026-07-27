@@ -48,7 +48,7 @@ version_command() {
 platform_proxmox_vm_cleanup_usage() {
   printf "platform-proxmox-vm-cleanup - Safely stop and destroy exactly one Proxmox VM by VMID\n\n"
 
-  printf "%s\n" "Usage:"
+  printf "%s\n" "$(bold "Usage:")"
   printf "  platform-proxmox-vm-cleanup [OPTIONS]\n"
   printf "  platform-proxmox-vm-cleanup --help | -h\n"
   printf "  platform-proxmox-vm-cleanup --version | -v\n"
@@ -56,36 +56,36 @@ platform_proxmox_vm_cleanup_usage() {
 
   if [[ -n "$long_usage" ]]; then
 
-    printf "%s\n" "Options:"
+    printf "%s\n" "$(bold "Options:")"
 
-    printf "  %s\n" "--vmid VMID (required)"
+    printf "  %s\n" "$(magenta "--vmid VMID (required)")"
     printf "    Required numeric Proxmox VMID to destroy\n"
     echo
 
-    printf "  %s\n" "--ssh DESTINATION"
+    printf "  %s\n" "$(magenta "--ssh DESTINATION")"
     printf "    SSH target for the Proxmox host\n"
     echo
 
-    printf "  %s\n" "--identity-file PATH"
+    printf "  %s\n" "$(magenta "--identity-file PATH")"
     printf "    SSH private key for --ssh\n"
     echo
 
-    printf "  %s\n" "--name VM-NAME"
+    printf "  %s\n" "$(magenta "--name VM-NAME")"
     printf "    Abort unless the qm config name exactly matches this value\n"
     echo
 
-    printf "  %s\n" "--yes"
+    printf "  %s\n" "$(magenta "--yes")"
     printf "    Skip the interactive VMID confirmation prompt\n"
     echo
 
-    printf "  %s\n" "--help, -h"
+    printf "  %s\n" "$(magenta "--help, -h")"
     printf "    Show this help\n"
     echo
-    printf "  %s\n" "--version, -v"
+    printf "  %s\n" "$(magenta "--version, -v")"
     printf "    Show version number\n"
     echo
 
-    printf "%s\n" "Examples:"
+    printf "%s\n" "$(bold "Examples:")"
     printf "  platform-proxmox-vm-cleanup --vmid 9900\n"
     printf "  platform-proxmox-vm-cleanup --ssh root@192.0.2.10 --vmid 9900\n"
     printf "  platform-proxmox-vm-cleanup --vmid 9900 --name smoke-9900 --yes\n"
@@ -126,6 +126,53 @@ normalize_input() {
     shift
   done
 }
+
+enable_auto_colors() {
+  if [[ -z ${NO_COLOR+x} && ! -t 1 ]]; then
+    NO_COLOR=1
+  fi
+}
+
+print_in_color() {
+  local color="$1"
+  shift
+  if [[ "${NO_COLOR:-}" == "" ]]; then
+    printf "$color%b\e[0m\n" "$*"
+  else
+    printf "%b\n" "$*"
+  fi
+}
+
+red() { print_in_color "\e[31m" "$*"; }
+green() { print_in_color "\e[32m" "$*"; }
+yellow() { print_in_color "\e[33m" "$*"; }
+blue() { print_in_color "\e[34m" "$*"; }
+magenta() { print_in_color "\e[35m" "$*"; }
+cyan() { print_in_color "\e[36m" "$*"; }
+black() { print_in_color "\e[30m" "$*"; }
+white() { print_in_color "\e[37m" "$*"; }
+
+bold() { print_in_color "\e[1m" "$*"; }
+underlined() { print_in_color "\e[4m" "$*"; }
+bold_underlined() { print_in_color "\e[1;4m" "$*"; }
+
+red_bold() { print_in_color "\e[1;31m" "$*"; }
+green_bold() { print_in_color "\e[1;32m" "$*"; }
+yellow_bold() { print_in_color "\e[1;33m" "$*"; }
+blue_bold() { print_in_color "\e[1;34m" "$*"; }
+magenta_bold() { print_in_color "\e[1;35m" "$*"; }
+cyan_bold() { print_in_color "\e[1;36m" "$*"; }
+black_bold() { print_in_color "\e[1;30m" "$*"; }
+white_bold() { print_in_color "\e[1;37m" "$*"; }
+
+red_underlined() { print_in_color "\e[4;31m" "$*"; }
+green_underlined() { print_in_color "\e[4;32m" "$*"; }
+yellow_underlined() { print_in_color "\e[4;33m" "$*"; }
+blue_underlined() { print_in_color "\e[4;34m" "$*"; }
+magenta_underlined() { print_in_color "\e[4;35m" "$*"; }
+cyan_underlined() { print_in_color "\e[4;36m" "$*"; }
+black_underlined() { print_in_color "\e[4;30m" "$*"; }
+white_underlined() { print_in_color "\e[4;37m" "$*"; }
 
 info() { printf '[INFO] %s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
@@ -827,6 +874,8 @@ parse_requirements() {
 initialize() {
   declare -g version="platform-proxmox-vm-cleanup 1.4.0-dev"
   set -euo pipefail
+
+  enable_auto_colors
 
   # Preserve the handwritten parser's interspersed help behavior while allowing
   # any earlier parser or validation error to take precedence.

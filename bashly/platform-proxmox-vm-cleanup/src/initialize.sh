@@ -1,3 +1,5 @@
+enable_auto_colors
+
 # Preserve the handwritten parser's interspersed help behavior while allowing
 # any earlier parser or validation error to take precedence.
 legacy_help_compatible=true
