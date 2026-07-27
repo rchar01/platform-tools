@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+  printf 'CALL ssh\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"${FAKE_SSH_LOG:?FAKE_SSH_LOG is required}"
+
+remote_command=${!#}
+if [[ $remote_command != *--proxmox-user* ]]; then
+  # Consume the prerequisite-check program without executing host checks.
+  while IFS= read -r _line; do :; done
+  case $remote_command in
+    *' true '*) printf '%s\n' 'REQUIRE_JQ=true' >>"$FAKE_SSH_LOG" ;;
+    *) printf '%s\n' 'REQUIRE_JQ=false' >>"$FAKE_SSH_LOG" ;;
+  esac
+  if [[ ${FAKE_REMOTE_CHECK_STATUS:-0} != 0 ]]; then
+    printf '%s\n' "${FAKE_REMOTE_CHECK_ERROR:-[ERROR] Remote command missing: pveum}" >&2
+    exit "$FAKE_REMOTE_CHECK_STATUS"
+  fi
+  printf '%s\n' '[OK] Remote command available: bash'
+  printf '%s\n' '[OK] Remote command available: pveum'
+  [[ $remote_command != *' true '* ]] || printf '%s\n' '[OK] Remote command available: jq'
+  exit 0
+fi
+
+if [[ ${FAKE_SSH_PROTOCOL_FAIL:-0} == 1 ]]; then
+  while IFS= read -r _line; do :; done
+  printf 'PLATFORM_PROXMOX_TOKEN_LINE=tofu@pve!platform=%s\n' "${FAKE_TOKEN_SECRET:-12345678-1234-1234-1234-123456789abc}" >&2
+  printf '%s\n' 'simulated remote failure' >&2
+  exit 44
+fi
+
+exec bash -c "$remote_command"

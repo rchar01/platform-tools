@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n ${FAKE_SEQUENCE_PATH:-} && ${!#} == "$FAKE_SEQUENCE_PATH" ]]; then
+  printf 'MV %s\n' "${!#}" >>"${FAKE_SEQUENCE_LOG:?FAKE_SEQUENCE_LOG is required}"
+fi
+
+{
+  printf 'CALL mv\n'
+  printf 'SOURCE_MODE=%s\n' "$("${REAL_STAT:?REAL_STAT is required}" -c '%a' -- "${@: -2:1}")"
+  printf 'DESTINATION=%q\n' "${!#}"
+  printf 'END\n'
+} >>"${FAKE_MV_LOG:?FAKE_MV_LOG is required}"
+
+if [[ ${FAKE_MV_FAIL:-0} == 1 && ${!#} == "${FAKE_MV_FAIL_PATH:-}" ]]; then
+  exit 45
+fi
+exec "${REAL_MV:?REAL_MV is required}" "$@"

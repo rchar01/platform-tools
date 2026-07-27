@@ -160,6 +160,13 @@ Run only the isolated SSH identity helper tests:
 make test-platform-ssh-init
 ```
 
+Run only the fake-backed Proxmox token bootstrap tests, which never contact a
+real Proxmox host:
+
+```bash
+make test-proxmox-token-init
+```
+
 ## Quick Usage
 
 Create a purpose-specific SSH key directly:
@@ -206,6 +213,11 @@ Check Proxmox token bootstrap prerequisites first:
 ```bash
 platform-proxmox-token-init --ssh root@<proxmox-ip> --write-token-file ~/.config/platform-infrastructure/infra/proxmox.token --check
 ```
+
+Token-file output is staged beside the destination with mode `600`. Absent
+destinations use atomic no-clobber publication. Validated existing non-empty
+files are preserved unless `--force` is explicitly supplied; see the token
+helper documentation for the existing-file trust boundary.
 
 Clean up one Proxmox VM by VMID after verifying the printed target:
 

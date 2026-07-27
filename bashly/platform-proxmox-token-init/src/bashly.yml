@@ -1,0 +1,55 @@
+name: platform-proxmox-token-init
+help: Bootstrap the Proxmox API identity used by platform OpenTofu runs
+version: platform-proxmox-token-init <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --ssh
+  arg: user@host
+  help: SSH target for the Proxmox host
+  validate: not_empty
+- long: --write-token-file
+  arg: path
+  help: Write a newly generated token line locally with mode 600
+  validate: not_empty
+- long: --force
+  help: Allow replacement of a non-empty local token file
+- long: --check
+  help: Check prerequisites without creating users, tokens, or ACLs
+- long: --proxmox-user
+  alias: --user
+  arg: userid
+  help: "Proxmox API user ID [default: tofu@pve]"
+  validate: not_empty
+- long: --token-id
+  arg: id
+  help: "Proxmox token ID [default: platform]"
+  validate: not_empty
+- long: --role
+  arg: role
+  help: "Initial role to grant [default: Administrator]"
+  validate: not_empty
+- long: --path
+  arg: acl-path
+  help: "ACL path to grant [default: /]"
+  validate: not_empty
+- long: --comment
+  arg: text
+  help: "User comment [default: OpenTofu automation user]"
+  validate: not_empty
+- long: --emit-token-line
+  help: Emit the private self-streaming token transport line
+  private: true
+
+examples:
+- platform-proxmox-token-init --ssh root@192.0.2.10 --check
+- platform-proxmox-token-init --ssh root@192.0.2.10 --write-token-file ~/.config/platform-infrastructure/infra/proxmox.token
+- platform-proxmox-token-init --proxmox-user tofu@pve --token-id platform
+
+footer: |-
+  Run locally on a Proxmox host, or use --ssh to stream this executable and
+  run pveum remotely. The Proxmox host always requires pveum. jq is required
+  there only when --write-token-file captures parsed JSON automatically.
+
+  Proxmox shows a token secret only when the token is created. Existing token
+  secrets cannot be recovered. Token files are written locally with mode 600
+  and non-empty files are not replaced unless --force is supplied.

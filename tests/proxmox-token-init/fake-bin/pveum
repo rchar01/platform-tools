@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+  printf 'CALL pveum\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"${FAKE_PVEUM_LOG:?FAKE_PVEUM_LOG is required}"
+
+case "$*" in
+  'user list --output-format json')
+    if [[ ${FAKE_USER_EXISTS:-0} == 1 ]]; then
+      printf '[{"userid":"%s"}]\n' "${FAKE_EXPECTED_USER:-tofu@pve}"
+    else
+      printf '%s\n' '[]'
+    fi
+    ;;
+  'user list')
+    [[ ${FAKE_USER_EXISTS:-0} != 1 ]] || printf '%s\n' "${FAKE_EXPECTED_USER:-tofu@pve}"
+    ;;
+  'user add '*)
+    ;;
+  'user token list '*' --output-format json')
+    if [[ ${FAKE_TOKEN_EXISTS:-0} == 1 ]]; then
+      printf '[{"tokenid":"%s"}]\n' "${FAKE_EXPECTED_TOKEN_ID:-platform}"
+    else
+      printf '%s\n' '[]'
+    fi
+    ;;
+  'user token list '*)
+    [[ ${FAKE_TOKEN_EXISTS:-0} != 1 ]] || printf '%s\n' "${FAKE_EXPECTED_TOKEN_ID:-platform}"
+    ;;
+  'user token add '*)
+    if [[ -n ${FAKE_TOKEN_RACE_PATH:-} ]]; then
+      if [[ -n ${FAKE_TOKEN_RACE_SYMLINK_TARGET:-} ]]; then
+        "${REAL_LN:?REAL_LN is required}" -s -- "$FAKE_TOKEN_RACE_SYMLINK_TARGET" "$FAKE_TOKEN_RACE_PATH"
+      elif [[ ${FAKE_TOKEN_RACE_EMPTY:-0} == 1 ]]; then
+        : >"$FAKE_TOKEN_RACE_PATH"
+      else
+        printf '%s\n' 'concurrent token file' >"$FAKE_TOKEN_RACE_PATH"
+      fi
+      [[ -L $FAKE_TOKEN_RACE_PATH ]] || chmod 600 "$FAKE_TOKEN_RACE_PATH"
+    fi
+    if [[ -n ${FAKE_TOKEN_REPLACE_PATH:-} ]]; then
+      replacement=${FAKE_TOKEN_REPLACE_PATH}.foreign
+      printf '%s\n' 'foreign replacement' >"$replacement"
+      chmod 600 "$replacement"
+      "${REAL_MV:?REAL_MV is required}" -- "$replacement" "$FAKE_TOKEN_REPLACE_PATH"
+    fi
+    full_token=${FAKE_FULL_TOKEN:-${FAKE_EXPECTED_USER:-tofu@pve}!${FAKE_EXPECTED_TOKEN_ID:-platform}}
+    secret=${FAKE_TOKEN_SECRET:-12345678-1234-1234-1234-123456789abc}
+    if [[ ${FAKE_TOKEN_ADD_FAIL:-0} == 1 ]]; then
+      printf '{"full-tokenid":"%s","value":"%s"}\n' "$full_token" "$secret"
+      exit 42
+    fi
+    if [[ ${FAKE_INVALID_JSON:-0} == 1 ]]; then
+      printf 'unparseable secret=%s\n' "$secret"
+    else
+      printf '{"full-tokenid":"%s","value":"%s"}\n' "$full_token" "$secret"
+    fi
+    ;;
+  'aclmod '*)
+    [[ ${FAKE_ACL_FAIL:-0} == 0 ]] || exit 43
+    ;;
+  *)
+    printf 'unexpected fake pveum invocation: %q' "$1" >&2
+    printf ' %q' "${@:2}" >&2
+    printf '\n' >&2
+    exit 64
+    ;;
+esac

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+  printf 'CALL jq\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"${FAKE_JQ_LOG:?FAKE_JQ_LOG is required}"
+
+exec "${REAL_JQ:?REAL_JQ is required}" "$@"

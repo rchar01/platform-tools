@@ -31,7 +31,7 @@ platform-proxmox-token-init \
   --write-token-file ~/.config/platform-infrastructure/infra/proxmox.token
 ```
 
-This streams the helper over SSH, runs `pveum` on the Proxmox host, captures a newly generated token secret over the encrypted SSH connection, and writes it locally with mode `600`.
+This streams the generated standalone helper over SSH, runs `pveum` on the Proxmox host, captures a newly generated token secret over the encrypted SSH connection, and writes it locally with mode `600`.
 
 Use the Proxmox IP address until you have a trusted hostname or SSH alias. `root@pve` only works when `pve` resolves through DNS, `/etc/hosts`, or a `Host pve` block in `~/.ssh/config`.
 
@@ -127,7 +127,24 @@ When the helper creates a new token with `jq` available, it validates the genera
 
 ## Store The Token
 
-With `--write-token-file`, the helper writes the newly generated token line into:
+With `--write-token-file`, the helper stages the newly generated token line in
+an owner-only mode-`600` temporary file beside the destination. An absent
+destination is published atomically with a no-clobber hard link. The helper
+refuses symbolic-link and nonregular destinations. A validated non-empty
+destination is preserved unless `--force` is supplied; failed or conflicting
+publication preserves the destination and removes the temporary file.
+
+Existing-file replacement uses a cooperative same-user trust boundary. The
+helper snapshots the destination identity during preflight, completes all
+pathname-sensitive authorization checks, rechecks that identity, and then
+immediately invokes `mv`. This protects cooperating helper runs and detects
+transitions before the final recheck, but POSIX shell provides no atomic
+compare-and-replace operation for an existing pathname. A noncooperating
+same-UID process or privileged actor with directory access can still race the
+small interval between the final identity check and `mv`; use a private,
+trusted parent directory and avoid concurrent manual writes.
+
+The usual destination is:
 
 ```text
 ~/.config/platform-infrastructure/infra/proxmox.token
@@ -196,8 +213,13 @@ Options:
   --path <acl-path>              ACL path to grant. Default: /
   --comment <text>               User comment. Default: OpenTofu automation user
   -h, --help                     Show this help.
+  -v, --version                  Show the repository tool version.
 ```
 
 `--ssh root@<proxmox-ip>` controls how the helper reaches the Proxmox host. `--proxmox-user tofu@pve` controls the Proxmox API identity created inside Proxmox. They are different users in different systems.
 
 With `--privsep 0`, the token inherits the user's ACLs. If you later use a privilege-separated token, grant permissions to the token identity instead of relying on inherited user permissions.
+
+`--emit-token-line` is a private transport flag used only by the self-streamed
+SSH workflow. It remains accepted by the generated executable but is omitted
+from normal help.

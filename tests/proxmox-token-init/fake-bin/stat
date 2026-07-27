@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=$("${REAL_STAT:?REAL_STAT is required}" "$@")
+status=$?
+if [[ $status -eq 0 && -n ${FAKE_SEQUENCE_PATH:-} && ${!#} == "$FAKE_SEQUENCE_PATH" ]]; then
+  printf 'STAT %s\n' "${!#}" >>"${FAKE_SEQUENCE_LOG:?FAKE_SEQUENCE_LOG is required}"
+fi
+printf '%s\n' "$output"
+exit "$status"

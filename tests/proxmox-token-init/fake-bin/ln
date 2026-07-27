@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+  printf 'CALL ln\n'
+  printf 'SOURCE_MODE=%s\n' "$(stat -c '%a' -- "${@: -2:1}")"
+  printf 'DESTINATION=%q\n' "${!#}"
+  printf 'END\n'
+} >>"${FAKE_LN_LOG:?FAKE_LN_LOG is required}"
+
+exec "${REAL_LN:?REAL_LN is required}" "$@"
