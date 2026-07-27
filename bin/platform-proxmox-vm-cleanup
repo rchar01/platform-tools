@@ -872,7 +872,7 @@ parse_requirements() {
 }
 
 initialize() {
-  declare -g version="platform-proxmox-vm-cleanup 1.4.0-dev"
+  declare -g version="platform-proxmox-vm-cleanup 1.4.0"
   set -euo pipefail
 
   enable_auto_colors

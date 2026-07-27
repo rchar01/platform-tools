@@ -7,11 +7,13 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-27
+
 ### Added
 
 - Added maintained cross-command contract and disposable installed-layout smoke tests covering every shell command and `platform-bastion-policy`, including installed PKI shared-asset discovery without runtime generator dependencies.
 - Added a pinned Podman development environment with Bashly, test, lint, and generated-artifact verification tooling.
-- Added repository version `1.4.0-dev` and generated `--version` support to `platform-config-init`.
+- Added repository version `1.4.0` and generated `--version` support to `platform-config-init`.
 - Added `platform-proxmox-vm-snapshot` with exact VM or dual-tag environment selection, structured Proxmox preflight, dry-run support, destructive confirmation, target-drift protection, and partial-operation summaries. Mutating environment workflows remain gated on reconciled `platform-infra` tags and a manually verified dry-run target set.
 - Added a reusable live-acceptance runbook for selector, snapshot, rollback, negative-path, evidence, and cleanup checks on disposable VMs.
 

@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v1.4.0 - 2026-07-27
+
 - Generated help for all 16 Bashly-backed commands now uses restrained colors on interactive terminals while remaining plain for pipes, redirects, and `NO_COLOR=1`.
 - Completed the Bashly migration for all 16 maintained shell commands and added one shared CLI contract for help, version, parser errors, and subcommand help.
 - Aligned `platform-bastion-policy` help, version, parser-error status, and output streams with the shared command contract.
