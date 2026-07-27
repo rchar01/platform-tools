@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -x /usr/bin/stat ]]; then
+  real_stat=/usr/bin/stat
+elif [[ -x /bin/stat ]]; then
+  real_stat=/bin/stat
+else
+  printf '%s\n' 'real stat not found in a standard system path' >&2
+  exit 127
+fi
+
+if [[ ${FAKE_STAT_SIGNAL_DESCRIPTOR:-0} == 1 && $* == *'/proc/self/fd/'* ]]; then
+  kill -TERM "$PPID"
+  exit 1
+fi
+
+if [[ ${1:-} == -c && ${2:-} == '%u:%a:%h:%d:%i' ]]; then
+  if [[ ${3:-} == -- ]]; then
+    target=${4:-}
+  else
+    target=${3:-}
+  fi
+  if [[ -n ${FAKE_STAT_TARGET:-} && $target == "$FAKE_STAT_TARGET" ]]; then
+    metadata=$("$real_stat" -c '%u:%a:%h:%d:%i' -- "$target")
+    IFS=: read -r owner mode links device inode <<<"$metadata"
+    owner=${FAKE_STAT_OWNER:-$owner}
+    mode=${FAKE_STAT_MODE:-$mode}
+    links=${FAKE_STAT_LINKS:-$links}
+    if [[ ${FAKE_STAT_CHANGE_AFTER_FIRST:-0} == 1 ]]; then
+      count_file=${FAKE_PVE_STATE:?FAKE_PVE_STATE is required}/stat-count
+      count=0
+      [[ ! -f $count_file ]] || count=$(<"$count_file")
+      ((count += 1))
+      printf '%s\n' "$count" >"$count_file"
+      [[ $count -eq 1 ]] || ((inode += 1))
+    fi
+    printf '%s:%s:%s:%s:%s\n' "$owner" "$mode" "$links" "$device" "$inode"
+    exit 0
+  fi
+fi
+
+exec "$real_stat" "$@"

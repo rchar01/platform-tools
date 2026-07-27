@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -x /usr/bin/mv ]]; then
+  real_mv=/usr/bin/mv
+elif [[ -x /bin/mv ]]; then
+  real_mv=/bin/mv
+else
+  printf '%s\n' 'real mv not found in a standard system path' >&2
+  exit 127
+fi
+
+source_path=${*: -2:1}
+destination_path=${*: -1}
+if [[ -n ${FAKE_MV_SWAP_SOURCE:-} && $source_path == "$FAKE_MV_SWAP_SOURCE" ]]; then
+  saved_path="${source_path}.saved"
+  "$real_mv" -- "$source_path" "$saved_path"
+  case ${FAKE_MV_SWAP_KIND:-file} in
+    file)
+      printf '%s\n' '{}' >"$source_path"
+      chmod 600 "$source_path"
+      ;;
+    symlink)
+      ln -s "$saved_path" "$source_path"
+      ;;
+    *)
+      printf 'unsupported fake mv swap kind: %s\n' "$FAKE_MV_SWAP_KIND" >&2
+      exit 2
+      ;;
+  esac
+  "$real_mv" "$@"
+  rm -- "$destination_path"
+  "$real_mv" -- "$saved_path" "$source_path"
+  exit 0
+fi
+
+exec "$real_mv" "$@"

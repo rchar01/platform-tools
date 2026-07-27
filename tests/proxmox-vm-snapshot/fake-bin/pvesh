@@ -2,6 +2,15 @@
 set -euo pipefail
 
 state=${FAKE_PVE_STATE:?FAKE_PVE_STATE is required}
+if [[ ${FAKE_FORBID_CONSUMED_MANIFEST_FD:-0} == 1 ]]; then
+  for fd_path in "/proc/$$/fd/"*; do
+    fd_target=$(readlink "$fd_path" 2>/dev/null || true)
+    [[ $fd_target != *expected-targets.consumed* ]] || {
+      printf 'consumed expected manifest descriptor leaked to pvesh\n' >&2
+      exit 2
+    }
+  done
+fi
 [[ ${1:-} == get ]] || { printf 'fake pvesh supports get only\n' >&2; exit 2; }
 endpoint=${2:-}
 

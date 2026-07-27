@@ -1,0 +1,120 @@
+name: platform-proxmox-vm-snapshot
+help: Create, inspect, roll back, or delete short-lived Proxmox VE 9 VM snapshots
+version: platform-proxmox-vm-snapshot <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+commands:
+- name: create
+  help: Create a temporary VM snapshot
+  flags:
+  - &vmid
+    long: --vmid
+    arg: vmid
+    help: Select one numeric VMID
+  - &vm_name
+    long: --vm-name
+    arg: exact-name
+    help: Select one exact, uniquely named VM
+  - &environment
+    long: --environment
+    arg: tag
+    help: Select non-template VMs tagged managed-by-tofu and tag
+  - &snapshot_name
+    long: --snapshot-name
+    arg: name
+    help: Snapshot name
+    required: true
+  - long: --description
+    arg: text
+    help: Snapshot description
+  - long: --include-memory
+    help: Include saved VM memory state
+  - &ssh
+    long: --ssh
+    arg: user@host
+    help: Run Proxmox work on a host over SSH
+  - &identity_file
+    long: --identity-file
+    arg: path
+    help: SSH private key for --ssh
+  - &dry_run
+    long: --dry-run
+    help: Resolve, inspect, and print without mutation
+  - &yes
+    long: --yes
+    help: Skip mutation confirmation, not preflight
+  - &internal_preflight
+    long: --internal-preflight
+    help: Run the private self-streaming preflight protocol
+    private: true
+  - &internal_action
+    long: --internal-action
+    help: Run the private self-streaming action protocol
+    private: true
+  - &expected_targets_file
+    long: --expected-targets-file
+    arg: path
+    help: Read the private expected operation-state manifest
+    private: true
+  examples:
+  - platform-proxmox-vm-snapshot create --vmid 101 --snapshot-name before-upgrade
+  - platform-proxmox-vm-snapshot create --environment dev --snapshot-name before-change --dry-run
+
+- name: list
+  help: List VM snapshots
+  flags:
+  - *vmid
+  - *vm_name
+  - *environment
+  - *ssh
+  - *identity_file
+  - *dry_run
+  examples:
+  - platform-proxmox-vm-snapshot list --vmid 101
+  - platform-proxmox-vm-snapshot list --environment dev
+
+- name: rollback
+  help: Roll back VMs to an existing snapshot
+  flags:
+  - *vmid
+  - *vm_name
+  - *environment
+  - *snapshot_name
+  - long: --start-after-rollback
+    help: Explicitly start each VM after rollback
+  - *ssh
+  - *identity_file
+  - *dry_run
+  - *yes
+  - *internal_preflight
+  - *internal_action
+  - *expected_targets_file
+  examples:
+  - platform-proxmox-vm-snapshot rollback --vmid 101 --snapshot-name before-upgrade
+  - platform-proxmox-vm-snapshot rollback --environment dev --snapshot-name before-change --dry-run
+
+- name: delete
+  help: Delete an existing VM snapshot
+  flags:
+  - *vmid
+  - *vm_name
+  - *environment
+  - *snapshot_name
+  - *ssh
+  - *identity_file
+  - *dry_run
+  - *yes
+  - *internal_preflight
+  - *internal_action
+  - *expected_targets_file
+  examples:
+  - platform-proxmox-vm-snapshot delete --vmid 101 --snapshot-name before-upgrade
+  - platform-proxmox-vm-snapshot delete --environment dev --snapshot-name before-change --dry-run
+
+footer: |-
+  Exactly one of --vmid, --vm-name, or --environment is required. Environment
+  selection requires exact managed-by-tofu and environment tags and may target
+  multiple VMs. Multi-VM operations run serially and are not atomic.
+
+  Snapshots are temporary rollback points, not backups. Without --yes, create,
+  rollback, and delete require interactive TTY confirmation. Rollback and
+  delete use the exact VMID/environment plus snapshot name as confirmation.

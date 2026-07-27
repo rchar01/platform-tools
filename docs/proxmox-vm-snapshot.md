@@ -14,6 +14,8 @@ The Proxmox host must provide:
 - Proxmox VE 9 in a single-node installation
 - `bash`, `pvesh`, and `jq` for all operations
 - `qm` additionally for create, rollback, and delete
+- Linux procfs mounted at `/proc` for descriptor-bound validation of private
+  expected-state manifests during streamed mutation actions
 - an operator identity allowed to run the required local Proxmox commands,
   normally `root`
 
@@ -232,11 +234,25 @@ Before mutation, the helper:
 - prints status, attached disk configuration, and snapshots
 - binds confirmation to the exact node, VMID, name, sanitized config, status,
   and snapshot state that was displayed
+- atomically consumes private expected-state manifests into a validated
+  current-user-owned mode-`700` sibling directory, then accepts only an exact
+  mode-`600`, one-link regular file whose `/proc/self/fd` metadata matches the
+  consumed inode; the same descriptor is read and closed before Proxmox or JSON
+  child commands run
 - repeats checks after confirmation and before every serial VM mutation
+
+Catchable failures and signals remove only the identity-matched consumed
+manifest and private directory. An uncatchable interruption such as `SIGKILL`
+can leave consumed state behind, but the original authorization path remains
+absent and a later action fails closed on the consumed-name collision. Inspect
+and remove such residual state manually; the helper never replaces or
+automatically deletes an unrecognized collision.
 
 Create uses a yes/no prompt. Rollback and deletion require typing the VMID and
 snapshot name, or the environment and snapshot name. `--yes` skips only the
 prompt; it does not skip preflight, drift checks, postconditions, or summaries.
+Without `--yes`, all three mutating commands require an interactive TTY and
+refuse redirected or unavailable confirmation input.
 
 If a later VM fails, the helper stops, returns nonzero, and reports each VM as
 `succeeded`, `failed`, or `not attempted`. It does not automatically compensate
@@ -246,7 +262,13 @@ compound the failure.
 ## Options
 
 ```text
-Usage: platform-proxmox-vm-snapshot <create|list|rollback|delete> [options]
+Usage: platform-proxmox-vm-snapshot COMMAND
+
+Commands:
+  create                         Create a temporary VM snapshot.
+  list                           List VM snapshots.
+  rollback                       Roll back VMs to an existing snapshot.
+  delete                         Delete an existing VM snapshot.
 
 Target selector; exactly one required:
   --vmid <vmid>                 Select one numeric VMID.
@@ -266,4 +288,9 @@ Connection and safety:
   --dry-run                     Resolve, inspect, and print without mutation.
   --yes                         Skip mutation confirmation, not preflight.
   -h, --help                    Show help.
+  -v, --version                 Show the embedded repository version.
 ```
+
+Run `platform-proxmox-vm-snapshot COMMAND --help` for the exact options
+applicable to one operation. Private self-streaming protocol options remain
+accepted by streamed copies but are intentionally omitted from public help.

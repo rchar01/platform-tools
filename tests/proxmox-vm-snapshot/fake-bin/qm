@@ -13,6 +13,7 @@ name=${3:-}
   done
   printf 'END\n'
 } >>"$state/qm.log"
+printf '%s:%s\n' "$operation" "$vmid" >>"$state/qm-order.log"
 
 if [[ ${FAKE_QM_FAIL_OPERATION:-} == "$operation" && ${FAKE_QM_FAIL_VMID:-} == "$vmid" ]]; then
   printf 'simulated qm failure for %s %s\n' "$operation" "$vmid" >&2

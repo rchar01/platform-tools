@@ -88,7 +88,7 @@ SSH and Proxmox helpers require:
 - `ssh` for remote execution modes
 - `pveum` on the Proxmox host for `platform-proxmox-token-init`
 - `qm` on the Proxmox host for `platform-proxmox-vm-cleanup`
-- `pvesh` and `jq` on a single-node Proxmox VE 9 host for `platform-proxmox-vm-snapshot`, plus `qm` for mutations; local `jq` is also required with `--ssh`
+- `pvesh`, `jq`, and Linux procfs at `/proc` on a single-node Proxmox VE 9 host for `platform-proxmox-vm-snapshot`, plus `qm` for mutations; local `jq` is also required with `--ssh`
 - `jq` on the Proxmox host when `platform-proxmox-token-init --write-token-file` is used over SSH
 
 Bastion policy helpers require:
@@ -174,6 +174,13 @@ Proxmox host or mutate a VM:
 make test-proxmox-vm-cleanup
 ```
 
+Run only the fake-backed Proxmox VM snapshot tests, which never contact a real
+Proxmox host or mutate a live VM:
+
+```bash
+make test-proxmox-vm-snapshot
+```
+
 ## Quick Usage
 
 Create a purpose-specific SSH key directly:
@@ -256,6 +263,11 @@ platform-proxmox-vm-snapshot create \
   --vmid 101 \
   --snapshot-name before-upgrade
 ```
+
+Snapshot create, rollback, and delete require an interactive TTY unless
+`--yes` is supplied. Generated subcommand parsing exposes only options that
+apply to the selected operation; private self-streaming protocol flags remain
+hidden from public help.
 
 Initialize PKI state and issue a test service certificate from inventory:
 
