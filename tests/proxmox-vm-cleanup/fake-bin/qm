@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${FAKE_REQUIRE_FD3_CLOSED:-0} == 1 ]]; then
+  [[ ! -e /proc/$$/fd/3 ]] || { printf '%s\n' 'fake qm inherited FD 3' >&2; exit 90; }
+  printf '%s\n' 'qm FD3=closed' >>"${FAKE_FD_LOG:?FAKE_FD_LOG is required}"
+fi
+
+operation=${1:-}
+vmid=${2:-}
+printf '%s\n' "$operation" >>"${FAKE_QM_OPERATION_LOG:?FAKE_QM_OPERATION_LOG is required}"
+{
+  printf 'CALL qm\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"${FAKE_QM_LOG:?FAKE_QM_LOG is required}"
+
+operation_call=$(grep -c -Fx "$operation" "$FAKE_QM_OPERATION_LOG")
+if [[ ${FAKE_QM_FAIL_OPERATION:-} == "$operation" ]]; then
+  printf 'simulated qm %s failure\n' "$operation" >&2
+  exit "${FAKE_QM_FAIL_STATUS:-42}"
+fi
+
+case $operation in
+  status)
+    [[ $# -eq 2 ]] || exit 64
+    if [[ -n ${FAKE_QM_STATUS_ERROR_AT:-} && $operation_call -eq $FAKE_QM_STATUS_ERROR_AT ]]; then
+      printf '%s\n' "${FAKE_QM_STATUS_ERROR:-permission denied by fake qm}" >&2
+      exit "${FAKE_QM_FAIL_STATUS:-42}"
+    fi
+    if [[ ${FAKE_VM_EXISTS:-1} != 1 || ( -n ${FAKE_VM_MISSING_AT:-} && $operation_call -eq $FAKE_VM_MISSING_AT ) ]]; then
+      printf "Configuration file 'nodes/pve-test/qemu-server/%s.conf' does not exist\n" "$vmid" >&2
+      exit 2
+    fi
+    status_override=''
+    case $operation_call in
+      2) status_override=${FAKE_QM_STATUS_OUTPUT_AT_2:-} ;;
+      3) status_override=${FAKE_QM_STATUS_OUTPUT_AT_3:-} ;;
+      4) status_override=${FAKE_QM_STATUS_OUTPUT_AT_4:-} ;;
+    esac
+    if [[ -n $status_override ]]; then
+      printf '%b\n' "$status_override"
+    elif [[ -n ${FAKE_QM_STATUS_OUTPUT:-} ]]; then
+      printf '%b\n' "$FAKE_QM_STATUS_OUTPUT"
+    elif grep -Fxq stop "$FAKE_QM_OPERATION_LOG"; then
+      printf 'status: %s\n' "${FAKE_POST_STOP_STATUS:-stopped}"
+    else
+      printf 'status: %s\n' "${FAKE_VM_STATUS:-stopped}"
+    fi
+    ;;
+  config)
+    [[ $# -eq 2 ]] || exit 64
+    if [[ -n ${FAKE_QM_CONFIG_ERROR_AT:-} && $operation_call -eq $FAKE_QM_CONFIG_ERROR_AT ]]; then
+      printf '%s\n' "${FAKE_QM_CONFIG_ERROR:-simulated qm config failure}" >&2
+      exit "${FAKE_QM_FAIL_STATUS:-42}"
+    fi
+    [[ ${FAKE_VM_EXISTS:-1} == 1 ]] || exit 2
+    if [[ ${FAKE_CONFIG_HAS_NAME:-1} == 1 ]]; then
+      name_override=''
+      case $operation_call in
+        2) name_override=${FAKE_VM_NAME_AT_2:-} ;;
+        3) name_override=${FAKE_VM_NAME_AT_3:-} ;;
+        4) name_override=${FAKE_VM_NAME_AT_4:-} ;;
+      esac
+      printf 'name: %s\n' "${name_override:-${FAKE_VM_NAME:-fixture-vm}}"
+    fi
+    [[ ${FAKE_CONFIG_DUPLICATE_NAME:-0} != 1 ]] || printf 'name: duplicate-name\n'
+    memory=2048
+    [[ ! ( $operation_call -eq 3 && -n ${FAKE_CONFIG_MEMORY_AT_3:-} ) ]] || memory=$FAKE_CONFIG_MEMORY_AT_3
+    printf 'memory: %s\n' "$memory"
+    ;;
+  stop)
+    [[ $# -eq 2 && $vmid =~ ^[0-9]+$ ]] || exit 64
+    ;;
+  destroy)
+    if [[ $# -eq 1 ]]; then
+      if [[ ${FAKE_DESTROY_PROBE_INVALID:-0} == 1 ]]; then
+        printf '%s\n' 'unrelated destroy failure' >&2
+      elif [[ ${FAKE_DESTROY_SUPPORTS_UNREFERENCED:-1} == 1 ]]; then
+        printf '%s\n' 'qm destroy <vmid> [--purge] [--destroy-unreferenced-disks]' >&2
+      else
+        printf '%s\n' 'qm destroy <vmid> [--purge]' >&2
+      fi
+      exit 1
+    fi
+    if [[ ${FAKE_QM_FAIL_TARGET_DESTROY:-0} == 1 ]]; then
+      printf '%s\n' 'simulated qm destroy failure' >&2
+      exit "${FAKE_QM_FAIL_STATUS:-42}"
+    fi
+    if [[ ${FAKE_DESTROY_SUPPORTS_UNREFERENCED:-1} == 1 ]]; then
+      [[ $# -eq 5 && $3 == --purge && $4 == --destroy-unreferenced-disks && $5 == 1 ]] || exit 64
+    else
+      [[ $# -eq 3 && $3 == --purge ]] || exit 64
+    fi
+    ;;
+  *)
+    printf 'unsupported fake qm operation: %s\n' "$operation" >&2
+    exit 64
+    ;;
+esac

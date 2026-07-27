@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ -n ${FAKE_REMOTE_CHILD_ARGV_LOG:-} && ${1:-} == */platform-proxmox-vm-cleanup.*/tool ]]; then
+  {
+    printf 'CAPTURED_ARGV\n'
+    for arg in "$@"; do printf 'ARG=%q\n' "$arg"; done
+    if [[ -r /proc/$$/cmdline ]]; then
+      tr '\0' '\n' </proc/$$/cmdline | sed 's/^/PROC=/'
+    fi
+    printf 'END_ARGV\n'
+  } >>"$FAKE_REMOTE_CHILD_ARGV_LOG"
+fi
+exec "${REAL_BASH:?REAL_BASH is required}" "$@"

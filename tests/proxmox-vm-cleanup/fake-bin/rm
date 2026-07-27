@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+target=${!#}
+if [[ ${FAKE_AUTH_INTERRUPT_AFTER_UNLINK:-0} == 1 && $target == */.tmp.* ]]; then
+  exit 77
+fi
+exec "${REAL_RM:?REAL_RM is required}" "$@"

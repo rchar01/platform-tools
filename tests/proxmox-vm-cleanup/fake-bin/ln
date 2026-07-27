@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${FAKE_AUTH_INTERRUPT_AFTER_LINK:-0} == 1 && ${*: -2:1} == */.tmp.* ]]; then
+  "${REAL_LN:?REAL_LN is required}" "$@"
+  exit 77
+fi
+exec "${REAL_LN:?REAL_LN is required}" "$@"

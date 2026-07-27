@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${FAKE_REQUIRE_FD3_CLOSED:-0} == 1 ]]; then
+  [[ ! -e /proc/$$/fd/3 ]] || { printf '%s\n' 'fake mv inherited FD 3' >&2; exit 90; }
+  printf '%s\n' 'mv FD3=closed' >>"${FAKE_FD_LOG:?FAKE_FD_LOG is required}"
+fi
+
+source_path=${*: -2:1}
+if [[ ${FAKE_AUTH_REPLACE_ON_MV:-0} == 1 && ${source_path##*/} =~ ^[a-f0-9]{64}$ ]]; then
+  replacement=${source_path}.replacement
+  cp -- "$source_path" "$replacement"
+  chmod 600 "$replacement"
+  "${REAL_MV:?REAL_MV is required}" -- "$replacement" "$source_path"
+fi
+if [[ ${FAKE_AUTH_INTERRUPT_AFTER_MV:-0} == 1 && ${source_path##*/} =~ ^[a-f0-9]{64}$ ]]; then
+  "${REAL_MV:?REAL_MV is required}" "$@"
+  exit 77
+fi
+exec "${REAL_MV:?REAL_MV is required}" "$@"

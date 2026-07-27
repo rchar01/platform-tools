@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${FAKE_REQUIRE_FD3_CLOSED:-0} == 1 ]]; then
+  [[ ! -e /proc/$$/fd/3 ]] || { printf '%s\n' 'fake stat inherited FD 3' >&2; exit 90; }
+  printf '%s\n' 'stat FD3=closed' >>"${FAKE_FD_LOG:?FAKE_FD_LOG is required}"
+fi
+exec "${REAL_STAT:?REAL_STAT is required}" "$@"

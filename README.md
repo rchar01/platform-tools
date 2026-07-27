@@ -74,7 +74,7 @@ Core local requirements:
 
 - `bash`
 - `make`
-- standard Unix tools such as `awk`, `cmp`, `cp`, `date`, `find`, `grep`, `mkdir`, `mktemp`, `sed`, `stat`, and `tar`
+- standard Unix tools such as `awk`, `cmp`, `cp`, `date`, `find`, `grep`, `mkdir`, `mktemp`, `od`, `sed`, `sha256sum`, `stat`, `tar`, and `tr`
 
 PKI helpers require:
 
@@ -167,6 +167,13 @@ real Proxmox host:
 make test-proxmox-token-init
 ```
 
+Run only the fake-backed Proxmox VM cleanup tests, which never contact a real
+Proxmox host or mutate a VM:
+
+```bash
+make test-proxmox-vm-cleanup
+```
+
 ## Quick Usage
 
 Create a purpose-specific SSH key directly:
@@ -224,6 +231,21 @@ Clean up one Proxmox VM by VMID after verifying the printed target:
 ```bash
 platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --vmid 9900
 ```
+
+Without `--yes`, cleanup requires an interactive TTY and confirmation containing
+exactly the selected VMID. Redirected input and unavailable input are refused.
+After confirmation, the helper re-inspects the VMID, exact name, and status and
+aborts on drift before and after resolving the supported destroy command. A
+running VM is checked again after stop. Remote destruction consumes a
+five-minute, owner-only authorization record persisted on the Proxmox host;
+the fixed remote command receives VM and token data over standard input rather
+than login-shell syntax, and the generated remote child reads the nonce from a
+protected file descriptor rather than argv, closing that descriptor before any
+authorization or Proxmox child command. Aged interrupted publication and
+consume artifacts are reaped only after strict owner, mode, link-count,
+device/inode, and non-symlink checks. `--ssh` accepts
+only a DNS-name/IPv4 `host` or `user@host` destination; option-like, whitespace,
+shell-metacharacter, and bracketed IPv6 values are rejected.
 
 Create a short-lived development snapshot for one exact VM:
 

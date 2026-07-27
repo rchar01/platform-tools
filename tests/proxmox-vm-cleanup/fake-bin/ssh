@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{
+  printf 'CALL ssh\n'
+  for arg in "$@"; do
+    printf 'ARG=%q\n' "$arg"
+  done
+  printf 'END\n'
+} >>"${FAKE_SSH_LOG:?FAKE_SSH_LOG is required}"
+
+remote_command=${!#}
+IFS= read -r mode
+IFS= read -r script_size
+IFS= read -r vmid
+IFS= read -r expected_name
+IFS= read -r token
+printf 'MODE=%s\nLOGIN_SHELL=sh\n' "$mode" >>"$FAKE_SSH_LOG"
+if [[ $mode == inspect && ${FAKE_SSH_FAIL_INSPECT:-0} == 1 ]]; then
+  printf '%s\n' 'simulated SSH inspection failure' >&2
+  exit 43
+fi
+if [[ $mode == destroy && ${FAKE_SSH_FAIL_DESTROY:-0} == 1 ]]; then
+  printf '%s\n' 'simulated SSH destruction failure' >&2
+  exit 44
+fi
+
+{
+  printf '%s\n%s\n%s\n%s\n%s\n' "$mode" "$script_size" "$vmid" "$expected_name" "$token"
+  cat
+} | sh -c "$remote_command"

@@ -1,0 +1,48 @@
+name: platform-proxmox-vm-cleanup
+help: Safely stop and destroy exactly one Proxmox VM by VMID
+version: platform-proxmox-vm-cleanup <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --vmid
+  arg: vmid
+  help: Required numeric Proxmox VMID to destroy
+  required: true
+  validate: numeric_vmid
+- long: --ssh
+  arg: destination
+  help: SSH target for the Proxmox host
+  validate: not_empty
+- long: --identity-file
+  arg: path
+  help: SSH private key for --ssh
+  validate: not_empty
+- long: --name
+  arg: vm-name
+  help: Abort unless the qm config name exactly matches this value
+  validate: not_empty
+- long: --yes
+  help: Skip the interactive VMID confirmation prompt
+- long: --remote-inspect
+  help: Run the private self-streaming inspection protocol
+  private: true
+- long: --remote-destroy
+  help: Run the private self-streaming destruction protocol
+  private: true
+- long: --remote-cancel
+  help: Revoke a private self-streaming authorization
+  private: true
+
+examples:
+- platform-proxmox-vm-cleanup --vmid 9900
+- platform-proxmox-vm-cleanup --ssh root@192.0.2.10 --vmid 9900
+- platform-proxmox-vm-cleanup --vmid 9900 --name smoke-9900 --yes
+
+footer: |-
+  Run locally on a Proxmox host, or use --ssh with a DNS-name/IPv4 host or
+  user@host destination to stream this executable and run qm remotely. The
+  helper prints the target configuration and verifies an optional exact name
+  guard before confirmation. Without --yes, confirmation requires an
+  interactive TTY and the exact VMID.
+
+  This tool never cleans by name, pattern, tag, range, or state. It only
+  destroys the single VMID provided by --vmid.
