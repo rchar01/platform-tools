@@ -87,18 +87,64 @@ export PLATFORM_TOOLS_SHARE_DIR="$PWD/.tools/share/platform-tools"
 platform-pki-init
 ```
 
-This creates:
+This initializes the following working-tree layout. CA material, service
+directories, OpenSSL database sidecars, exports, and backups appear as the
+corresponding commands populate it:
 
 ```text
 ~/.config/platform-infrastructure/pki/
-├── inventory/services.yml
+├── inventory/
+│   └── services.yml
 ├── pki.env
+├── openssl-root.cnf.tpl
+├── openssl-intermediate.cnf.tpl
+├── openssl-service.cnf.tpl
 ├── root-ca/
+│   ├── certs/
+│   ├── crl/
+│   ├── newcerts/
+│   ├── private/
+│   ├── index.txt
+│   ├── index.txt.attr
+│   ├── serial
+│   └── crlnumber
 ├── intermediate-ca/
+│   ├── certs/
+│   ├── crl/
+│   ├── csr/
+│   ├── newcerts/
+│   ├── private/
+│   ├── index.txt
+│   ├── index.txt.attr
+│   ├── serial
+│   └── crlnumber
 ├── services/
-├── export/ansible/
+│   └── <service>/
+│       ├── certs/
+│       ├── chain/
+│       ├── csr/
+│       ├── private/
+│       └── openssl.cnf
+├── export/
+│   └── ansible/
 └── backups/
 ```
+
+OpenSSL creates `index.txt.old`, `index.txt.attr.old`, and `serial.old`
+database sidecars during CA mutations. It also stores issued-certificate copies
+under `newcerts/`. These are active CA state, not obsolete files, and must stay
+with the corresponding CA database. Renewal archives are similarly active
+history under `services/<service>/archive/`.
+
+PKI directories are owner-only mode `700`. Private keys, CSRs, inventory,
+private configuration, CA database files, and database sidecars must be mode
+`600` or stricter. Certificates, chains, and issued-certificate copies under
+`newcerts/` may be mode `644`, but must never be group- or world-writable.
+Tool-managed renewal archives under `services/<service>/archive/` remain active
+PKI history. Do not keep other retired keys or passphrase files in an active
+PKI tree. Quarantine unmanaged material awaiting review in a separate
+owner-only directory outside `pki/` so PKI backups and helpers do not treat it
+as current state.
 
 Use a temporary namespace for testing:
 
