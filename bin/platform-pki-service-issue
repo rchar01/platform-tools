@@ -273,6 +273,9 @@ root_command() {
         rmdir "${CREATED_DIRS[i]}" 2>/dev/null || true
       done
     fi
+    if [[ ${INVENTORY_OPERATION_LOCK_HELD:-false} == true ]]; then
+      pki_release_operation_lock "$INVENTORY_OPERATION_LOCK" 2>/dev/null || cleanup_status=1
+    fi
     if [[ ${INTERMEDIATE_OPERATION_LOCK_HELD:-false} == true ]]; then
       pki_release_operation_lock "$INTERMEDIATE_OPERATION_LOCK" 2>/dev/null || cleanup_status=1
     fi
@@ -407,7 +410,6 @@ root_command() {
   INT_CERT=$(pki_intermediate_cert)
   INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"
   INVENTORY=$(pki_inventory_file)
-  VERIFY_TOOL="$SCRIPT_DIR/platform-pki-service-verify"
   DNS_FILE=''
   IPS_FILE=''
 
@@ -464,9 +466,9 @@ root_command() {
     pki_require_file "$INTERMEDIATE_CA_DIR/serial"
     pki_require_file "$INTERMEDIATE_CA_DIR/crlnumber"
     process_intermediate_signing_config "$INT_CONF"
-    [[ -f $VERIFY_TOOL && ! -L $VERIFY_TOOL ]] || pki_die "Service verification command is missing or unsafe: $VERIFY_TOOL"
     [[ ! -e $CERT && ! -L $CERT ]] || pki_die "Service certificate already exists; use platform-pki-service-renew: $CERT"
 
+    [[ -n ${INVENTORY_CANONICAL:-} ]] || return 0
     pki_require_service_in_inventory "$SERVICE"
     COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name)
     [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
@@ -494,8 +496,10 @@ root_command() {
 
   ROOT_OPERATION_LOCK=$(pki_root_operation_lock)
   INTERMEDIATE_OPERATION_LOCK=$(pki_intermediate_operation_lock)
+  INVENTORY_OPERATION_LOCK=$(pki_inventory_operation_lock)
   ROOT_OPERATION_LOCK_HELD=false
   INTERMEDIATE_OPERATION_LOCK_HELD=false
+  INVENTORY_OPERATION_LOCK_HELD=false
   STAGE_DIR=''
   ARCHIVE_DIR=''
   ARCHIVE_ROOT=''
@@ -532,6 +536,9 @@ root_command() {
   ROOT_OPERATION_LOCK_HELD=true
   pki_acquire_operation_lock "$INTERMEDIATE_OPERATION_LOCK" 'intermediate CA operation'
   INTERMEDIATE_OPERATION_LOCK_HELD=true
+  pki_acquire_operation_lock "$INVENTORY_OPERATION_LOCK" 'inventory operation'
+  INVENTORY_OPERATION_LOCK_HELD=true
+  pki_load_inventory_snapshot "$INVENTORY_TMP_DIR"
   validate_issue_state
 
   TRANSACTION_DESTINATIONS=(
@@ -614,7 +621,8 @@ root_command() {
   fi
 
   publish_issue_transaction
-  bash "$VERIFY_TOOL" "$SERVICE" --pki-dir "$PKI_DIR"
+  pki_verify_service_certificate "$SERVICE" 30
+  pki_ok "Verified service certificate: $SERVICE"
   TRANSACTION_COMMITTED=true
   TRANSACTION_ACTIVE=false
   [[ -z $ARCHIVE_DIR ]] || pki_warn "Archived previous service private key: $ARCHIVE_DIR/tls.key"

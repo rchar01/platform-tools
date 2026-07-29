@@ -37,34 +37,28 @@ root_command() {
 
   pki_require_cmd openssl
   pki_require_pki_dir
-  pki_require_service_in_inventory "$SERVICE"
-
-  KEY=$(pki_service_key "$SERVICE")
-  CERT=$(pki_service_cert "$SERVICE")
-  ROOT_CERT=$(pki_root_cert)
-  INT_CERT=$(pki_intermediate_cert)
-  pki_require_file "$KEY"
-  pki_require_file "$CERT"
-  pki_require_file "$ROOT_CERT"
-  pki_require_file "$INT_CERT"
-
-  openssl verify -CAfile "$ROOT_CERT" -untrusted "$INT_CERT" "$CERT" >/dev/null
-  pki_key_matches_cert "$KEY" "$CERT" || pki_die "Private key does not match certificate for service: $SERVICE"
-  pki_cert_has_ca_false "$CERT" || pki_die "Certificate is missing CA:false: $CERT"
-  pki_cert_has_server_auth "$CERT" || pki_die "Certificate is missing serverAuth EKU: $CERT"
-
-  while IFS= read -r dns || [[ -n $dns ]]; do
-    [[ -n $dns ]] || continue
-    pki_cert_has_dns_san "$CERT" "$dns" || pki_die "Certificate is missing DNS SAN '${dns}': $CERT"
-  done < <(pki_inventory_array "$SERVICE" dns)
-
-  while IFS= read -r ip || [[ -n $ip ]]; do
-    [[ -n $ip ]] || continue
-    pki_cert_has_ip_san "$CERT" "$ip" || pki_die "Certificate is missing IP SAN '${ip}': $CERT"
-  done < <(pki_inventory_array "$SERVICE" ips)
-
-  SECONDS_LEFT=$(( MIN_DAYS * 86400 ))
-  openssl x509 -in "$CERT" -checkend "$SECONDS_LEFT" -noout >/dev/null || pki_die "Certificate has less than ${MIN_DAYS} days remaining: $CERT"
+  pki_require_inventory
+  ROOT_LOCK=$(pki_root_operation_lock)
+  INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock)
+  INVENTORY_LOCK=$(pki_inventory_operation_lock)
+  SNAPSHOT_DIR=''
+  finish_verify() {
+    local status=$?
+    trap - EXIT
+    [[ -z $SNAPSHOT_DIR ]] || rm -rf -- "$SNAPSHOT_DIR"
+    [[ ${INVENTORY_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INVENTORY_LOCK" 2>/dev/null || status=1
+    [[ ${INTERMEDIATE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INTERMEDIATE_LOCK" 2>/dev/null || status=1
+    [[ ${ROOT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$ROOT_LOCK" 2>/dev/null || status=1
+    exit "$status"
+  }
+  trap finish_verify EXIT
+  umask 077
+  pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
+  pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
+  pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+  SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-service-verify.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
+  pki_load_inventory_snapshot "$SNAPSHOT_DIR"
+  pki_verify_service_certificate "$SERVICE" "$MIN_DAYS"
 
   pki_ok "Verified service certificate: $SERVICE"
 

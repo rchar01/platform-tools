@@ -56,6 +56,7 @@ services:
     ips:
       - 192.0.2.10
 EOF
+chmod 600 "$TMP_DIR/pki/inventory/services.yml"
 touch \
   "$TMP_DIR/pki/services/platform-example/private/tls.key" \
   "$TMP_DIR/pki/services/platform-example/certs/tls.crt" \

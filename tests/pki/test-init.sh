@@ -96,9 +96,7 @@ for dir in \
 done
 
 for file in \
-  "$pki_dir/inventory/services.yml" "$pki_dir/pki.env" \
-  "$pki_dir/openssl-root.cnf.tpl" "$pki_dir/openssl-intermediate.cnf.tpl" \
-  "$pki_dir/openssl-service.cnf.tpl" \
+  "$pki_dir/inventory/services.yml.example" \
   "$pki_dir/root-ca/index.txt" "$pki_dir/root-ca/index.txt.attr" \
   "$pki_dir/root-ca/serial" "$pki_dir/root-ca/crlnumber" \
   "$pki_dir/intermediate-ca/index.txt" \
@@ -110,8 +108,7 @@ for file in \
 done
 
 printf '%s\n' 'custom inventory' >"$pki_dir/inventory/services.yml"
-printf '%s\n' 'custom environment' >"$pki_dir/pki.env"
-printf '%s\n' 'custom template' >"$pki_dir/openssl-root.cnf.tpl"
+printf '%s\n' 'custom example' >"$pki_dir/inventory/services.yml.example"
 printf '%s\n' 'custom index' >"$pki_dir/root-ca/index.txt"
 printf '%s\n' 'custom serial' >"$pki_dir/intermediate-ca/serial"
 printf '%s\n' 'private key sentinel' >"$pki_dir/root-ca/private/root-ca.key"
@@ -122,18 +119,14 @@ run_tool --namespace "$namespace"
 assert_status 0
 assert_empty "$STDERR"
 assert_content 'custom inventory' "$pki_dir/inventory/services.yml"
-assert_content 'custom environment' "$pki_dir/pki.env"
-assert_content 'custom template' "$pki_dir/openssl-root.cnf.tpl"
+assert_content 'custom example' "$pki_dir/inventory/services.yml.example"
 
 run_tool --namespace "$namespace" --force
 assert_status 0
 assert_empty "$STDERR"
 cmp "$ROOT_DIR/templates/pki/services.yml.example" \
-  "$pki_dir/inventory/services.yml" >/dev/null || fail 'force did not refresh inventory'
-cmp "$ROOT_DIR/templates/pki/pki.env.example" \
-  "$pki_dir/pki.env" >/dev/null || fail 'force did not refresh environment example'
-cmp "$ROOT_DIR/templates/pki/openssl-root.cnf.tpl" \
-  "$pki_dir/openssl-root.cnf.tpl" >/dev/null || fail 'force did not refresh template'
+  "$pki_dir/inventory/services.yml.example" >/dev/null || fail 'force did not refresh inventory example'
+assert_content 'custom inventory' "$pki_dir/inventory/services.yml"
 assert_content 'custom index' "$pki_dir/root-ca/index.txt"
 assert_content 'custom serial' "$pki_dir/intermediate-ca/serial"
 assert_content 'private key sentinel' "$pki_dir/root-ca/private/root-ca.key"
@@ -220,8 +213,8 @@ assert_status 0
 hard_link_pki="$TMP_DIR/hard-link-namespace/pki"
 printf '%s\n' 'hard link key sentinel' \
   >"$hard_link_pki/root-ca/private/root-ca.key"
-rm "$hard_link_pki/pki.env"
-ln "$hard_link_pki/root-ca/private/root-ca.key" "$hard_link_pki/pki.env"
+rm "$hard_link_pki/inventory/services.yml.example"
+ln "$hard_link_pki/root-ca/private/root-ca.key" "$hard_link_pki/inventory/services.yml.example"
 run_tool --namespace "$TMP_DIR/hard-link-namespace" --force
 assert_status 1
 assert_empty "$STDOUT"
@@ -234,9 +227,9 @@ assert_status 0
 template_link_pki="$TMP_DIR/template-link-namespace/pki"
 printf '%s\n' 'symlink key sentinel' \
   >"$template_link_pki/root-ca/private/root-ca.key"
-rm "$template_link_pki/pki.env"
+rm "$template_link_pki/inventory/services.yml.example"
 ln -s "$template_link_pki/root-ca/private/root-ca.key" \
-  "$template_link_pki/pki.env"
+  "$template_link_pki/inventory/services.yml.example"
 run_tool --namespace "$TMP_DIR/template-link-namespace" --force
 assert_status 1
 assert_empty "$STDOUT"
@@ -296,13 +289,13 @@ assert_mode 777 "$TMP_DIR/unsafe-mode/pki/root-ca"
 run_tool --namespace "$TMP_DIR/writable-file"
 assert_status 0
 writable_file_pki="$TMP_DIR/writable-file/pki"
-chmod 666 "$writable_file_pki/pki.env"
+chmod 666 "$writable_file_pki/inventory/services.yml.example"
 printf '%s\n' 'database sentinel' >"$writable_file_pki/root-ca/index.txt"
 run_tool --namespace "$TMP_DIR/writable-file"
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'PKI file destination is group- or world-writable'
-assert_mode 666 "$writable_file_pki/pki.env"
+assert_mode 666 "$writable_file_pki/inventory/services.yml.example"
 assert_content 'database sentinel' "$writable_file_pki/root-ca/index.txt"
 
 run_tool --namespace "$TMP_DIR/writable-private"
@@ -333,7 +326,7 @@ assert_mode 644 "$open_key_pki/services/custom/private/tls.key"
 mkdir -p "$TMP_DIR/custom-templates/pki"
 cp "$ROOT_DIR"/templates/pki/* "$TMP_DIR/custom-templates/pki/"
 printf '%s\n' 'custom template source' \
-  >"$TMP_DIR/custom-templates/pki/pki.env.example"
+  >"$TMP_DIR/custom-templates/pki/services.yml.example"
 mkdir -p "$EXEC_DIR/explicit/bin" "$TMP_DIR/explicit/lib"
 cp "$TOOL" "$EXEC_DIR/explicit/bin/"
 cp "$ROOT_DIR/lib/platform-pki-common.sh" "$TMP_DIR/explicit/lib/"
@@ -344,11 +337,11 @@ run_command env PLATFORM_TOOLS_LIB_DIR="$TMP_DIR/explicit/lib" \
   --pki-dir "$TMP_DIR/custom-pki"
 assert_status 0
 assert_empty "$STDERR"
-assert_content 'custom template source' "$TMP_DIR/custom-pki/pki.env"
+assert_content 'custom template source' "$TMP_DIR/custom-pki/inventory/services.yml.example"
 
 mkdir -p "$TMP_DIR/incomplete-templates/pki"
 cp "$ROOT_DIR"/templates/pki/* "$TMP_DIR/incomplete-templates/pki/"
-rm "$TMP_DIR/incomplete-templates/pki/openssl-service.cnf.tpl"
+rm "$TMP_DIR/incomplete-templates/pki/services.yml.example"
 run_command env PLATFORM_TOOLS_TEMPLATE_DIR="$TMP_DIR/incomplete-templates" \
   "$TOOL" --namespace "$TMP_DIR/incomplete-namespace"
 assert_status 1
@@ -383,8 +376,10 @@ run_command env PLATFORM_TOOLS_SHARE_DIR="$TMP_DIR/installed/share" \
   --namespace "$TMP_DIR/installed-namespace"
 assert_status 0
 assert_empty "$STDERR"
-[[ -f $TMP_DIR/installed-namespace/pki/inventory/services.yml ]] || \
-  fail 'installed layout did not initialize inventory'
+[[ -f $TMP_DIR/installed-namespace/pki/inventory/services.yml.example ]] || \
+  fail 'installed layout did not initialize inventory example'
+[[ ! -e $TMP_DIR/installed-namespace/pki/inventory/services.yml ]] || \
+  fail 'installed layout created active inventory'
 
 mkdir -p "$EXEC_DIR/missing/bin" "$TMP_DIR/missing/share/lib"
 cp "$TOOL" "$EXEC_DIR/missing/bin/"

@@ -53,6 +53,7 @@ Required:
 - `openssl`
 - `tar` with `--no-wildcards` support for safe backup directory exclusions
 - GNU `date` for certificate expiry calculations
+- GNU `mv` with `--exchange`, `--no-copy`, and `--update=none-fail` for identity-preserving inventory publication
 - standard Unix tools such as `awk`, `cmp`, `cp`, `find`, `grep`, `mkdir`, `mktemp`, `sed`, and `stat`
 
 Backup encryption requires `age`.
@@ -94,11 +95,7 @@ corresponding commands populate it:
 ```text
 ~/.config/platform-infrastructure/pki/
 ├── inventory/
-│   └── services.yml
-├── pki.env
-├── openssl-root.cnf.tpl
-├── openssl-intermediate.cnf.tpl
-├── openssl-service.cnf.tpl
+│   └── services.yml.example
 ├── root-ca/
 │   ├── certs/
 │   ├── crl/
@@ -152,9 +149,11 @@ Use a temporary namespace for testing:
 platform-pki-init --namespace /tmp/platform-pki-test
 ```
 
-Existing templates and examples are preserved by default. Use `--force` to
-refresh only those files; CA keys, certificates, and database state are never
-overwritten by the initializer.
+The initializer creates only `inventory/services.yml.example`; it does not
+create active inventory. Existing examples are preserved by default. Use
+`--force` to refresh the example. Active inventory, CA keys, certificates, and
+database state are never overwritten by the initializer. Historical local
+copies of `pki.env` or `openssl-*.cnf.tpl` are left untouched but are not used.
 
 Namespace and PKI paths must be absolute, must not be the filesystem root, and
 must not traverse symbolic links. Existing PKI state containing symbolic links
@@ -235,15 +234,15 @@ that appears at a failed no-clobber destination, or replaces a published file,
 is preserved rather than deleted; unresolved identity changes retain staging
 and locks for operator recovery.
 
-CA mutations use cooperative operation locks inside the CA directories. The
-fixed acquisition order is root CA lock first, then intermediate CA lock, with
-release in reverse order. `platform-pki-root-create` holds the root lock for its
+CA and inventory operations use cooperative operation locks inside the current
+CA and inventory directories. The fixed acquisition order is root CA lock,
+intermediate CA lock, then inventory lock, with release in reverse order.
+`platform-pki-root-create` holds the root lock for its
 entire generation and publication transaction. `platform-pki-intermediate-create`
 holds both locks for its entire signing and publication transaction, so a
-cooperating consumer cannot observe forced sequential publication. Commands
-that issue or renew service certificates must take the intermediate lock when
-they are migrated to this transaction contract. A command that needs both
-locks must never acquire them in the opposite order.
+cooperating consumer cannot observe forced sequential publication. Inventory
+installation and all six semantic inventory consumers take all three locks; a
+command needing multiple locks must never acquire them in another order.
 
 The PKI path, identity values, CA directories, database files, prerequisites,
 and output destinations are validated before mutation. Symbolic links, hard
@@ -303,6 +302,22 @@ Service certificates are issued from:
 ~/.config/platform-infrastructure/pki/inventory/services.yml
 ```
 
+Install the canonical private-Git source after initialization:
+
+```bash
+platform-pki-inventory-install
+platform-pki-inventory-install --private-repo /absolute/path/to/platform-private
+```
+
+The default private repository is exactly `../platform-private`, resolved from
+the physical current directory. The command reads
+`<private-repo>/pki/services.yml`, validates one safely staged copy, and
+atomically publishes those exact bytes as mode `600`. It rejects linked,
+foreign-owned, or writable source and destination files, unsafe path ancestry,
+source paths inside the PKI tree, malformed inventory, and concurrent lock
+contention. Identical protected content is a no-op; identical content with a
+safe non-writable mode is atomically normalized to mode `600`.
+
 The inventory parser supports this strict YAML subset:
 
 ```yaml
@@ -317,9 +332,24 @@ services:
     days: 397
 ```
 
-SANs are mandatory. A service must define at least one value under `dns:` or `ips:`.
+The supported format is a restricted YAML subset, not general YAML. There must
+be exactly one `services:` mapping and at least one uniquely named service.
+Every service has exactly one `common_name`, optional unique `dns` and `ips`
+block lists, and optional decimal `days` from 1 through 365000. SANs are mandatory: a
+service must define at least one value under `dns:` or `ips:`. Indentation is
+exactly two spaces for services, four for fields, and six before list dashes.
+Blank lines, whole-line comments, and one leading `---` are allowed. Duplicate
+names, fields, or SANs; tabs; inline comments; unknown fields including
+`deploy`; anchors, aliases, tags, flow values, multiline values, extra
+documents, and trailing top-level content are rejected.
 
 Inventory values are written into OpenSSL configuration files during issuance and renewal. `common_name` and `dns` entries must be DNS names using only letters, digits, dots, and hyphens; wildcard names are not supported. `ips` entries must be IPv4 addresses. Inventory values must not contain OpenSSL configuration expansion syntax such as `$ENV::SECRET_NAME`.
+
+Issuance, renewal, verification, certificate printing, expiry listing, and
+Ansible export acquire the current root, intermediate, and inventory operation
+locks in that order. Each command privately copies and validates active
+inventory once, then uses only its canonical parsed snapshot for the rest of
+the invocation. Locks are released inventory first, then intermediate and root.
 
 ## Issue And Verify A Service Certificate
 

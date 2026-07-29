@@ -43,9 +43,10 @@ assert_contains() {
 
 create_inventory() {
   local pki_dir=$1 service=$2
-  mkdir -p "$pki_dir/inventory"
-  printf 'services:\n  %s:\n    common_name: %s.example.internal\n' \
-    "$service" "$service" >"$pki_dir/inventory/services.yml"
+  mkdir -p "$pki_dir/inventory" "$pki_dir/root-ca" "$pki_dir/intermediate-ca"
+  printf 'services:\n  %s:\n    common_name: %s.example.internal\n    dns:\n      - %s.example.internal\n' \
+    "$service" "$service" "$service" >"$pki_dir/inventory/services.yml"
+  chmod 600 "$pki_dir/inventory/services.yml"
 }
 
 create_certificate() {
@@ -141,10 +142,12 @@ EOF
 create_mixed_inventory() {
   local pki_dir=$1 first=$2 second=$3
   mkdir -p "$pki_dir/inventory" \
+    "$pki_dir/root-ca" "$pki_dir/intermediate-ca" \
     "$pki_dir/services/critical-boundary/certs" \
     "$pki_dir/services/warn-boundary/certs"
-  printf 'services:\n  %s:\n  warn-boundary:\n  %s:\n' \
-    "$first" "$second" >"$pki_dir/inventory/services.yml"
+  printf 'services:\n  %s:\n    common_name: %s.example.internal\n    dns:\n      - %s.example.internal\n  warn-boundary:\n    common_name: warn.example.internal\n    dns:\n      - warn.example.internal\n  %s:\n    common_name: %s.example.internal\n    dns:\n      - %s.example.internal\n' \
+    "$first" "$first" "$first" "$second" "$second" "$second" >"$pki_dir/inventory/services.yml"
+  chmod 600 "$pki_dir/inventory/services.yml"
   : >"$pki_dir/services/critical-boundary/certs/tls.crt"
   : >"$pki_dir/services/warn-boundary/certs/tls.crt"
 }

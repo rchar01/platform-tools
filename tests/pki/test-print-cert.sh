@@ -38,12 +38,16 @@ assert_contains() {
 }
 
 mkdir -p "$TMP_DIR/fake-bin" "$TMP_DIR/pki/inventory" \
-  "$TMP_DIR/pki/services/platform-example/certs"
+  "$TMP_DIR/pki/services/platform-example/certs" "$TMP_DIR/pki/root-ca" \
+  "$TMP_DIR/pki/intermediate-ca"
 cat >"$TMP_DIR/pki/inventory/services.yml" <<'EOF'
 services:
   platform-example:
     common_name: platform.example.internal
+    dns:
+      - platform.example.internal
 EOF
+chmod 600 "$TMP_DIR/pki/inventory/services.yml"
 : >"$TMP_DIR/pki/services/platform-example/certs/tls.crt"
 
 cat >"$TMP_DIR/fake-bin/openssl" <<'EOF'
@@ -108,12 +112,16 @@ assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Service is not defined in'
 [[ ! -e $TMP_DIR/unknown-service-openssl.log ]] || fail 'unknown service invoked openssl'
 
-mkdir -p "$TMP_DIR/missing-cert/inventory"
+mkdir -p "$TMP_DIR/missing-cert/inventory" "$TMP_DIR/missing-cert/root-ca" \
+  "$TMP_DIR/missing-cert/intermediate-ca"
 cat >"$TMP_DIR/missing-cert/inventory/services.yml" <<'EOF'
 services:
   platform-example:
     common_name: platform.example.internal
+    dns:
+      - platform.example.internal
 EOF
+chmod 600 "$TMP_DIR/missing-cert/inventory/services.yml"
 run_tool env PATH="$TMP_DIR/fake-bin:$PATH" \
   OPENSSL_LOG="$TMP_DIR/missing-cert-openssl.log" \
   "$TOOL" --pki-dir "$TMP_DIR/missing-cert" platform-example

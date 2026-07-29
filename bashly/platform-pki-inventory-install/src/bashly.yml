@@ -1,0 +1,27 @@
+name: platform-pki-inventory-install
+help: Install private-Git service inventory into local PKI state
+version: platform-pki-inventory-install <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --private-repo
+  arg: path
+  help: Private repository path
+  default: ../platform-private
+  validate: not_empty
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+
+examples:
+- platform-pki-inventory-install
+- platform-pki-inventory-install --private-repo /srv/platform-private
+
+footer: |-
+  The source is <private-repo>/pki/services.yml. Relative repository paths
+  resolve from the physical current directory. The destination is atomically
+  installed as mode 600 and is never linked to the source.

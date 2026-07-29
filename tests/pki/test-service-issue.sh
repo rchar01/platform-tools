@@ -379,15 +379,14 @@ chmod 600 "$verify_pki/services/failure/private/tls.key"
 verify_key_hash=$(file_hash "$verify_pki/services/failure/private/tls.key")
 verify_index_hash=$(file_hash "$verify_pki/intermediate-ca/index.txt")
 verify_serial_hash=$(file_hash "$verify_pki/intermediate-ca/serial")
-mkdir -p "$EXEC_DIR/verify-bin"
-cp "$TOOL" "$EXEC_DIR/verify-bin/platform-pki-service-issue"
-cat >"$EXEC_DIR/verify-bin/platform-pki-service-verify" <<'EOF'
+mkdir -p "$EXEC_DIR/verify-lib"
+cat >"$EXEC_DIR/verify-lib/platform-pki-common.sh" <<'EOF'
 #!/usr/bin/env bash
-exit 43
+source "$REAL_COMMON"
+pki_verify_service_certificate() { exit 43; }
 EOF
-chmod 755 "$EXEC_DIR/verify-bin/platform-pki-service-issue" "$EXEC_DIR/verify-bin/platform-pki-service-verify"
-run_command env PLATFORM_TOOLS_LIB_DIR="$ROOT_DIR/lib" \
-  "$EXEC_DIR/verify-bin/platform-pki-service-issue" failure \
+run_command env REAL_COMMON="$ROOT_DIR/lib/platform-pki-common.sh" \
+  PLATFORM_TOOLS_LIB_DIR="$EXEC_DIR/verify-lib" "$TOOL" failure \
   --namespace "$verify_namespace" --intermediate-pass-file "$INT_PASS" --rotate-key
 assert_status 43
 [[ $(file_hash "$verify_pki/services/failure/private/tls.key") == "$verify_key_hash" ]] || fail 'verification failure did not restore rotated key'

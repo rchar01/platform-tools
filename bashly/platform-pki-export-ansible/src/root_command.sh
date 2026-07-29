@@ -147,6 +147,23 @@ umask 077
 
 pki_require_pki_dir
 pki_require_inventory
+ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock); INVENTORY_LOCK=$(pki_inventory_operation_lock)
+SNAPSHOT_DIR=''
+finish_export() {
+  local status=$?
+  trap - EXIT
+  [[ -z $SNAPSHOT_DIR ]] || rm -rf -- "$SNAPSHOT_DIR"
+  [[ ${INVENTORY_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INVENTORY_LOCK" 2>/dev/null || status=1
+  [[ ${INTERMEDIATE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INTERMEDIATE_LOCK" 2>/dev/null || status=1
+  [[ ${ROOT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$ROOT_LOCK" 2>/dev/null || status=1
+  exit "$status"
+}
+trap finish_export EXIT
+pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
+pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
+pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-export-ansible.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
+pki_load_inventory_snapshot "$SNAPSHOT_DIR"
 pki_require_file "$(pki_root_cert)"
 require_trusted_path_components "$EXPORT_PARENT" 'Export parent'
 require_private_dir "$EXPORT_PARENT" 'Export parent'

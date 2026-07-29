@@ -209,14 +209,14 @@ snapshot_state signing-failure "$failure_dir" "$pki" "$failure_newcert"
 run_command env PATH="$EXEC_DIR/failing-bin:$PATH" REAL_OPENSSL="$REAL_OPENSSL" "$TOOL" failure --namespace "$namespace" --rotate-key --intermediate-pass-file "$INT_PASS"
 assert_status 42; assert_state_restored signing-failure "$failure_dir" "$pki" "$failure_newcert"; assert_no_residue "$pki"
 
-mkdir -p "$EXEC_DIR/verify-bin"; cp "$TOOL" "$EXEC_DIR/verify-bin/platform-pki-service-renew"
-cat >"$EXEC_DIR/verify-bin/platform-pki-service-verify" <<'EOF'
+mkdir -p "$EXEC_DIR/verify-lib"
+cat >"$EXEC_DIR/verify-lib/platform-pki-common.sh" <<'EOF'
 #!/usr/bin/env bash
-exit 43
+source "$REAL_COMMON"
+pki_verify_service_certificate() { exit 43; }
 EOF
-chmod 755 "$EXEC_DIR/verify-bin/"*
 snapshot_state verification-failure "$failure_dir" "$pki" "$failure_newcert"
-run_command env PLATFORM_TOOLS_LIB_DIR="$ROOT_DIR/lib" "$EXEC_DIR/verify-bin/platform-pki-service-renew" failure --namespace "$namespace" --rotate-key --intermediate-pass-file "$INT_PASS"
+run_command env REAL_COMMON="$ROOT_DIR/lib/platform-pki-common.sh" PLATFORM_TOOLS_LIB_DIR="$EXEC_DIR/verify-lib" "$TOOL" failure --namespace "$namespace" --rotate-key --intermediate-pass-file "$INT_PASS"
 assert_status 43; assert_state_restored verification-failure "$failure_dir" "$pki" "$failure_newcert"; assert_no_residue "$pki"
 
 mkdir -p "$EXEC_DIR/mv-bin"; REAL_MV=$(command -v mv)

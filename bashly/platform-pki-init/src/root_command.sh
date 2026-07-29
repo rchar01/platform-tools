@@ -151,14 +151,10 @@ require_safe_existing_pki_tree() {
 }
 
 require_pki_templates() {
-  local template
-
-  for template in \
-    services.yml.example pki.env.example \
-    openssl-root.cnf.tpl openssl-intermediate.cnf.tpl openssl-service.cnf.tpl; do
-    [[ -f $TEMPLATE_DIR/$template && ! -L $TEMPLATE_DIR/$template && -r $TEMPLATE_DIR/$template ]] || \
-      pki_die "Required PKI template is missing or unsafe: $TEMPLATE_DIR/$template"
-  done
+  [[ -f $TEMPLATE_DIR/services.yml.example && \
+    ! -L $TEMPLATE_DIR/services.yml.example && \
+    -r $TEMPLATE_DIR/services.yml.example ]] || \
+    pki_die "Required PKI template is missing or unsafe: $TEMPLATE_DIR/services.yml.example"
 }
 
 require_safe_destination_layout() {
@@ -194,10 +190,7 @@ require_safe_destination_layout() {
     "$PKI_DIR/intermediate-ca/index.txt.attr" \
     "$PKI_DIR/intermediate-ca/serial" \
     "$PKI_DIR/intermediate-ca/crlnumber" \
-    "$PKI_DIR/inventory/services.yml" "$PKI_DIR/pki.env" \
-    "$PKI_DIR/openssl-root.cnf.tpl" \
-    "$PKI_DIR/openssl-intermediate.cnf.tpl" \
-    "$PKI_DIR/openssl-service.cnf.tpl"; do
+    "$PKI_DIR/inventory/services.yml.example"; do
     if [[ -e $path || -L $path ]]; then
       [[ -f $path && ! -L $path ]] || pki_die "PKI file destination must be a non-symlink regular file: $path"
       owner=$(stat -c '%u' "$path") || pki_die "Cannot inspect PKI file destination owner: $path"
@@ -252,11 +245,6 @@ pki_init_ca_db "$PKI_DIR/intermediate-ca"
 chmod 600 "$PKI_DIR/root-ca/index.txt" "$PKI_DIR/root-ca/serial" "$PKI_DIR/root-ca/crlnumber" "$PKI_DIR/root-ca/index.txt.attr"
 chmod 600 "$PKI_DIR/intermediate-ca/index.txt" "$PKI_DIR/intermediate-ca/serial" "$PKI_DIR/intermediate-ca/crlnumber" "$PKI_DIR/intermediate-ca/index.txt.attr"
 
-copy_template "$TEMPLATE_DIR/services.yml.example" "$PKI_DIR/inventory/services.yml"
-copy_template "$TEMPLATE_DIR/pki.env.example" "$PKI_DIR/pki.env"
-
-for template in openssl-root.cnf.tpl openssl-intermediate.cnf.tpl openssl-service.cnf.tpl; do
-  copy_template "$TEMPLATE_DIR/$template" "$PKI_DIR/$template"
-done
+copy_template "$TEMPLATE_DIR/services.yml.example" "$PKI_DIR/inventory/services.yml.example"
 
 pki_ok "PKI directory ready: $PKI_DIR"

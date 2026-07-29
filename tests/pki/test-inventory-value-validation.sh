@@ -113,4 +113,14 @@ write_values "$control_dns" app.example.internal
 write_values "$control_ips" $'192.0.2.10\t'
 expect_rejects 'IP SAN for service platform-example must not contain control characters' app.example.internal "$control_dns" "$control_ips"
 
+if bash -c 'source "$1"; pki_validate_days 18446744073709551617' _ "$COMMON_LIB" >/dev/null 2>&1; then
+  printf '%s\n' 'test-inventory-value-validation.sh: accepted overflowing days value' >&2
+  exit 1
+fi
+if bash -c 'source "$1"; pki_validate_days 365001' _ "$COMMON_LIB" >/dev/null 2>&1; then
+  printf '%s\n' 'test-inventory-value-validation.sh: accepted days value above supported maximum' >&2
+  exit 1
+fi
+bash -c 'source "$1"; pki_validate_days 000001' _ "$COMMON_LIB"
+
 printf '%s\n' 'test-inventory-value-validation.sh: ok'

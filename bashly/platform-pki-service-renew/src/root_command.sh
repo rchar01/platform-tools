@@ -203,6 +203,7 @@ finish_renewal() {
     exit 1
   fi
   [[ -z ${STAGE_DIR:-} ]] || rm -rf -- "$STAGE_DIR" || cleanup_status=1
+  [[ ${INVENTORY_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INVENTORY_LOCK" 2>/dev/null || cleanup_status=1
   [[ ${INTERMEDIATE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INTERMEDIATE_LOCK" 2>/dev/null || cleanup_status=1
   [[ ${ROOT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$ROOT_LOCK" 2>/dev/null || cleanup_status=1
   (( cleanup_status == 0 )) || status=1
@@ -250,7 +251,7 @@ ROOT_CA_DIR="$PKI_DIR/root-ca"; INTERMEDIATE_CA_DIR="$PKI_DIR/intermediate-ca"; 
 SERVICE_DIR=$(pki_service_dir "$SERVICE"); KEY=$(pki_service_key "$SERVICE"); CSR="$SERVICE_DIR/csr/tls.csr"
 CERT=$(pki_service_cert "$SERVICE"); CHAIN=$(pki_service_chain "$SERVICE"); FULLCHAIN=$(pki_service_fullchain "$SERVICE")
 CONF="$SERVICE_DIR/openssl.cnf"; ROOT_CERT=$(pki_root_cert); INT_KEY=$(pki_intermediate_key); INT_CERT=$(pki_intermediate_cert)
-INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"; INVENTORY=$(pki_inventory_file); VERIFY_TOOL="$SCRIPT_DIR/platform-pki-service-verify"
+INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"; INVENTORY=$(pki_inventory_file)
 DNS_FILE=''; IPS_FILE=''
 
 validate_renewal_state() {
@@ -264,8 +265,8 @@ validate_renewal_state() {
   for sidecar in index.txt.old index.txt.attr.old serial.old; do require_safe_file "$INTERMEDIATE_CA_DIR/$sidecar" "Intermediate CA $sidecar" true; done
   for specification in "$INVENTORY" "$ROOT_CERT" "$INT_KEY" "$INT_CERT" "$INT_CONF" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/crlnumber"; do pki_require_file "$specification"; done
   process_intermediate_signing_config "$INT_CONF"
-  [[ -f $VERIFY_TOOL && ! -L $VERIFY_TOOL ]] || pki_die "Service verification command is missing or unsafe: $VERIFY_TOOL"
   [[ -f $KEY ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
+  [[ -n ${INVENTORY_CANONICAL:-} ]] || return 0
   pki_require_service_in_inventory "$SERVICE"; COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name); [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
   DAYS=$DAYS_OVERRIDE; [[ -n $DAYS ]] || DAYS=$(pki_inventory_scalar "$SERVICE" days); DAYS=${DAYS:-${PLATFORM_PKI_SERVICE_DAYS:-397}}; pki_validate_days "$DAYS"
   : >"$DNS_FILE"; : >"$IPS_FILE"; pki_inventory_array "$SERVICE" dns >"$DNS_FILE"; pki_inventory_array "$SERVICE" ips >"$IPS_FILE"
@@ -278,8 +279,8 @@ validate_renewal_state() {
   [[ ! -e $INT_NEWCERT && ! -L $INT_NEWCERT ]] || pki_die "Intermediate CA issued-certificate destination already exists: $INT_NEWCERT"
 }
 
-ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock)
-ROOT_LOCK_HELD=false; INTERMEDIATE_LOCK_HELD=false; STAGE_DIR=''; ARCHIVE_DIR=''; ARCHIVE_DIR_IDENTITY=''; INVENTORY_TMP_DIR=''
+ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock); INVENTORY_LOCK=$(pki_inventory_operation_lock)
+ROOT_LOCK_HELD=false; INTERMEDIATE_LOCK_HELD=false; INVENTORY_LOCK_HELD=false; STAGE_DIR=''; ARCHIVE_DIR=''; ARCHIVE_DIR_IDENTITY=''; INVENTORY_TMP_DIR=''
 TRANSACTION_ACTIVE=false; TRANSACTION_COMMITTED=false; DESTINATIONS=(); SOURCES=(); REPLACE=(); EXPECTED_STATES=(); CREATED_DIRS=()
 ARCHIVE_SOURCES=(); ARCHIVE_NAMES=()
 trap finish_renewal EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
@@ -289,6 +290,8 @@ DNS_FILE="$INVENTORY_TMP_DIR/dns"; IPS_FILE="$INVENTORY_TMP_DIR/ips"; : >"$DNS_F
 validate_renewal_state
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
+pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+pki_load_inventory_snapshot "$INVENTORY_TMP_DIR"
 validate_renewal_state
 
 for dir in "$SERVICE_DIR" "$SERVICE_DIR/private" "$SERVICE_DIR/csr" "$SERVICE_DIR/certs" "$SERVICE_DIR/chain"; do
@@ -341,7 +344,8 @@ for i in "${!ARCHIVE_SOURCES[@]}"; do
   SOURCES+=("$STAGE_ARCHIVE_DIR/${ARCHIVE_NAMES[i]}")
 done
 publish_transaction
-bash "$VERIFY_TOOL" "$SERVICE" --pki-dir "$PKI_DIR"
+pki_verify_service_certificate "$SERVICE" 30
+pki_ok "Verified service certificate: $SERVICE"
 rm -f -- "$ARCHIVE_MARKER"
 TRANSACTION_COMMITTED=true; TRANSACTION_ACTIVE=false
 for i in "${!ARCHIVE_SOURCES[@]}"; do

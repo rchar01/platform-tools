@@ -59,7 +59,7 @@ assert_parser_error() {
   INSTALL_DIR="$INSTALL_DIR" SHARE_DIR="$SHARE_DIR" >/dev/null
 mkdir -p "$RUNTIME_DIR" "$HOME_DIR" "$XDG_CONFIG_DIR"
 
-for command in bash python3 dirname mkdir chmod id stat find mktemp cp mv rm; do
+for command in bash python3 dirname mkdir chmod id stat find mktemp cp mv rm pwd; do
   source_path=$(command -v "$command") || fail "required smoke dependency not found: $command"
   ln -s "$source_path" "$RUNTIME_DIR/$command"
 done
@@ -100,11 +100,9 @@ NAMESPACE="$STATE_DIR/pki-namespace"
 run_clean "$RUNTIME_DIR/platform-pki-init" --namespace "$NAMESPACE"
 [ "$STATUS" -eq 0 ] || fail "installed PKI initialization failed: $(cat "$STDERR")"
 [ ! -s "$STDERR" ] || fail "installed PKI initialization wrote stderr: $(cat "$STDERR")"
-[ -f "$NAMESPACE/pki/inventory/services.yml" ] || fail 'installed PKI template lookup failed'
-[ -f "$NAMESPACE/pki/openssl-root.cnf.tpl" ] || fail 'installed PKI shared assets were not initialized'
+[ -f "$NAMESPACE/pki/inventory/services.yml.example" ] || fail 'installed PKI template lookup failed'
+[ ! -e "$NAMESPACE/pki/inventory/services.yml" ] || fail 'initializer created active inventory'
 cmp "$SHARE_DIR/templates/pki/services.yml.example" \
-  "$NAMESPACE/pki/inventory/services.yml" || fail 'installed PKI template content differs from SHARE_DIR'
-cmp "$SHARE_DIR/templates/pki/openssl-root.cnf.tpl" \
-  "$NAMESPACE/pki/openssl-root.cnf.tpl" || fail 'installed OpenSSL template content differs from SHARE_DIR'
+  "$NAMESPACE/pki/inventory/services.yml.example" || fail 'installed PKI template content differs from SHARE_DIR'
 
 printf '%s\n' 'test-installed-tools.sh: ok'

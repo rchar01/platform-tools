@@ -115,7 +115,7 @@ pki_validate_ipv4_literal() {
   [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
   IFS=. read -r -a octets <<< "$value"
   for octet in "${octets[@]}"; do
-    (( octet <= 255 )) || return 1
+    (( 10#$octet <= 255 )) || return 1
   done
   return 0
 }
@@ -147,8 +147,13 @@ pki_validate_service_inventory_values() {
 }
 
 pki_validate_days() {
-  [[ $1 =~ ^[0-9]+$ ]] || pki_die "Days value must be numeric: $1"
-  (( $1 >= 1 )) || pki_die "Days value must be at least 1: $1"
+  local value=$1 normalized
+  [[ $value =~ ^[0-9]+$ ]] || pki_die "Days value must be numeric: $value"
+  normalized=${value#"${value%%[!0]*}"}
+  [[ -n $normalized ]] || normalized=0
+  (( ${#normalized} < 6 || (${#normalized} == 6 && 10#$normalized <= 365000) )) || \
+    pki_die "Days value must be at most 365000: $value"
+  (( 10#$normalized >= 1 )) || pki_die "Days value must be at least 1: $value"
 }
 
 pki_inventory_file() {
@@ -158,71 +163,164 @@ pki_inventory_file() {
 pki_require_inventory() {
   local inventory
   inventory=$(pki_inventory_file)
-  [[ -r "$inventory" ]] || pki_die "Service inventory is missing or unreadable: $inventory"
+  [[ -r "$inventory" ]] || pki_die "Service inventory is missing or unreadable: $inventory; run platform-pki-inventory-install"
+}
+
+pki_inventory_parse_value() {
+  local value=$1
+
+  [[ -n $value ]] || pki_die 'Inventory value must be non-empty'
+  if [[ $value == "'"* || $value == '"'* ]]; then
+    local quote=${value:0:1}
+    [[ ${#value} -ge 2 && ${value: -1} == "$quote" ]] || pki_die 'Inventory value has unmatched quotes'
+    value=${value:1:${#value}-2}
+    [[ $value != *"$quote"* ]] || pki_die 'Inventory value contains an unsupported embedded quote'
+  elif [[ $value == *"'"* || $value == *'"'* ]]; then
+    pki_die 'Inventory value contains an unsupported quote'
+  fi
+  [[ $value != *\\* ]] || pki_die 'Inventory value contains unsupported backslash syntax'
+  [[ $value != *'#'* ]] || pki_die 'Inventory inline comments are not supported'
+  printf '%s\n' "$value"
+}
+
+pki_validate_inventory_file() {
+  local inventory=$1 canonical=$2 line value service='' field='' line_number=0
+  local saw_services=false saw_document=false service_count=0 list_count=0
+  local -A services_seen=() fields_seen=() values_seen=()
+
+  if ! cmp -s -- "$inventory" <(LC_ALL=C tr -d '\000' <"$inventory"); then
+    pki_die 'Inventory NUL bytes are not supported'
+  fi
+  : >"$canonical" || pki_die "Cannot create parsed inventory: $canonical"
+  while IFS= read -r line || [[ -n $line ]]; do
+    line_number=$((line_number + 1))
+    [[ $line != *$'\t'* ]] || pki_die "Inventory tabs are not supported at line $line_number"
+    [[ ! $line =~ [[:cntrl:]] ]] || pki_die "Inventory control characters are not supported at line $line_number"
+    [[ $line =~ ^[[:space:]]*$ || $line =~ ^[[:space:]]*# ]] && continue
+    if [[ $line == '---' ]]; then
+      [[ $saw_document == false && $saw_services == false ]] || pki_die "Inventory document marker is misplaced at line $line_number"
+      saw_document=true
+      continue
+    fi
+    [[ $line != '...' ]] || pki_die "Inventory document end markers are not supported at line $line_number"
+    if [[ $line == 'services:' ]]; then
+      [[ $saw_services == false ]] || pki_die "Inventory contains duplicate services at line $line_number"
+      saw_services=true
+      continue
+    fi
+    [[ $saw_services == true ]] || pki_die "Inventory content outside services at line $line_number"
+
+    if [[ $line =~ ^\ \ ([A-Za-z0-9][A-Za-z0-9_.-]*):$ ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+        pki_die "Inventory $field list for service $service must not be empty"
+      fi
+      service=${BASH_REMATCH[1]}
+      [[ ! -v services_seen[$service] ]] || pki_die "Inventory contains duplicate service: $service"
+      services_seen[$service]=1
+      service_count=$((service_count + 1))
+      field=''
+      list_count=0
+      continue
+    fi
+    [[ -n $service ]] || pki_die "Inventory requires a service key at line $line_number"
+
+    if [[ $line =~ ^\ \ \ \ (common_name|days):[[:space:]]+(.+)$ ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+        pki_die "Inventory $field list for service $service must not be empty"
+      fi
+      field=${BASH_REMATCH[1]}
+      [[ ! -v fields_seen["$service:$field"] ]] || pki_die "Inventory contains duplicate $field field for service $service"
+      fields_seen["$service:$field"]=1
+      value=$(pki_inventory_parse_value "${BASH_REMATCH[2]}")
+      if [[ $field == common_name ]]; then
+        pki_validate_dns_name_value "common_name for service $service" "$value"
+      else
+        pki_validate_days "$value"
+      fi
+      printf '%s\t%s\t%s\n' "$service" "$field" "$value" >>"$canonical"
+      list_count=0
+      continue
+    fi
+    if [[ $line =~ ^\ \ \ \ (dns|ips):$ ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+        pki_die "Inventory $field list for service $service must not be empty"
+      fi
+      field=${BASH_REMATCH[1]}
+      [[ ! -v fields_seen["$service:$field"] ]] || pki_die "Inventory contains duplicate $field field for service $service"
+      fields_seen["$service:$field"]=1
+      list_count=0
+      continue
+    fi
+    if [[ $line =~ ^\ \ \ \ \ \ -[[:space:]]+(.+)$ ]]; then
+      [[ $field == dns || $field == ips ]] || pki_die "Inventory list item has no dns or ips field at line $line_number"
+      value=$(pki_inventory_parse_value "${BASH_REMATCH[1]}")
+      [[ ! -v values_seen["$service:$field:$value"] ]] || pki_die "Inventory contains duplicate $field SAN for service $service: $value"
+      values_seen["$service:$field:$value"]=1
+      if [[ $field == dns ]]; then
+        pki_validate_dns_name_value "DNS SAN for service $service" "$value"
+      else
+        pki_validate_ip_value "IP SAN for service $service" "$value"
+      fi
+      printf '%s\t%s\t%s\n' "$service" "$field" "$value" >>"$canonical"
+      list_count=$((list_count + 1))
+      continue
+    fi
+    pki_die "Unsupported inventory grammar at line $line_number"
+  done <"$inventory"
+
+  [[ $saw_services == true ]] || pki_die 'Inventory must contain exactly one services mapping'
+  [[ $service_count -gt 0 ]] || pki_die 'Inventory must define at least one service'
+  if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+    pki_die "Inventory $field list for service $service must not be empty"
+  fi
+  for service in "${!services_seen[@]}"; do
+    [[ -v fields_seen["$service:common_name"] ]] || pki_die "common_name is missing for service: $service"
+    [[ -v fields_seen["$service:dns"] || -v fields_seen["$service:ips"] ]] || pki_die "Service must define at least one DNS or IP SAN: $service"
+  done
+}
+
+pki_load_inventory_snapshot() {
+  local snapshot_dir=$1 inventory before after mode
+  inventory=$(pki_inventory_file)
+  pki_require_inventory
+  [[ -f $inventory && ! -L $inventory ]] || pki_die "Service inventory must be a non-symlink regular file: $inventory"
+  before=$(stat -c '%d|%i|%h|%s|%a|%u|%y|%z' "$inventory") || pki_die "Cannot inspect service inventory: $inventory"
+  [[ $(stat -c '%u' "$inventory") == "$(id -u)" ]] || pki_die "Service inventory is not owned by the current user: $inventory"
+  [[ $(stat -c '%h' "$inventory") == 1 ]] || pki_die "Service inventory must not be hard-linked: $inventory"
+  mode=$(stat -c '%a' "$inventory") || pki_die "Cannot inspect service inventory permissions: $inventory"
+  (( (8#$mode & 022) == 0 )) || pki_die "Service inventory is group- or world-writable: $inventory"
+  [[ -f $inventory && ! -L $inventory && $(stat -c '%d|%i|%h|%s|%a|%u|%y|%z' "$inventory") == "$before" ]] || \
+    pki_die 'Service inventory changed during validation'
+  cp -P -- "$inventory" "$snapshot_dir/services.yml" || pki_die 'Cannot copy service inventory snapshot'
+  [[ -f $snapshot_dir/services.yml && ! -L $snapshot_dir/services.yml ]] || pki_die 'Service inventory snapshot is not a regular file'
+  chmod 600 "$snapshot_dir/services.yml" || pki_die 'Cannot secure service inventory snapshot'
+  after=$(stat -c '%d|%i|%h|%s|%a|%u|%y|%z' "$inventory") || pki_die "Cannot recheck service inventory: $inventory"
+  [[ $before == "$after" ]] || pki_die 'Service inventory changed while its snapshot was created'
+  pki_validate_inventory_file "$snapshot_dir/services.yml" "$snapshot_dir/canonical"
+  INVENTORY_CANONICAL="$snapshot_dir/canonical"
 }
 
 pki_inventory_services() {
-  local inventory
-  inventory=$(pki_inventory_file)
-  awk '
-    /^services:[[:space:]]*$/ { in_services = 1; next }
-    in_services && /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ {
-      name = $1
-      sub(/:$/, "", name)
-      print name
-    }
-  ' "$inventory"
+  [[ -n ${INVENTORY_CANONICAL:-} ]] || pki_die 'Service inventory snapshot is not loaded'
+  awk -F '\t' '!seen[$1]++ { print $1 }' "$INVENTORY_CANONICAL"
 }
 
 pki_inventory_scalar() {
   local service=$1
   local field=$2
-  local inventory
-  inventory=$(pki_inventory_file)
-  awk -v service="$service" -v field="$field" '
-    /^services:[[:space:]]*$/ { in_services = 1; next }
-    in_services && $0 == "  " service ":" { in_service = 1; next }
-    in_service && /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { exit }
-    in_service {
-      prefix = "    " field ":"
-      if (index($0, prefix) == 1) {
-        value = substr($0, length(prefix) + 1)
-        sub(/^[[:space:]]+/, "", value)
-        sub(/[[:space:]]+$/, "", value)
-        gsub(/^"|"$/, "", value)
-        gsub(/^'\''|'\''$/, "", value)
-        print value
-        exit
-      }
-    }
-  ' "$inventory"
+  [[ -n ${INVENTORY_CANONICAL:-} ]] || pki_die 'Service inventory snapshot is not loaded'
+  awk -F '\t' -v service="$service" -v field="$field" '$1 == service && $2 == field { print $3; exit }' "$INVENTORY_CANONICAL"
 }
 
 pki_inventory_array() {
   local service=$1
   local field=$2
-  local inventory
-  inventory=$(pki_inventory_file)
-  awk -v service="$service" -v field="$field" '
-    /^services:[[:space:]]*$/ { in_services = 1; next }
-    in_services && $0 == "  " service ":" { in_service = 1; next }
-    in_service && /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { exit }
-    in_service && $0 == "    " field ":" { in_array = 1; next }
-    in_array && /^    [A-Za-z0-9_.-]+:/ { exit }
-    in_array && /^      - / {
-      value = substr($0, 9)
-      sub(/^[[:space:]]+/, "", value)
-      sub(/[[:space:]]+$/, "", value)
-      gsub(/^"|"$/, "", value)
-      gsub(/^'\''|'\''$/, "", value)
-      print value
-    }
-  ' "$inventory"
+  [[ -n ${INVENTORY_CANONICAL:-} ]] || pki_die 'Service inventory snapshot is not loaded'
+  awk -F '\t' -v service="$service" -v field="$field" '$1 == service && $2 == field { print $3 }' "$INVENTORY_CANONICAL"
 }
 
 pki_require_service_in_inventory() {
   local service=$1
-  pki_require_inventory
   if ! pki_inventory_services | grep -Fx -- "$service" >/dev/null 2>&1; then
     pki_die "Service is not defined in $(pki_inventory_file): $service"
   fi
@@ -279,6 +377,10 @@ pki_root_operation_lock() {
 
 pki_intermediate_operation_lock() {
   printf '%s/intermediate-ca/.platform-pki-intermediate-operation.lock\n' "$PKI_DIR"
+}
+
+pki_inventory_operation_lock() {
+  printf '%s/inventory/.platform-pki-inventory-operation.lock\n' "$PKI_DIR"
 }
 
 pki_acquire_operation_lock() {
@@ -589,4 +691,32 @@ pki_cert_has_ca_false() {
 
 pki_cert_has_server_auth() {
   openssl x509 -in "$1" -noout -ext extendedKeyUsage | grep -F 'TLS Web Server Authentication' >/dev/null 2>&1
+}
+
+pki_verify_service_certificate() {
+  local service=$1 min_days=$2 key cert root_cert int_cert dns ip
+
+  pki_require_service_in_inventory "$service"
+  key=$(pki_service_key "$service")
+  cert=$(pki_service_cert "$service")
+  root_cert=$(pki_root_cert)
+  int_cert=$(pki_intermediate_cert)
+  pki_require_file "$key"
+  pki_require_file "$cert"
+  pki_require_file "$root_cert"
+  pki_require_file "$int_cert"
+  openssl verify -CAfile "$root_cert" -untrusted "$int_cert" "$cert" >/dev/null
+  pki_key_matches_cert "$key" "$cert" || pki_die "Private key does not match certificate for service: $service"
+  pki_cert_has_ca_false "$cert" || pki_die "Certificate is missing CA:false: $cert"
+  pki_cert_has_server_auth "$cert" || pki_die "Certificate is missing serverAuth EKU: $cert"
+  while IFS= read -r dns || [[ -n $dns ]]; do
+    [[ -n $dns ]] || continue
+    pki_cert_has_dns_san "$cert" "$dns" || pki_die "Certificate is missing DNS SAN '${dns}': $cert"
+  done < <(pki_inventory_array "$service" dns)
+  while IFS= read -r ip || [[ -n $ip ]]; do
+    [[ -n $ip ]] || continue
+    pki_cert_has_ip_san "$cert" "$ip" || pki_die "Certificate is missing IP SAN '${ip}': $cert"
+  done < <(pki_inventory_array "$service" ips)
+  openssl x509 -in "$cert" -checkend "$(( min_days * 86400 ))" -noout >/dev/null || \
+    pki_die "Certificate has less than ${min_days} days remaining: $cert"
 }

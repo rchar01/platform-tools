@@ -7,6 +7,15 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `platform-pki-inventory-install` with exact `../platform-private` default source resolution, `--private-repo` override, strict source and destination identity checks, exact-byte staged validation, ordered root/intermediate/inventory locking, atomic mode-600 publication, safe normalization, and no-op reporting.
+
+### Changed
+
+- Replaced permissive per-field inventory reads with one strict whole-file restricted-YAML parser. All six semantic consumers now lock and consume one canonical private snapshot, rejecting duplicate or unknown structure, malformed grammar, invalid values, missing SANs, and unsupported `deploy` data before operational work.
+- Changed `platform-pki-init` to create and refresh only `inventory/services.yml.example`; active inventory is never initialized or force-replaced. Removed unused installed `pki.env` and `openssl-*.cnf.tpl` assets while leaving existing local copies untouched.
+
 ## [1.4.0] - 2026-07-27
 
 ### Added

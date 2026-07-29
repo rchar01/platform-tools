@@ -87,7 +87,9 @@ assert_empty "$STDOUT"
 assert_contains "$STDERR" 'invalid option: --help'
 
 mkdir -p "$TMP_DIR/pki/inventory" "$EXEC_DIR/fake-bin"
-printf '%s\n' 'services: {}' >"$TMP_DIR/pki/inventory/services.yml"
+printf '%s\n' 'services:' '  backup-test:' \
+  '    common_name: backup.example.internal' '    dns:' \
+  '      - backup.example.internal' >"$TMP_DIR/pki/inventory/services.yml"
 printf '%s\n' 'private state sentinel' >"$TMP_DIR/pki/private-state"
 
 cat >"$EXEC_DIR/fake-bin/age" <<'EOF'

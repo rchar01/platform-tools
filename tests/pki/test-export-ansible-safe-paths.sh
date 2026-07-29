@@ -38,6 +38,7 @@ create_generated_pki_tree() {
   mkdir -p \
     "$pki_dir/inventory" \
     "$pki_dir/root-ca/certs" \
+    "$pki_dir/intermediate-ca" \
     "$pki_dir/export/ansible"
   chmod 700 "$(dirname -- "$pki_dir")"
   chmod 700 "$pki_dir" "$pki_dir/export" "$pki_dir/export/ansible"
@@ -45,9 +46,14 @@ create_generated_pki_tree() {
 services:
   platform-example:
     common_name: platform-example.internal
+    dns:
+      - platform-example.internal
   platform-second:
     common_name: platform-second.internal
+    dns:
+      - platform-second.internal
 YAML
+  chmod 600 "$pki_dir/inventory/services.yml"
   printf '%s\n' 'root certificate' >"$pki_dir/root-ca/certs/root-ca.crt"
   for service in platform-example platform-second; do
     mkdir -p "$pki_dir/services/$service/private" \
@@ -178,14 +184,17 @@ assert_file_content "$unmarked_export/sentinel" 'unmarked sentinel'
 
 zero_pki="$TMP_DIR/zero-generated/pki"
 mkdir -p "$zero_pki/inventory" "$zero_pki/root-ca/certs" \
-  "$zero_pki/export/ansible"
+  "$zero_pki/intermediate-ca" "$zero_pki/export/ansible"
 chmod 700 "$TMP_DIR/zero-generated" "$zero_pki" "$zero_pki/export" \
   "$zero_pki/export/ansible"
 cat >"$zero_pki/inventory/services.yml" <<'YAML'
 services:
   missing-service:
     common_name: missing.internal
+    dns:
+      - missing.internal
 YAML
+chmod 600 "$zero_pki/inventory/services.yml"
 printf '%s\n' 'root certificate' >"$zero_pki/root-ca/certs/root-ca.crt"
 printf '%s\n' 'zero sentinel' >"$zero_pki/export/ansible/sentinel"
 if "$ROOT_DIR/bin/platform-pki-export-ansible" --pki-dir "$zero_pki" --force \

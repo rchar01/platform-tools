@@ -37,6 +37,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
+| `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
 | `platform-pki-service-issue` | Issue a service certificate from PKI inventory. |
@@ -80,6 +81,7 @@ PKI helpers require:
 
 - `openssl`
 - GNU `date` for certificate expiry calculations
+- GNU `mv` with `--exchange`, `--no-copy`, and `--update=none-fail` for identity-preserving inventory publication
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 
@@ -287,6 +289,7 @@ Initialize PKI state and issue a test service certificate from inventory:
 
 ```bash
 platform-pki-init
+platform-pki-inventory-install
 platform-pki-root-create --name "Platform Example Root CA" --org "Platform Example" --country "PL"
 platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org "Platform Example" --country "PL"
 platform-pki-service-issue platform-example
@@ -295,8 +298,12 @@ platform-pki-list-expiry
 ```
 
 PKI initialization paths must be absolute, non-root, and symlink-free.
-`platform-pki-init --force` refreshes templates and examples only; it does not
-replace CA keys, certificates, or database state. Existing PKI directories must
+`platform-pki-init` creates `inventory/services.yml.example`, not active
+inventory. `platform-pki-inventory-install` installs
+`../platform-private/pki/services.yml` by default; use `--private-repo` for a
+different private repository. `platform-pki-init --force` refreshes only the
+example and does not replace active inventory, CA keys, certificates, or
+database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
 
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
@@ -309,7 +316,8 @@ verification.
 Service renewal requires an existing private key, reuses it unless
 `--rotate-key` is requested, and archives previous service material while
 transactionally replacing the certificate and intermediate CA database. Both
-operations hold ordered root and intermediate CA locks through verification.
+operations hold ordered root, intermediate, and inventory locks through
+verification and consume one validated inventory snapshot.
 
 `platform-pki-root-create` generates its key and certificate in private staging
 before publishing them. Existing root material is refused unless `--force` is

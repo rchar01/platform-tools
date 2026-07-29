@@ -9,7 +9,9 @@ create_pki_tree() {
   local pki_dir=$1
 
   mkdir -p "$pki_dir/inventory" "$pki_dir/root-ca/private" "$pki_dir/export/ansible"
-  printf '%s\n' 'services: {}' >"$pki_dir/inventory/services.yml"
+  printf '%s\n' 'services:' '  backup-test:' \
+    '    common_name: backup.example.internal' '    dns:' \
+    '      - backup.example.internal' >"$pki_dir/inventory/services.yml"
   printf '%s\n' 'root key placeholder' >"$pki_dir/root-ca/private/root-ca.key"
   printf '%s\n' 'export placeholder' >"$pki_dir/export/ansible/README.txt"
 }

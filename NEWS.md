@@ -4,6 +4,10 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki-inventory-install` for strict, atomic mode-600 installation from `../platform-private/pki/services.yml`, with `--private-repo` override and guarded source/destination handling.
+- PKI inventory now has one strict whole-file schema and one-snapshot consumption across issuance, renewal, verification, expiry listing, certificate printing, and Ansible export.
+- `platform-pki-init` now writes only `services.yml.example`, preserves active inventory even with `--force`, and no longer installs unused PKI environment or OpenSSL template files.
+
 ## v1.4.0 - 2026-07-27
 
 - Generated help for all 16 Bashly-backed commands now uses restrained colors on interactive terminals while remaining plain for pipes, redirects, and `NO_COLOR=1`.
