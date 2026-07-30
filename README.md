@@ -47,7 +47,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-print-cert` | Print readable certificate details for a service. |
 | `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
 | `platform-pki-backup` | Create encrypted or explicitly plain backups of PKI state. |
-| `platform-pki-ca-rollover` | Inspect generation state and migrate or recover the one-time legacy layout. |
+| `platform-pki-ca-rollover` | Inspect generation state; migrate legacy state; prepare or recover rollover candidates. |
 | `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
 ## Install
@@ -313,8 +313,23 @@ generations, with the active pair selected by a protected manifest. Generation
 reservations are monotonic: failed or interrupted bootstrap IDs remain
 permanently abandoned, and retries allocate the next root or intermediate ID.
 Existing singleton CA state is changed only through explicit, receipt-backed
-`platform-pki-ca-rollover migrate`; this milestone does not yet implement later
-rollover lifecycle operations.
+`platform-pki-ca-rollover migrate`. On generation-aware state, receipt-backed
+`platform-pki-ca-rollover prepare --type intermediate|root` creates immutable
+candidate generations without changing the active issuer. Root preparation
+also requires the reviewed `pki/trust-consumers.yml` checklist from the private
+repository. `status --format text|json` reports public active and candidate
+metadata after validating complete digest-bound candidate/state trees and every
+service issuer manifest. Preparation pre-creates and journals sensitive child
+outputs, records full nanosecond identities for staged CA database sources, and
+uses immutable write-ahead transaction manifests. It verifies strict critical
+CA certificate profiles and retains recovery-required state until
+crash-resumable terminal cleanup completes. Terminal receipts bind the exact
+journal and marker identities before either control file is removed.
+Recovery-required JSON uses schema 2 and reports the validated terminal outcome
+and exact `resume` or `rollback` action; every retained preparation journal
+blocks normal PKI commands even after its mutation outcome is committed.
+Activation, acknowledgement, rollback, retirement, and completion
+remain unavailable pending immutable export and evidence support.
 
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow, migration procedure, and safety rules.
 

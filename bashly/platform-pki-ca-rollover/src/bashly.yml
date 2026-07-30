@@ -1,5 +1,5 @@
 name: platform-pki-ca-rollover
-help: Inspect generation-aware CA state or migrate the one-time legacy layout
+help: Prepare or inspect generation-aware CA rollover state
 version: platform-pki-ca-rollover <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
 
 commands:
@@ -40,12 +40,81 @@ commands:
   - platform-pki-ca-rollover migrate --backup-receipt /secure/platform-pki.tar.gz.age.receipt
 
 - name: status
-  help: Report legacy, generation-aware, or recovery-required CA state
+  help: Report active, candidate, retired, or recovery-required CA state
   flags:
   - *namespace
   - *pki_dir
+  - long: --format
+    arg: format
+    help: Output format
+    default: text
+    allowed: [text, json]
   examples:
   - platform-pki-ca-rollover status
+  - platform-pki-ca-rollover status --format json
+
+- name: prepare
+  help: Prepare an immutable root or intermediate rollover candidate
+  flags:
+  - *namespace
+  - *pki_dir
+  - long: --type
+    arg: type
+    help: Candidate type
+    required: true
+    allowed: [intermediate, root]
+  - long: --backup-receipt
+    arg: path
+    help: Receipt from a fresh protected generation-layout backup
+    required: true
+    validate: not_empty
+  - long: --root-name
+    arg: CN
+    help: Generation-distinct root CA common name (root only)
+    validate: not_empty
+  - long: --intermediate-name
+    arg: CN
+    help: Generation-distinct intermediate CA common name
+    required: true
+    validate: not_empty
+  - long: --org
+    arg: O
+    help: Organization name
+    required: true
+    validate: not_empty
+  - long: --country
+    arg: C
+    help: Country code
+    required: true
+    validate: not_empty
+  - long: --root-days
+    arg: days
+    help: Root certificate lifetime in days (root only)
+    validate: not_empty
+  - long: --intermediate-days
+    arg: days
+    help: Intermediate certificate lifetime in days
+    validate: not_empty
+  - long: --root-pass-file
+    arg: path
+    help: Root key passphrase file or active-root signing passphrase file
+    validate: not_empty
+  - long: --intermediate-pass-file
+    arg: path
+    help: Candidate intermediate key passphrase file
+    validate: not_empty
+  - long: --issuer-safety-days
+    arg: days
+    help: Required issuer validity margin
+    default: "1"
+    validate: not_empty
+  - long: --private-repo
+    arg: path
+    help: Private repository containing pki/trust-consumers.yml (root only)
+    validate: not_empty
+  examples:
+  - platform-pki-ca-rollover prepare --type intermediate --backup-receipt /secure/platform-pki.tar.gz.age.receipt --intermediate-name "Platform G1-I2 Intermediate CA" --org Platform --country PL
+  - platform-pki-ca-rollover prepare --type root --backup-receipt /secure/platform-pki.tar.gz.age.receipt --root-name "Platform G2 Root CA" --intermediate-name "Platform G2-I1 Intermediate CA" --org Platform --country PL
 
 - name: recover
   help: Resume migration or terminal cleanup, or roll back the journaled transaction
@@ -68,6 +137,6 @@ commands:
   - platform-pki-ca-rollover recover --transaction migrate-20260730-120000-1234 --action rollback --yes
 
 footer: |-
-  Phase 5 implements legacy migration, migration/bootstrap recovery, and status.
-  Candidate preparation, activation, retirement, and rollover completion arrive
-  in the next milestone.
+  This milestone implements migration, candidate preparation, recovery, and status.
+  activate, acknowledge, rollback, retire, and complete remain unavailable until
+  the immutable export and evidence milestone is implemented.

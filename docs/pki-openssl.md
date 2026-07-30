@@ -230,9 +230,13 @@ All operations use persistent files under `locks/` with `flock`. Acquisition is
 `lifecycle`, `root`, `intermediate`, `inventory`, then `export` as required, and
 release is reverse. Lock files are current-user-owned, singly linked, mode 600,
 and descriptor identity is checked through `/proc/self/fd` before locking.
-After locks are held, normal commands reject an uncommitted migration or
-rollover journal before reading operational snapshots. Rollover `status` is the
-read-only exception and reports recovery-required state with status 2.
+After locks are held, normal commands reject an uncommitted migration or any
+retained rollover-preparation journal before reading operational snapshots.
+This preserves the Phase 5 behavior that permits committed migration journals.
+Rollover `status` is the read-only exception and reports recovery-required state
+with status 2. Recovery-required JSON uses schema 2 and includes the validated
+`terminal_outcome` plus the exact `required_action` (`resume` or `rollback`),
+including during marker-only terminal cleanup.
 
 `SIGKILL`, host failure, or storage failure cannot run transaction cleanup.
 After an unclean stop, treat journals, recovery markers, private staging
@@ -587,8 +591,63 @@ under cooperative same-UID lifecycle/root/intermediate/inventory locks. This exc
 cooperating commands but does not protect against a malicious same-UID process,
 which remains inside the documented trust boundary.
 
-Phase 5 implements only `migrate`, `recover`, and `status`. Candidate
-preparation, activation, retirement, and completion remain deferred.
+## Prepare a Rollover Candidate
+
+Create a fresh protected generation-layout backup immediately before
+preparation. Intermediate preparation signs a new intermediate under the active
+root; root preparation creates a new root and first intermediate and snapshots
+the reviewed private trust-consumer checklist:
+
+```bash
+platform-pki-ca-rollover prepare \
+  --type intermediate \
+  --backup-receipt /secure/path/platform-pki-....tar.gz.age.receipt \
+  --intermediate-name "Platform G1-I2 Intermediate CA" \
+  --org Platform \
+  --country PL \
+  --root-pass-file /run/secrets/platform-pki-root-pass \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+
+platform-pki-ca-rollover prepare \
+  --type root \
+  --backup-receipt /secure/path/platform-pki-....tar.gz.age.receipt \
+  --root-name "Platform G2 Root CA" \
+  --intermediate-name "Platform G2-I1 Intermediate CA" \
+  --org Platform \
+  --country PL \
+  --root-pass-file /run/secrets/platform-pki-root-pass \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
+  --private-repo ../platform-private
+```
+
+Preparation leaves `state/active-issuer` unchanged. It publishes public
+candidate metadata under `state/rollovers/` and selects it through
+`state/active-rollover`; `platform-pki-ca-rollover status --format json`
+provides machine-readable active, candidate, expiry, fingerprint, trust, and
+old-issuer service data. Status validates deterministic complete-tree manifests
+for the published candidates and rollover state, including object identity and
+non-secret file digests; private key and passphrase contents are never hashed.
+Missing, unsafe, unexpected, or changed tree entries and service issuer
+manifests are rejected. Prepared status exits 1 because operator action is
+still required. Activation, acknowledgement, lifecycle rollback, retirement,
+and completion are not implemented yet.
+
+If preparation or recovery is interrupted, `status` exits 2 and reports the
+exact transaction. Use `recover --transaction ID --action resume|rollback
+--yes`; recovery verifies journaled source, destination, backup, and tree
+identities before each mutation and can be re-run after another interruption.
+Rollback restores the fresh-backup session marker to its pre-prepare state.
+Sensitive copy, key-generation, CSR, certificate, signing-database, and
+`newcerts` destinations are pre-created and durably identity-journaled before a
+child process can write them. Completed staged root database sources use full
+nanosecond identities. A child interruption is either captured as exact partial
+state for explicit rollback or retained as fail-closed evidence that recovery
+will not delete.
+Terminal cleanup records an explicit resumed or rolled-back outcome and keeps a
+recovery marker until transaction staging and the journal have both been
+removed. Immutable write-ahead transaction manifests keep pending publication
+recoverable, and a retained terminal receipt binds the exact journal and marker
+identities used for their final checked unlink.
 
 ## List Expiry
 

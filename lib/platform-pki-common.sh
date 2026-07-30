@@ -156,6 +156,16 @@ pki_validate_days() {
   (( 10#$normalized >= 1 )) || pki_die "Days value must be at least 1: $value"
 }
 
+pki_reject_repeated_options() {
+  local option count argument
+  for option in "$@"; do
+    count=0
+    # shellcheck disable=SC2154  # Provided by Bashly before command dispatch.
+    for argument in "${command_line_args[@]}"; do [[ $argument == "$option" || $argument == "$option="* ]] && count=$((count + 1)); done
+    (( count <= 1 )) || pki_die "Option must not be repeated: $option"
+  done
+}
+
 pki_inventory_file() {
   printf '%s/inventory/services.yml\n' "$PKI_DIR"
 }
@@ -331,7 +341,7 @@ pki_require_file() {
 }
 
 pki_file_identity() {
-  stat -c '%d:%i:%u:%a:%h:%s:%Y:%Z:%F' -- "$1"
+  stat -c '%d:%i:%u:%a:%h:%s:%y:%z:%F' -- "$1"
 }
 
 pki_file_object_state() {
@@ -353,13 +363,23 @@ pki_fsync_tree() {
 }
 
 pki_remove_identity_file() {
-  local path=$1 expected=$2 current
+  local path=$1 expected=$2 label=${3:-identity-file} current marker release
   [[ -f $path && ! -L $path ]] || return 1
   current=$(pki_file_identity "$path") || return 1
   [[ $current == "$expected" || $(pki_file_object_state "$path") == "$expected" ]] || return 1
+  if [[ ${PLATFORM_PKI_UNLINK_PAUSE_AT:-} == "$label" ]]; then
+    marker=${PLATFORM_PKI_UNLINK_PAUSE_MARKER:?}; release=${PLATFORM_PKI_UNLINK_PAUSE_RELEASE:?}
+    : >"$marker" || return 1
+    while [[ ! -e $release ]]; do sleep 0.01; done
+  fi
   [[ $(pki_file_identity "$path") == "$current" ]] || return 1
   rm -f -- "$path" || return 1
   pki_fsync "$(dirname -- "$path")"
+}
+
+pki_terminal_receipt() {
+  [[ $1 =~ ^prepare-(root|intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || pki_die "Invalid rollover transaction ID: $1"
+  printf '%s/state/rollover/terminal-%s\n' "$PKI_DIR" "$1"
 }
 
 pki_file_identity_or_absent() {
@@ -370,6 +390,13 @@ pki_file_identity_or_absent() {
   fi
   [[ -f $path && ! -L $path ]] || pki_die "Expected a regular file or absent path: $path"
   pki_file_object_state "$path"
+}
+
+pki_file_identity_or_absent_full() {
+  local path=$1
+  if [[ ! -e $path && ! -L $path ]]; then printf '%s\n' absent; return; fi
+  [[ -f $path && ! -L $path ]] || pki_die "Expected a regular file or absent path: $path"
+  pki_file_identity "$path"
 }
 
 pki_require_file_identity() {
@@ -396,12 +423,72 @@ pki_restore_journaled_file() {
   pki_publish_staged_file "$backup" "$path"
 }
 
+pki_restore_journaled_file_exact() {
+  local path=$1 pre_identity=$2 post_identity=$3 backup=$4 backup_identity=$5 label=$6
+  pki_require_file_identity "$path" "$post_identity" "$label published state"
+  [[ $pre_identity != "$post_identity" ]] || return 0
+  if [[ $pre_identity == absent ]]; then pki_remove_identity_file "$path" "$post_identity" || return 1; return; fi
+  pki_require_file_identity "$backup" "$backup_identity" "$label rollback copy"
+  pki_publish_staged_file_exact "$backup" "$path"
+}
+
 pki_remove_journaled_tree() {
   local path=$1 expected=$2 parent=$3
   [[ $(dirname -- "$path") == "$parent" && -d $path && ! -L $path ]] || return 1
   [[ $(pki_dir_identity "$path") == "$expected" ]] || return 1
   [[ $(stat -c '%u:%a:%h' "$path") == "$(id -u):700:2" || $(stat -c '%u:%a' "$path") == "$(id -u):700" ]] || return 1
   rm -rf -- "$path" || return 1
+  pki_fsync "$parent"
+}
+
+pki_remove_manifested_tree() {
+  local root=$1 root_identity=$2 parent=$3 manifest=$4 manifest_identity=$5 manifest_digest=$6 excluded=${7:-}
+  local line type relative identity digest path current actual_digest
+  local -A manifest_type_map=() manifest_identity_map=()
+  local -a paths=()
+
+  [[ $(dirname -- "$root") == "$parent" && -d $root && ! -L $root ]] || return 1
+  [[ $(pki_dir_identity "$root") == "$root_identity" ]] || return 1
+  pki_require_file_identity "$manifest" "$manifest_identity" 'PKI cleanup tree manifest'
+  actual_digest=$(sha256sum "$manifest") || return 1
+  [[ ${actual_digest%% *} == "$manifest_digest" ]] || return 1
+
+  while IFS='|' read -r type relative identity digest; do
+    [[ -n $type && -n $relative && -n $identity && -n $digest && $relative != /* && $relative != . && $relative != .. && $relative != ../* && $relative != */../* && $relative != */.. ]] || return 1
+    [[ $type == directory || $type == 'regular file' || $type == 'regular empty file' ]] || return 1
+    [[ ! -v manifest_type_map[$relative] ]] || return 1
+    manifest_type_map[$relative]=$type
+    manifest_identity_map[$relative]=$identity
+  done <"$manifest"
+  [[ $(pki_file_identity "$manifest") == "$manifest_identity" ]] || return 1
+
+  while IFS= read -r -d '' path; do
+    relative=${path#"$root"/}
+    [[ $relative != "$path" && $relative != *'|'* && $relative != *$'\n'* ]] || return 1
+    [[ -z $excluded || $relative != "$excluded" ]] || continue
+    [[ -v manifest_type_map[$relative] ]] || return 1
+    type=$(stat -c '%F' -- "$path") || return 1
+    [[ $type == "${manifest_type_map[$relative]}" ]] || return 1
+    if [[ $type == directory ]]; then current=$(pki_dir_identity "$path"); else [[ -f $path && ! -L $path ]] || return 1; current=$(pki_file_identity "$path"); fi
+    [[ $current == "${manifest_identity_map[$relative]}" ]] || return 1
+    paths+=("$path")
+  done < <(find "$root" -mindepth 1 -depth -xdev -print0)
+
+  for path in "${paths[@]}"; do
+    relative=${path#"$root"/}; type=${manifest_type_map[$relative]}; identity=${manifest_identity_map[$relative]}
+    if [[ $type == directory ]]; then
+      [[ -d $path && ! -L $path && $(pki_dir_identity "$path") == "$identity" ]] || return 1
+      rmdir -- "$path" || return 1
+    else
+      pki_remove_identity_file "$path" "$identity" || return 1
+    fi
+  done
+  if [[ -n $excluded ]]; then
+    [[ $manifest == "$root/$excluded" ]] || return 1
+    pki_remove_identity_file "$manifest" "$manifest_identity" || return 1
+  fi
+  [[ $(pki_dir_identity "$root") == "$root_identity" ]] || return 1
+  rmdir -- "$root" || return 1
   pki_fsync "$parent"
 }
 
@@ -430,7 +517,7 @@ pki_require_pki_dir() {
 pki_prepare_control_state() {
   pki_require_private_dir "$PKI_DIR" 'PKI directory'
   local dir
-  for dir in "$PKI_DIR/locks" "$PKI_DIR/state" "$PKI_DIR/state/rollover" "$PKI_DIR/state/generation-reservations"; do
+  for dir in "$PKI_DIR/locks" "$PKI_DIR/state" "$PKI_DIR/state/rollover" "$PKI_DIR/state/rollovers" "$PKI_DIR/state/generation-reservations"; do
     if [[ ! -e $dir && ! -L $dir ]]; then mkdir -m 700 -- "$dir" || pki_die "Cannot create PKI control directory: $dir"; fi
     pki_require_private_dir "$dir" 'PKI control directory'
   done
@@ -522,6 +609,8 @@ pki_release_operation_lock() {
 
 pki_recovery_journal() { printf '%s/state/rollover/journal\n' "$PKI_DIR"; }
 pki_recovery_marker() { printf '%s/state/rollover/recovery-required\n' "$PKI_DIR"; }
+pki_active_rollover_pointer() { printf '%s/state/active-rollover\n' "$PKI_DIR"; }
+pki_rollover_transaction_dir() { [[ $1 =~ ^prepare-(root|intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || pki_die "Invalid rollover transaction ID: $1"; printf '%s/state/rollovers/%s\n' "$PKI_DIR" "$1"; }
 
 pki_require_no_unresolved_journal() {
   local journal marker
@@ -533,7 +622,7 @@ pki_require_no_unresolved_journal() {
   fi
   if [[ -e $journal || -L $journal ]]; then
     pki_read_state_record "$journal" 'PKI recovery journal'
-    [[ ${PKI_RECORD[committed]:-} == true ]] || \
+    [[ ${PKI_RECORD[operation]:-} != rollover-prepare && ${PKI_RECORD[committed]:-} == true ]] || \
       pki_die "PKI recovery is required before this command can continue: $journal"
   fi
 }
@@ -625,6 +714,59 @@ pki_validate_provenance_manifest() {
   rm -f -- "$tmp"
 }
 
+pki_tree_manifest() {
+  local root=$1 excluded=${2:-} excluded_second=${3:-} path relative type identity digest
+  pki_validate_managed_tree "$root" 'Managed PKI tree'
+  while IFS= read -r -d '' path; do
+    relative=${path#"$root"/}
+    [[ $relative != "$path" && $relative != *'|'* && $relative != *$'\n'* ]] || \
+      pki_die "Managed PKI tree contains an unsafe path: $path"
+    [[ -z $excluded || $relative != "$excluded" ]] || continue
+    [[ -z $excluded_second || $relative != "$excluded_second" ]] || continue
+    type=$(stat -c '%F' -- "$path")
+    case $type in
+      directory)
+        identity=$(pki_dir_identity "$path")
+        digest=-
+        ;;
+      'regular file'|'regular empty file')
+        identity=$(pki_file_identity "$path")
+        case $relative in
+          private/*|*/private/*|*.key|*passphrase*) digest=secret ;;
+          *) digest=$(sha256sum "$path"); digest=${digest%% *} ;;
+        esac
+        ;;
+      *) pki_die "Managed PKI tree contains an unsupported object: $path" ;;
+    esac
+    printf '%s|%s|%s|%s\n' "$type" "$relative" "$identity" "$digest"
+  done < <(find "$root" -mindepth 1 -xdev -print0 | LC_ALL=C sort -z)
+}
+
+pki_validate_tree_manifest() {
+  local root=$1 manifest=$2 expected_identity=$3 expected_digest=$4 excluded=${5:-} actual tmp
+  pki_require_file_identity "$manifest" "$expected_identity" 'PKI tree manifest'
+  actual=$(sha256sum "$manifest"); [[ ${actual%% *} == "$expected_digest" ]] || pki_die 'PKI tree manifest digest changed'
+  tmp=$(mktemp "${TMPDIR:-/tmp}/platform-pki-tree.XXXXXX") || pki_die 'Cannot stage PKI tree validation'
+  pki_tree_manifest "$root" "$excluded" >"$tmp" || { rm -f -- "$tmp"; pki_die 'Cannot generate PKI tree manifest'; }
+  cmp -s "$manifest" "$tmp" || { rm -f -- "$tmp"; pki_die "PKI tree contents do not match their manifest: $root"; }
+  rm -f -- "$tmp"
+}
+
+pki_require_ca_certificate_profile() {
+  local certificate=$1 pathlen=$2 label=$3 constraints usage
+  constraints=$(openssl x509 -in "$certificate" -noout -ext basicConstraints) || pki_die "$label Basic Constraints are unreadable"
+  usage=$(openssl x509 -in "$certificate" -noout -ext keyUsage) || pki_die "$label Key Usage is unreadable"
+  [[ $constraints == $'X509v3 Basic Constraints: critical\n    CA:TRUE, pathlen:'"$pathlen" ]] || \
+    pki_die "$label must have critical CA:TRUE Basic Constraints with pathlen:$pathlen"
+  [[ $usage == $'X509v3 Key Usage: critical\n    Certificate Sign, CRL Sign' ]] || \
+    pki_die "$label must have critical Certificate Sign and CRL Sign Key Usage only"
+}
+
+pki_require_ca_self_signature() {
+  local certificate=$1 label=$2
+  openssl verify -check_ss_sig -CAfile "$certificate" "$certificate" >/dev/null || pki_die "$label self-signature is invalid"
+}
+
 pki_read_pair_manifest() {
   local path=$1 prefix=$2 first second mode owner links before after fd
   local -a lines=()
@@ -634,7 +776,7 @@ pki_read_pair_manifest() {
     pki_die "$prefix manifest must be current-user-owned, singly linked, and mode 600: $path"
   before=$(pki_file_identity "$path") || pki_die "Cannot inspect $prefix manifest"
   exec {fd}<"$path" || pki_die "Cannot open $prefix manifest"
-  after=$(stat -Lc '%d:%i:%u:%a:%h:%s:%Y:%Z:%F' "/proc/self/fd/$fd") || { exec {fd}<&-; pki_die "Cannot inspect opened $prefix manifest"; }
+  after=$(stat -Lc '%d:%i:%u:%a:%h:%s:%y:%z:%F' "/proc/self/fd/$fd") || { exec {fd}<&-; pki_die "Cannot inspect opened $prefix manifest"; }
   [[ $before == "$after" && $(pki_file_identity "$path") == "$before" ]] || { exec {fd}<&-; pki_die "$prefix manifest identity changed while opening"; }
   mapfile -t -u "$fd" lines
   exec {fd}<&-
@@ -739,12 +881,38 @@ pki_publish_staged_file() {
   pki_fsync "$directory"
 }
 
+pki_publish_staged_file_exact() {
+  local source=$1 destination=$2 directory expected published_object guard destination_mode
+  directory=$(dirname -- "$destination")
+  [[ -f $source && ! -L $source && $(stat -c '%u:%h' "$source") == "$(id -u):1" ]] || pki_die "Staged publication file is unsafe: $source"
+  pki_fsync "$source"; published_object=$(stat -c '%d:%i' "$source")
+  if [[ -e $destination || -L $destination ]]; then
+    [[ -f $destination && ! -L $destination && $(stat -c '%u:%h' "$destination") == "$(id -u):1" ]] || pki_die "Publication destination is unsafe: $destination"
+    destination_mode=$(stat -c '%a' "$destination"); (( (8#$destination_mode & 022) == 0 )) || pki_die "Publication destination is writable by group or world: $destination"
+    expected=$(pki_file_identity "$destination")
+    guard=$(mktemp "$directory/.platform-pki-publish-guard.XXXXXX"); rm -f -- "$guard"
+    [[ $(pki_file_identity "$destination") == "$expected" ]] || pki_die "Publication destination identity changed before guard: $destination"
+    ln -- "$destination" "$guard" || pki_die "Publication destination changed before guard: $destination"
+    [[ $(stat -c '%d:%i:%h' "$destination") == "$(stat -c '%d:%i' "$guard"):2" ]] || pki_die "Publication destination identity changed before replacement: $destination"
+    mv --no-copy -f -T -- "$source" "$destination" || pki_die "Cannot publish staged file: $destination"
+    [[ $(stat -c '%d:%i' "$destination") == "$published_object" && $(stat -c '%h' "$guard") == 1 ]] || pki_die "Published file identity is invalid: $destination"
+    rm -f -- "$guard"
+  else
+    mv --no-copy --update=none-fail -T -- "$source" "$destination" || pki_die "Publication destination appeared: $destination"
+    [[ $(stat -c '%d:%i' "$destination") == "$published_object" ]] || pki_die "Published file identity is invalid: $destination"
+  fi
+  pki_fsync "$directory"
+  # shellcheck disable=SC2034  # Consumed by Phase 6A callers after sourcing this library.
+  PKI_PUBLISHED_FILE_IDENTITY=$(pki_file_identity "$destination")
+}
+
 pki_read_state_record() {
   local path=$1 prefix=$2 line key value before after fd
+  unset -v PKI_RECORD
   declare -gA PKI_RECORD=()
   [[ -f $path && ! -L $path && $(stat -c '%u:%a:%h' "$path") == "$(id -u):600:1" ]] || pki_die "$prefix is unsafe: $path"
   before=$(pki_file_identity "$path"); exec {fd}<"$path" || pki_die "Cannot open $prefix"
-  after=$(stat -Lc '%d:%i:%u:%a:%h:%s:%Y:%Z:%F' "/proc/self/fd/$fd")
+  after=$(stat -Lc '%d:%i:%u:%a:%h:%s:%y:%z:%F' "/proc/self/fd/$fd")
   [[ $before == "$after" && $(pki_file_identity "$path") == "$before" ]] || { exec {fd}<&-; pki_die "$prefix identity changed while opening"; }
   while IFS= read -r -u "$fd" line || [[ -n $line ]]; do
     [[ $line =~ ^([a-z0-9_]+)=([^[:cntrl:]]*)$ ]] || { exec {fd}<&-; pki_die "$prefix has invalid content"; }
@@ -765,7 +933,7 @@ pki_private_metadata_digest() {
       *) continue ;;
     esac
     [[ -f $path && ! -L $path ]] || { rm -f "$tmp"; pki_die "Private state path is unsafe: $path"; }
-    printf '%s|%s\n' "${path#"$PKI_DIR"/}" "$(stat -c '%d:%i:%u:%a:%h:%s:%y:%z' "$path")" >>"$tmp"
+    printf '%s|%s\n' "${path#"$PKI_DIR"/}" "$(stat -c '%d:%i:%u:%a:%h:%s:%y:%z:%F' "$path")" >>"$tmp"
   done < <(find "$PKI_DIR" \( -type f -o -type l \) -print0)
   LC_ALL=C sort -o "$tmp" "$tmp"; digest=$(sha256sum "$tmp"); rm -f "$tmp"; printf '%s\n' "${digest%% *}"
 }

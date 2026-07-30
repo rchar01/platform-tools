@@ -6,6 +6,7 @@ else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share
 [[ -r $COMMON_PATH ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
+pki_reject_repeated_options --namespace --pki-dir --backup-receipt --private-repo --yes --expected-root-sha256 --expected-intermediate-sha256
 
 fault() {
   [[ ${PLATFORM_PKI_MIGRATE_CRASH_AT:-} != "$1" ]] || kill -KILL "$$"
@@ -200,6 +201,7 @@ pki_require_no_unresolved_journal
 LAYOUT=$(pki_detect_layout)
 if [[ $LAYOUT == generation ]]; then
   pki_load_active_issuer_snapshot
+  # shellcheck disable=SC2153  # Assigned by pki_read_pair_manifest.
   [[ $ACTIVE_ROOT_ID == g1 && $ACTIVE_INTERMEDIATE_ID == g1-i1 ]] || pki_die 'Existing generation layout is not the completed legacy migration pair'
   pki_ok 'Legacy PKI migration is already complete; no changes made'
   exit 0

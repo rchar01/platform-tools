@@ -10,6 +10,37 @@ BACKUP="$ROOT_DIR/bin/platform-pki-backup"; ROLLOVER="$ROOT_DIR/bin/platform-pki
 PASS="$TMP_DIR/pass"; printf '%s\n' 'phase-five-test-passphrase' >"$PASS"; chmod 600 "$PASS"
 
 fail() { printf 'test-ca-rollover.sh: %s\n' "$*" >&2; exit 1; }
+assert_fails_with() {
+  local label=$1 expected=$2
+  shift 2
+  if "$@" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "$label unexpectedly succeeded"; fi
+  grep -Fq "$expected" "$TMP_DIR/stderr" || fail "$label did not report: $expected; stdout=$(<"$TMP_DIR/stdout"); stderr=$(<"$TMP_DIR/stderr")"
+}
+assert_fails() {
+  local label=$1
+  shift
+  if "$@" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "$label unexpectedly succeeded"; fi
+}
+
+without_option() {
+  local rejected=$1 option skip=false
+  shift
+  OPTION_RESULT=()
+  for option in "$@"; do
+    if [[ $skip == true ]]; then skip=false; continue; fi
+    if [[ $option == "$rejected" ]]; then skip=true; continue; fi
+    OPTION_RESULT+=("$option")
+  done
+}
+
+crash_recovery_at() {
+  local namespace=$1 transaction=$2 action=$3 checkpoint=$4 status
+  set +e
+  PLATFORM_PKI_RECOVER_CRASH_AT=$checkpoint "$ROLLOVER" recover --namespace "$namespace" --transaction "$transaction" --action "$action" --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  status=$?
+  set -e
+  [[ $status -eq 137 ]] || fail "recovery SIGKILL status at $checkpoint/$action was $status: $(<"$TMP_DIR/stderr")"
+}
 
 write_inventory() {
   local destination=$1
@@ -20,6 +51,10 @@ services:
     common_name: app.example.internal
     dns:
       - app.example.internal
+  next:
+    common_name: next.example.internal
+    dns:
+      - next.example.internal
 EOF
   chmod 600 "$destination"
 }
@@ -64,6 +99,71 @@ backup_legacy() {
   INT_FP=$(openssl x509 -in "$base/ns/pki/intermediate-ca/certs/intermediate-ca.crt" -noout -fingerprint -sha256); INT_FP=${INT_FP#*=}; INT_FP=${INT_FP//:/}
 }
 
+backup_generation() {
+  local base=$1
+  mkdir -m 700 -p "$base/backups"
+  "$BACKUP" --namespace "$base/ns" --backup-dir "$base/backups" --allow-plain-backup >/dev/null
+  PREPARE_RECEIPT=$(printf '%s\n' "$base"/backups/*.receipt)
+}
+
+write_trust_consumers() {
+  local destination=$1
+  mkdir -p "$(dirname -- "$destination")"
+  cat >"$destination" <<'EOF'
+consumers:
+  managed-cluster:
+    kind: managed
+  firewall.manual:
+    kind: manual
+EOF
+  chmod 600 "$destination"
+}
+
+crash_prepare_fixture() {
+  local case_dir=$1 type=$2 boundary=$3
+  cp -a "$seed" "$case_dir"
+  [[ $type != root ]] || write_trust_consumers "$case_dir/private/pki/trust-consumers.yml"
+  backup_generation "$case_dir"
+  set +e
+  if [[ $type == root ]]; then
+    PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$case_dir/private" >/dev/null 2>"$TMP_DIR/stderr"
+  else
+    PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"
+  fi
+  crash_status=$?
+  set -e
+  [[ $crash_status -eq 137 ]] || fail "hostile fixture crash at $type/$boundary returned $crash_status: $(<"$TMP_DIR/stderr")"
+  CRASH_JOURNAL="$case_dir/ns/pki/state/rollover/journal"
+  CRASH_TRANSACTION=$(sed -n 's/^transaction=//p' "$CRASH_JOURNAL")
+  CRASH_TRANSACTION_DIR="$case_dir/ns/pki/state/rollover/$CRASH_TRANSACTION"
+}
+
+assert_hostile_prepare_boundary() {
+  local type=$1 boundary=$2 relative=$3 object_type=$4 case_dir hostile original
+  case_dir="$TMP_DIR/hostile-prepare-$type-$boundary"
+  crash_prepare_fixture "$case_dir" "$type" "$boundary"
+  hostile="$CRASH_TRANSACTION_DIR/$relative"; mkdir -p "$(dirname -- "$hostile")"
+  if [[ -e $hostile || -L $hostile ]]; then original="$case_dir/original-$boundary"; mv -- "$hostile" "$original"; fi
+  if [[ $object_type == directory ]]; then mkdir -m 700 "$hostile"; printf '%s\n' hostile >"$hostile/sentinel"; chmod 600 "$hostile/sentinel"
+  else printf '%s\n' "hostile-$boundary" >"$hostile"; chmod 600 "$hostile"; fi
+  if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$CRASH_TRANSACTION" --action rollback --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted hostile replacement at $type/$boundary"; fi
+  if [[ $object_type == directory ]]; then [[ $(<"$hostile/sentinel") == hostile ]] || fail "recovery changed hostile directory at $type/$boundary"
+  else [[ $(<"$hostile") == "hostile-$boundary" ]] || fail "recovery changed hostile file at $type/$boundary"; fi
+  [[ $(<"$case_dir/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "hostile recovery changed active state at $type/$boundary"
+}
+
+rewrite_same_inode_same_size() {
+  local path=$1
+  [[ -s $path ]] || fail "same-inode rewrite fixture is empty: $path"
+  printf '\000' | dd of="$path" bs=1 count=1 conv=notrunc status=none
+}
+
+wait_for_path() {
+  local path=$1 count
+  for ((count = 0; count < 10000; count++)); do [[ -e $path ]] && return 0; sleep 0.01; done
+  fail "timed out waiting for test hook: $path"
+}
+
 migrate() {
   local base=$1
   "$ROLLOVER" migrate --namespace "$base/ns" --private-repo "$base/private" \
@@ -74,8 +174,366 @@ migrate() {
 seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
 
 "$ROLLOVER" --help >"$TMP_DIR/help"
-grep -Fq 'migration/bootstrap recovery' "$TMP_DIR/help" || fail 'rollover help footer is stale'
-if grep -Fq 'rollback, recovery, retirement' "$TMP_DIR/help"; then fail 'rollover help still advertises implemented recovery as deferred'; fi
+grep -Fq 'candidate preparation, recovery, and status' "$TMP_DIR/help" || fail 'rollover help footer is stale'
+grep -Fq 'activate, acknowledge, rollback, retire, and complete remain unavailable' "$TMP_DIR/help" || fail 'rollover help does not identify unavailable transitions'
+assert_fails_with 'repeated status format' 'Option must not be repeated: --format' "$ROLLOVER" status --format text --format json
+
+prepare_cli=(prepare --namespace /tmp/unused --pki-dir /tmp/unused/pki --type intermediate --backup-receipt /tmp/unused.receipt --intermediate-name Test --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --issuer-safety-days 1)
+for spec in '--namespace:/tmp/other' '--pki-dir:/tmp/other' '--type:root' '--backup-receipt:/tmp/other' '--intermediate-name:Other' '--org:Other' '--country:PL' '--root-pass-file:/tmp/other' '--intermediate-pass-file:/tmp/other' '--issuer-safety-days:2'; do
+  option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated prepare $option" 'Option must not be repeated' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value"
+done
+for spec in '--root-name:Root' '--root-days:2' '--intermediate-days:2' '--private-repo:/tmp/private'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated prepare $option" 'Option must not be repeated' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value" "$option" "$value"; done
+
+recover_cli=(recover --namespace /tmp/unused --pki-dir /tmp/unused/pki --transaction prepare-root-20260730-000000-1 --action rollback --yes)
+for spec in '--namespace:/tmp/other' '--pki-dir:/tmp/other' '--transaction:prepare-root-20260730-000000-2' '--action:resume'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated recover $option" 'Option must not be repeated' "$ROLLOVER" "${recover_cli[@]}" "$option" "$value"; done
+assert_fails_with 'repeated recover --yes' 'Option must not be repeated' "$ROLLOVER" "${recover_cli[@]}" --yes
+
+for option in --namespace --pki-dir --type --backup-receipt --intermediate-name --org --country --root-pass-file --intermediate-pass-file --issuer-safety-days; do without_option "$option" "${prepare_cli[@]:1}"; assert_fails "empty prepare $option" "$ROLLOVER" prepare "${OPTION_RESULT[@]}" "$option" ''; done
+for option in --root-name --root-days --intermediate-days --private-repo; do assert_fails "empty prepare $option" "$ROLLOVER" "${prepare_cli[@]}" "$option" ''; done
+for option in --namespace --pki-dir --transaction --action; do without_option "$option" "${recover_cli[@]:1}"; assert_fails "empty recover $option" "$ROLLOVER" recover "${OPTION_RESULT[@]}" "$option" ''; done
+assert_fails 'prepare positional argument' "$ROLLOVER" "${prepare_cli[@]}" unexpected
+assert_fails 'recover positional argument' "$ROLLOVER" "${recover_cli[@]}" unexpected
+for spec in '--root-name:Root' '--root-days:2' '--private-repo:/tmp/private'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "forbidden intermediate $option" 'forbidden for intermediate preparation' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value"; done
+for option in --backup-receipt --type --root-name --intermediate-name --org --country --root-days --intermediate-days --root-pass-file --intermediate-pass-file --issuer-safety-days --private-repo; do assert_fails "forbidden recover $option" "$ROLLOVER" "${recover_cli[@]}" "$option" value; done
+for option in --transaction --action --yes; do assert_fails "forbidden prepare $option" "$ROLLOVER" "${prepare_cli[@]}" "$option" value; done
+
+identity_case="$TMP_DIR/nanosecond-identity"; mkdir -m 700 "$identity_case"; printf '%s' first >"$identity_case/key"; chmod 600 "$identity_case/key"
+identity_before=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")
+printf '%s' other >"$identity_case/key"
+identity_after=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")
+[[ $identity_before != "$identity_after" ]] || fail 'same-size same-second rewrite retained its file identity'
+bash -c 'source "$1"; pki_atomic_write "$2" "identity=$3
+"; pki_read_state_record "$2" Identity; [[ ${PKI_RECORD[identity]} == "$3" ]]' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/state" "$identity_after" || fail 'state parser did not preserve a nanosecond identity'
+
+manifest_case="$TMP_DIR/manifest-removal"; mkdir -m 700 "$manifest_case" "$manifest_case/tree"; printf '%s' first >"$manifest_case/tree/key"; chmod 600 "$manifest_case/tree/key"
+bash -c 'source "$1"; pki_tree_manifest "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" >"$manifest_case/manifest"; chmod 600 "$manifest_case/manifest"
+manifest_identity=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/manifest"); manifest_digest=$(sha256sum "$manifest_case/manifest"); manifest_digest=${manifest_digest%% *}; tree_identity=$(bash -c 'source "$1"; pki_dir_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree")
+printf '%s' other >"$manifest_case/tree/key"
+if bash -c 'source "$1"; pki_remove_manifested_tree "$2" "$3" "$4" "$5" "$6" "$7"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" "$tree_identity" "$manifest_case" "$manifest_case/manifest" "$manifest_identity" "$manifest_digest"; then fail 'manifest cleanup accepted a hostile same-size replacement'; fi
+[[ $(<"$manifest_case/tree/key") == other ]] || fail 'manifest cleanup modified a hostile replacement'
+
+journal_case="$TMP_DIR/journal-gating"; mkdir -m 700 "$journal_case" "$journal_case/state" "$journal_case/state/rollover"
+cat >"$journal_case/state/rollover/journal" <<'EOF'
+operation=rollover-prepare
+committed=true
+EOF
+chmod 600 "$journal_case/state/rollover/journal"
+assert_fails_with 'committed preparation journal gating' 'PKI recovery is required' bash -c 'source "$1"; PKI_DIR=$2; pki_require_no_unresolved_journal' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$journal_case"
+cat >"$journal_case/state/rollover/journal" <<'EOF'
+operation=legacy-migrate
+committed=true
+EOF
+bash -c 'source "$1"; PKI_DIR=$2; pki_require_no_unresolved_journal' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$journal_case" || fail 'committed migration journal no longer preserves Phase 5 behavior'
+
+intermediate_prepare="$TMP_DIR/intermediate-prepare"; mkdir -m 700 "$intermediate_prepare"; create_generation_fixture "$intermediate_prepare"; backup_generation "$intermediate_prepare"
+active_before=$(<"$intermediate_prepare/ns/pki/state/active-issuer")
+assert_fails_with 'ambiguous generation name' 'must identify its new generation ID' "$ROLLOVER" prepare --namespace "$intermediate_prepare/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I20 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS"
+assert_fails_with 'invalid intermediate lifetime' 'exceeds the active root validity safety margin' "$ROLLOVER" prepare --namespace "$intermediate_prepare/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --intermediate-days 3650 --root-pass-file "$PASS" --intermediate-pass-file "$PASS"
+"$ROLLOVER" prepare --namespace "$intermediate_prepare/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null
+[[ $(<"$intermediate_prepare/ns/pki/state/active-issuer") == "$active_before" ]] || fail 'intermediate preparation changed the active issuer'
+[[ -d $intermediate_prepare/ns/pki/authorities/intermediates/g1-i2 ]] || fail 'intermediate preparation did not publish g1-i2'
+[[ -f $intermediate_prepare/ns/pki/state/active-rollover && ! -L $intermediate_prepare/ns/pki/state/active-rollover ]] || fail 'intermediate preparation did not publish active-rollover'
+"$ISSUE" next --namespace "$intermediate_prepare/ns" --intermediate-pass-file "$PASS" >/dev/null
+openssl verify -CAfile "$intermediate_prepare/ns/pki/authorities/roots/g1/certs/root-ca.crt" -untrusted "$intermediate_prepare/ns/pki/authorities/intermediates/g1-i1/certs/intermediate-ca.crt" "$intermediate_prepare/ns/pki/services/next/certs/tls.crt" >/dev/null || fail 'issuance after intermediate preparation did not use the old active issuer'
+set +e; "$ROLLOVER" status --namespace "$intermediate_prepare/ns" --format json >"$intermediate_prepare/status.json"; prepare_status=$?; set -e
+[[ $prepare_status -eq 1 ]] || fail "intermediate prepared status returned $prepare_status instead of 1"
+jq -e '.schema == 1 and .status == "prepared" and .type == "intermediate" and .candidate.intermediate.generation == "g1-i2" and (.services_on_old_issuer | sort) == ["app", "next"]' "$intermediate_prepare/status.json" >/dev/null || fail 'intermediate preparation JSON status is incorrect'
+intermediate_transaction=$(sed -n 's/^transaction=//p' "$intermediate_prepare/ns/pki/state/active-rollover"); intermediate_manifest="$intermediate_prepare/ns/pki/state/rollovers/$intermediate_transaction/candidate-intermediate-tree.manifest"
+[[ $(wc -l <"$intermediate_manifest") -eq $(find "$intermediate_prepare/ns/pki/authorities/intermediates/g1-i2" -mindepth 1 -xdev -print | wc -l) ]] || fail 'candidate intermediate manifest omitted a tree entry'
+grep -F '|private/intermediate-ca.key|' "$intermediate_manifest" | grep -Fq '|secret' || fail 'candidate intermediate manifest exposed a private-key digest'
+if grep -Fq 'phase-five-test-passphrase' "$intermediate_manifest"; then fail 'candidate intermediate manifest exposed passphrase content'; fi
+assert_fails_with 'overlapping preparation' 'An active rollover already exists' "$ROLLOVER" prepare --namespace "$intermediate_prepare/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I3 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS"
+
+root_prepare="$TMP_DIR/root-prepare"; mkdir -m 700 "$root_prepare"; create_generation_fixture "$root_prepare"; write_trust_consumers "$root_prepare/private/pki/trust-consumers.yml"; backup_generation "$root_prepare"
+active_before=$(<"$root_prepare/ns/pki/state/active-issuer")
+ln -s "$root_prepare/private" "$root_prepare/private-link"
+assert_fails_with 'symlinked private repository' 'symlink' "$ROLLOVER" prepare --namespace "$root_prepare/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$root_prepare/private-link"
+rm -f "$root_prepare/private-link"
+cat >"$root_prepare/private/pki/trust-consumers.yml" <<'EOF'
+consumers:
+  invalid:
+    unknown: manual
+EOF
+assert_fails_with 'invalid trust checklist' 'Unsupported trust consumer grammar' "$ROLLOVER" prepare --namespace "$root_prepare/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$root_prepare/private"
+cat >"$root_prepare/private/pki/trust-consumers.yml" <<'EOF'
+---
+---
+consumers:
+  invalid:
+    kind: manual
+EOF
+assert_fails_with 'duplicate trust document marker' 'document marker is duplicate' "$ROLLOVER" prepare --namespace "$root_prepare/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$root_prepare/private"
+write_trust_consumers "$root_prepare/private/pki/trust-consumers.yml"
+"$ROLLOVER" prepare --namespace "$root_prepare/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-days 3650 --intermediate-days 1825 --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$root_prepare/private" >/dev/null
+[[ $(<"$root_prepare/ns/pki/state/active-issuer") == "$active_before" ]] || fail 'root preparation changed the active issuer'
+[[ -d $root_prepare/ns/pki/authorities/roots/g2 && -d $root_prepare/ns/pki/authorities/intermediates/g2-i1 ]] || fail 'root preparation did not publish both candidates'
+openssl verify -CAfile "$root_prepare/ns/pki/authorities/roots/g2/certs/root-ca.crt" "$root_prepare/ns/pki/authorities/intermediates/g2-i1/certs/intermediate-ca.crt" >/dev/null || fail 'root preparation candidate chain is invalid'
+set +e; "$ROLLOVER" status --namespace "$root_prepare/ns" --format json >"$root_prepare/status.json"; prepare_status=$?; set -e
+[[ $prepare_status -eq 1 ]] || fail "root prepared status returned $prepare_status instead of 1"
+jq -e '.schema == 1 and .status == "prepared" and .type == "root" and .candidate.root.generation == "g2" and .candidate.intermediate.generation == "g2-i1"' "$root_prepare/status.json" >/dev/null || fail 'root preparation JSON status is incorrect'
+root_transaction=$(sed -n 's/^transaction=//p' "$root_prepare/ns/pki/state/active-rollover"); root_state="$root_prepare/ns/pki/state/rollovers/$root_transaction"
+[[ $(wc -l <"$root_state/candidate-root-tree.manifest") -eq $(find "$root_prepare/ns/pki/authorities/roots/g2" -mindepth 1 -xdev -print | wc -l) ]] || fail 'candidate root manifest omitted a tree entry'
+[[ $(wc -l <"$root_state/candidate-intermediate-tree.manifest") -eq $(find "$root_prepare/ns/pki/authorities/intermediates/g2-i1" -mindepth 1 -xdev -print | wc -l) ]] || fail 'root rollover intermediate manifest omitted a tree entry'
+grep -F '|private/root-ca.key|' "$root_state/candidate-root-tree.manifest" | grep -Fq '|secret' || fail 'candidate root manifest exposed a private-key digest'
+grep -F '|private/intermediate-ca.key|' "$root_state/candidate-intermediate-tree.manifest" | grep -Fq '|secret' || fail 'root rollover intermediate manifest exposed a private-key digest'
+if grep -Fq 'phase-five-test-passphrase' "$root_state"/*.manifest; then fail 'root rollover manifests exposed passphrase content'; fi
+
+wrapper_dir="$TMP_DIR/child-wrappers"; mkdir -m 700 "$wrapper_dir"; real_cp=$(command -v cp); real_openssl=$(command -v openssl)
+cat >"$wrapper_dir/cp" <<'EOF'
+#!/usr/bin/env bash
+"$REAL_CP" "$@" || exit $?
+destination=${!#}
+[[ $destination != */state/rollover/* ]] || kill -KILL "$$"
+EOF
+cat >"$wrapper_dir/openssl" <<'EOF'
+#!/usr/bin/env bash
+subcommand=${1:-}
+"$REAL_OPENSSL" "$@" || exit $?
+[[ $subcommand != "${KILL_OPENSSL_SUBCOMMAND:-}" ]] || kill -KILL "$$"
+EOF
+chmod 700 "$wrapper_dir/cp" "$wrapper_dir/openssl"
+for child in cp genpkey req ca; do
+  child_case="$TMP_DIR/child-kill-$child"; cp -a "$seed" "$child_case"; child_type=intermediate
+  if [[ $child == req ]]; then child_type=root; write_trust_consumers "$child_case/private/pki/trust-consumers.yml"; fi
+  backup_generation "$child_case"; child_active=$(<"$child_case/ns/pki/state/active-issuer")
+  set +e
+  if [[ $child_type == root ]]; then
+    env REAL_CP="$real_cp" REAL_OPENSSL="$real_openssl" PLATFORM_PKI_PREPARE_CP="$wrapper_dir/cp" PLATFORM_PKI_PREPARE_OPENSSL="$wrapper_dir/openssl" KILL_OPENSSL_SUBCOMMAND="$child" "$ROLLOVER" prepare --namespace "$child_case/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$child_case/private" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  else
+    env REAL_CP="$real_cp" REAL_OPENSSL="$real_openssl" PLATFORM_PKI_PREPARE_CP="$wrapper_dir/cp" PLATFORM_PKI_PREPARE_OPENSSL="$wrapper_dir/openssl" KILL_OPENSSL_SUBCOMMAND="$child" "$ROLLOVER" prepare --namespace "$child_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  fi
+  child_status=$?; set -e
+  [[ $child_status -ne 0 ]] || fail "$child child-kill preparation unexpectedly succeeded"
+  child_journal="$child_case/ns/pki/state/rollover/journal"; child_transaction=$(sed -n 's/^transaction=//p' "$child_journal")
+  [[ -n $child_transaction && -f $child_case/ns/pki/state/rollover/recovery-required ]] || fail "$child child-kill did not retain recovery evidence"
+  [[ $(<"$child_case/ns/pki/state/active-issuer") == "$child_active" ]] || fail "$child child-kill changed active state"
+  assert_fails_with "$child child-kill resume" 'recover with rollback' "$ROLLOVER" recover --namespace "$child_case/ns" --transaction "$child_transaction" --action resume --yes
+  "$ROLLOVER" recover --namespace "$child_case/ns" --transaction "$child_transaction" --action rollback --yes >/dev/null
+  [[ $(<"$child_case/ns/pki/state/active-issuer") == "$child_active" && ! -e $child_case/ns/pki/state/rollover/journal ]] || fail "$child child-kill rollback was incomplete"
+done
+
+for boundary in transaction-manifest-staged transaction-manifest-published; do
+  manifest_case="$TMP_DIR/$boundary"; crash_prepare_fixture "$manifest_case" intermediate "$boundary"
+  grep -Fx 'transaction_tree_manifest_pending_identity=none' "$CRASH_JOURNAL" >/dev/null && fail "$boundary did not retain pending immutable-manifest evidence"
+  "$ROLLOVER" recover --namespace "$manifest_case/ns" --transaction "$CRASH_TRANSACTION" --action rollback --yes >/dev/null
+  [[ $(<"$manifest_case/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "$boundary recovery changed active state"
+done
+
+profile_dir="$TMP_DIR/certificate-profiles"; mkdir -m 700 "$profile_dir"
+openssl req -new -x509 -newkey rsa:2048 -nodes -subj /CN=bad-basic -days 1 -keyout "$profile_dir/basic.key" -out "$profile_dir/basic.crt" -addext 'basicConstraints=CA:true,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+assert_fails_with 'noncritical CA constraints' 'critical CA:TRUE Basic Constraints' bash -c 'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/basic.crt"
+openssl req -new -x509 -newkey rsa:2048 -nodes -subj /CN=bad-usage -days 1 -keyout "$profile_dir/usage.key" -out "$profile_dir/usage.crt" -addext 'basicConstraints=critical,CA:true,pathlen:1' -addext 'keyUsage=critical,digitalSignature,keyCertSign,cRLSign' >/dev/null 2>&1
+assert_fails_with 'extra CA key usage' 'Key Usage only' bash -c 'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/usage.crt"
+openssl x509 -in "$root_prepare/ns/pki/authorities/roots/g2/certs/root-ca.crt" -badsig -out "$profile_dir/bad-self-signature.crt"
+openssl x509 -in "$profile_dir/bad-self-signature.crt" -noout >/dev/null || fail 'corrupted self-signature fixture is not parseable'
+assert_fails 'corrupted root self-signature' openssl verify -check_ss_sig -CAfile "$profile_dir/bad-self-signature.crt" "$profile_dir/bad-self-signature.crt"
+assert_fails_with 'application root self-signature validation' 'Candidate root self-signature is invalid' bash -c 'source "$1"; pki_require_ca_self_signature "$2" "Candidate root"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/bad-self-signature.crt"
+
+missing_issuer="$TMP_DIR/missing-service-issuer"; cp -a "$seed" "$missing_issuer"; rm -f "$missing_issuer/ns/pki/services/app/issuer"
+assert_fails_with 'missing service issuer status' 'issuer manifest is missing or unsafe' "$ROLLOVER" status --namespace "$missing_issuer/ns" --format json
+
+early_case="$TMP_DIR/prepare-early-boundaries"; cp -a "$seed" "$early_case"; backup_generation "$early_case"
+for boundary in transaction-dir-pending transaction-dir-done long-stage-pending long-stage-done backup-session-pending backup-session-done reserve-intermediate-pending reserve-intermediate-done stage-dir-pending stage-dir-done sensitive-stage-pending sensitive-root-stage-pending sensitive-root-stage-done sensitive-root-private-pending sensitive-root-private-done sensitive-intermediate-stage-pending sensitive-intermediate-stage-done sensitive-intermediate-private-pending sensitive-intermediate-private-done copied-root-key-pending copied-root-key-done sensitive-stage-done intermediate-stage-config-pending intermediate-stage-config-done intermediate-key-pending intermediate-key-done intermediate-csr-pending intermediate-csr-done intermediate-signing-pending intermediate-signing-done chain-pending chain-done evidence-stage-pending evidence-stage-done; do
+  max=1; shopt -s nullglob; generation_paths=("$early_case/ns/pki/state/generation-reservations/g1-i"* "$early_case/ns/pki/authorities/intermediates/g1-i"*); shopt -u nullglob
+  for path in "${generation_paths[@]}"; do generation=${path##*g1-i}; [[ $generation =~ ^[0-9]+$ ]] && (( 10#$generation > max )) && max=$((10#$generation)); done
+  next=$((max + 1))
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$early_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name "Test G1-I$next Intermediate CA" --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "early preparation SIGKILL status at $boundary was $crash_status: $(<"$TMP_DIR/stderr")"
+  transaction=$(sed -n 's/^transaction=//p' "$early_case/ns/pki/state/rollover/journal")
+  "$ROLLOVER" recover --namespace "$early_case/ns" --transaction "$transaction" --action rollback --yes >/dev/null
+  [[ ! -e $early_case/ns/pki/state/rollover/journal && ! -e $early_case/ns/pki/state/rollover/recovery-required ]] || fail "early rollback retained recovery state after $boundary"
+done
+
+early_root="$TMP_DIR/prepare-root-crypto-boundaries"; cp -a "$seed" "$early_root"; write_trust_consumers "$early_root/private/pki/trust-consumers.yml"; backup_generation "$early_root"
+for boundary in candidate-root-stage-pending candidate-root-directory-pending candidate-root-directory-done candidate-root-private-pending candidate-root-private-done candidate-intermediate-directory-pending candidate-intermediate-directory-done candidate-intermediate-private-pending candidate-intermediate-private-done candidate-root-stage-done root-key-pending root-key-done root-certificate-pending root-certificate-done; do
+  max=1; shopt -s nullglob; generation_paths=("$early_root/ns/pki/state/generation-reservations/g"* "$early_root/ns/pki/authorities/roots/g"*); shopt -u nullglob
+  for path in "${generation_paths[@]}"; do generation=${path##*/g}; [[ $generation =~ ^[0-9]+$ ]] && (( 10#$generation > max )) && max=$((10#$generation)); done
+  next=$((max + 1))
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$early_root/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name "Test G$next Root CA" --intermediate-name "Test G$next-I1 Intermediate CA" --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$early_root/private" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "root crypto SIGKILL status at $boundary was $crash_status: $(<"$TMP_DIR/stderr")"
+  transaction=$(sed -n 's/^transaction=//p' "$early_root/ns/pki/state/rollover/journal")
+  "$ROLLOVER" recover --namespace "$early_root/ns" --transaction "$transaction" --action rollback --yes >/dev/null
+done
+
+for spec in \
+  'intermediate:sensitive-stage-pending:stage/root:directory' \
+  'intermediate:sensitive-stage-done:stage/root:directory' \
+  'intermediate:sensitive-root-stage-pending:stage/root:directory' \
+  'intermediate:sensitive-root-stage-done:stage/root:directory' \
+  'intermediate:sensitive-root-private-pending:stage/root/private:directory' \
+  'intermediate:sensitive-root-private-done:stage/root/private:directory' \
+  'intermediate:sensitive-intermediate-stage-pending:stage/intermediate:directory' \
+  'intermediate:sensitive-intermediate-stage-done:stage/intermediate:directory' \
+  'intermediate:sensitive-intermediate-private-pending:stage/intermediate/private:directory' \
+  'intermediate:sensitive-intermediate-private-done:stage/intermediate/private:directory' \
+  'intermediate:copied-root-key-pending:stage/root/private/root-ca.key:file' \
+  'intermediate:copied-root-key-done:stage/root/private/root-ca.key:file' \
+  'intermediate:intermediate-key-pending:stage/intermediate/private/intermediate-ca.key:file' \
+  'intermediate:intermediate-key-done:stage/intermediate/private/intermediate-ca.key:file' \
+  'intermediate:intermediate-signing-pending:stage/intermediate/certs/intermediate-ca.crt:file' \
+  'intermediate:intermediate-signing-done:stage/intermediate/certs/intermediate-ca.crt:file' \
+  'root:candidate-root-stage-pending:stage/root:directory' \
+  'root:candidate-root-stage-done:stage/root:directory' \
+  'root:candidate-root-directory-pending:stage/root:directory' \
+  'root:candidate-root-directory-done:stage/root:directory' \
+  'root:candidate-root-private-pending:stage/root/private:directory' \
+  'root:candidate-root-private-done:stage/root/private:directory' \
+  'root:candidate-intermediate-directory-pending:stage/intermediate:directory' \
+  'root:candidate-intermediate-directory-done:stage/intermediate:directory' \
+  'root:candidate-intermediate-private-pending:stage/intermediate/private:directory' \
+  'root:candidate-intermediate-private-done:stage/intermediate/private:directory' \
+  'root:root-key-pending:stage/root/private/root-ca.key:file' \
+  'root:root-key-done:stage/root/private/root-ca.key:file' \
+  'root:intermediate-key-pending:stage/intermediate/private/intermediate-ca.key:file' \
+  'root:intermediate-key-done:stage/intermediate/private/intermediate-ca.key:file' \
+  'root:intermediate-signing-pending:stage/intermediate/certs/intermediate-ca.crt:file' \
+  'root:intermediate-signing-done:stage/intermediate/certs/intermediate-ca.crt:file'; do
+  IFS=: read -r hostile_type hostile_boundary hostile_relative hostile_object_type <<<"$spec"
+  assert_hostile_prepare_boundary "$hostile_type" "$hostile_boundary" "$hostile_relative" "$hostile_object_type"
+done
+
+for spec in \
+  'intermediate:copied-root-key-done:stage/root/private/root-ca.key' \
+  'intermediate:intermediate-key-done:stage/intermediate/private/intermediate-ca.key' \
+  'intermediate:intermediate-csr-done:stage/intermediate/csr/intermediate-ca.csr' \
+  'intermediate:intermediate-signing-done:stage/intermediate/certs/intermediate-ca.crt' \
+  'intermediate:chain-done:stage/intermediate/certs/ca-chain.crt' \
+  'root:root-key-done:stage/root/private/root-ca.key' \
+  'root:root-certificate-done:stage/root/certs/root-ca.crt'; do
+  IFS=: read -r rewrite_type rewrite_boundary rewrite_relative <<<"$spec"
+  rewrite_case="$TMP_DIR/rewrite-$rewrite_type-$rewrite_boundary"; crash_prepare_fixture "$rewrite_case" "$rewrite_type" "$rewrite_boundary"
+  rewrite_path="$CRASH_TRANSACTION_DIR/$rewrite_relative"; rewrite_inode=$(stat -c '%d:%i' "$rewrite_path"); rewrite_size=$(stat -c '%s' "$rewrite_path")
+  rewrite_same_inode_same_size "$rewrite_path"
+  [[ $(stat -c '%d:%i:%s' "$rewrite_path") == "$rewrite_inode:$rewrite_size" ]] || fail "rewrite fixture did not preserve inode and size at $rewrite_type/$rewrite_boundary"
+  if "$ROLLOVER" recover --namespace "$rewrite_case/ns" --transaction "$CRASH_TRANSACTION" --action rollback --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted same-inode rewrite at $rewrite_type/$rewrite_boundary"; fi
+  [[ $(stat -c '%d:%i:%s' "$rewrite_path") == "$rewrite_inode:$rewrite_size" ]] || fail "recovery deleted same-inode rewrite at $rewrite_type/$rewrite_boundary"
+  [[ $(<"$rewrite_case/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "same-inode rewrite recovery changed active state at $rewrite_type/$rewrite_boundary"
+done
+
+db_probe="$TMP_DIR/root-db-source-probe"; crash_prepare_fixture "$db_probe" intermediate after-staged
+root_db_keys=(index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert); staged_root_db_keys=()
+for key in "${root_db_keys[@]}"; do
+  source_identity=$(sed -n "s/^root_${key}_source_identity=//p" "$CRASH_JOURNAL"); [[ $source_identity == absent ]] && continue
+  issued=$(sed -n 's/^issued_serial=//p' "$CRASH_JOURNAL"); case $key in index) relative=index.txt ;; index_attr) relative=index.txt.attr ;; serial) relative=serial ;; crlnumber) relative=crlnumber ;; index_old) relative=index.txt.old ;; index_attr_old) relative=index.txt.attr.old ;; serial_old) relative=serial.old ;; crlnumber_old) relative=crlnumber.old ;; newcert) relative="newcerts/$issued.pem" ;; esac
+  actual_identity=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$CRASH_TRANSACTION_DIR/stage/root/$relative")
+  [[ $source_identity == "$actual_identity" ]] || fail "staged root DB source lacks full nanosecond identity: $key"
+  staged_root_db_keys+=("$key")
+done
+"$ROLLOVER" recover --namespace "$db_probe/ns" --transaction "$CRASH_TRANSACTION" --action rollback --yes >/dev/null
+for key in "${staged_root_db_keys[@]}"; do
+  case_dir="$TMP_DIR/hostile-root-db-source-$key"; crash_prepare_fixture "$case_dir" intermediate after-staged
+  issued=$(sed -n 's/^issued_serial=//p' "$CRASH_JOURNAL")
+  case $key in index) relative=index.txt ;; index_attr) relative=index.txt.attr ;; serial) relative=serial ;; crlnumber) relative=crlnumber ;; index_old) relative=index.txt.old ;; index_attr_old) relative=index.txt.attr.old ;; serial_old) relative=serial.old ;; crlnumber_old) relative=crlnumber.old ;; newcert) relative="newcerts/$issued.pem" ;; esac
+  hostile="$CRASH_TRANSACTION_DIR/stage/root/$relative"; mv -- "$hostile" "$case_dir/original-$key"; printf '%s\n' "hostile-$key" >"$hostile"; chmod 600 "$hostile"
+  if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$CRASH_TRANSACTION" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted hostile staged root DB source: $key"; fi
+  [[ $(<"$hostile") == "hostile-$key" ]] || fail "recovery changed hostile staged root DB source: $key"
+  [[ $(<"$case_dir/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "hostile root DB source changed active state: $key"
+done
+for key in "${staged_root_db_keys[@]}"; do
+  case_dir="$TMP_DIR/rewrite-root-db-source-$key"; crash_prepare_fixture "$case_dir" intermediate after-staged
+  issued=$(sed -n 's/^issued_serial=//p' "$CRASH_JOURNAL")
+  case $key in index) relative=index.txt ;; index_attr) relative=index.txt.attr ;; serial) relative=serial ;; crlnumber) relative=crlnumber ;; index_old) relative=index.txt.old ;; index_attr_old) relative=index.txt.attr.old ;; serial_old) relative=serial.old ;; crlnumber_old) relative=crlnumber.old ;; newcert) relative="newcerts/$issued.pem" ;; esac
+  rewrite_path="$CRASH_TRANSACTION_DIR/stage/root/$relative"; rewrite_inode=$(stat -c '%d:%i' "$rewrite_path"); rewrite_size=$(stat -c '%s' "$rewrite_path")
+  rewrite_same_inode_same_size "$rewrite_path"
+  if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$CRASH_TRANSACTION" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted same-inode staged root DB rewrite: $key"; fi
+  [[ $(stat -c '%d:%i:%s' "$rewrite_path") == "$rewrite_inode:$rewrite_size" ]] || fail "recovery deleted same-inode staged root DB rewrite: $key"
+  [[ $(<"$case_dir/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "same-inode root DB rewrite changed active state: $key"
+done
+
+for scenario in after-journal:rollback after-staged:resume after-intermediate-candidate:resume after-root-db:rollback after-consumed:resume cleanup-root-stage-removed:resume after-state:rollback after-pointer:resume; do
+  boundary=${scenario%%:*}; action=${scenario#*:}; case_dir="$TMP_DIR/prepare-intermediate-$boundary"; cp -a "$seed" "$case_dir"; backup_generation "$case_dir"
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "intermediate preparation crash at $boundary returned $crash_status instead of 137"
+  transaction=$(sed -n 's/^transaction=//p' "$case_dir/ns/pki/state/rollover/journal")
+  if [[ $boundary == after-staged ]]; then
+    recovery_boundaries=(resume-publish-intermediate)
+    for key in index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert; do source_identity=$(sed -n "s/^root_${key}_source_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); pre_identity=$(sed -n "s/^root_${key}_pre_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); post_identity=$(sed -n "s/^root_${key}_post_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); [[ $source_identity == absent || $pre_identity == "$post_identity" ]] || recovery_boundaries+=("resume-root-db-$key"); done
+    recovery_boundaries+=(resume-consume-intermediate resume-cleanup-root-stage resume-publish-state resume-publish-pointer terminal-transaction terminal-journal)
+    for recovery_boundary in "${recovery_boundaries[@]}"; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
+  fi
+  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
+  [[ ! -e $case_dir/ns/pki/state/rollover/journal ]] || fail "intermediate recovery left a journal after $boundary"
+  if [[ $action == resume ]]; then [[ -d $case_dir/ns/pki/authorities/intermediates/g1-i2 && -f $case_dir/ns/pki/state/active-rollover ]] || fail "intermediate resume did not publish state after $boundary"; else [[ ! -e $case_dir/ns/pki/authorities/intermediates/g1-i2 && ! -e $case_dir/ns/pki/state/active-rollover ]] || fail "intermediate rollback did not restore state after $boundary"; fi
+done
+
+tree_case="$TMP_DIR/prepare-tree-extra"; cp -a "$seed" "$tree_case"; backup_generation "$tree_case"
+set +e; PLATFORM_PKI_PREPARE_CRASH_AT=after-staged "$ROLLOVER" prepare --namespace "$tree_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+[[ $crash_status -eq 137 ]] || fail 'tree-manifest fixture did not crash'
+transaction=$(sed -n 's/^transaction=//p' "$tree_case/ns/pki/state/rollover/journal"); printf '%s\n' hostile >"$tree_case/ns/pki/state/rollover/$transaction/stage/intermediate/unexpected"; chmod 600 "$tree_case/ns/pki/state/rollover/$transaction/stage/intermediate/unexpected"
+assert_fails_with 'unexpected candidate tree entry' 'tree contents do not match' "$ROLLOVER" recover --namespace "$tree_case/ns" --transaction "$transaction" --action resume --yes
+
+terminal_case="$TMP_DIR/prepare-terminal-cleanup"; cp -a "$seed" "$terminal_case"; backup_generation "$terminal_case"
+set +e; PLATFORM_PKI_PREPARE_CRASH_AT=after-staged "$ROLLOVER" prepare --namespace "$terminal_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+[[ $crash_status -eq 137 ]] || fail 'terminal-cleanup fixture did not crash'
+transaction=$(sed -n 's/^transaction=//p' "$terminal_case/ns/pki/state/rollover/journal")
+for checkpoint in terminal-transaction-pending terminal-transaction-done terminal-journal-pending terminal-journal-done; do
+  crash_recovery_at "$terminal_case/ns" "$transaction" resume "$checkpoint"
+  set +e; "$ROLLOVER" status --namespace "$terminal_case/ns" --format json >"$terminal_case/status.json"; terminal_status=$?; set -e
+  [[ $terminal_status -eq 2 ]] || fail "status ignored interrupted terminal cleanup at $checkpoint"
+  jq -e '.schema == 2 and .status == "recovery-required" and .terminal_outcome == "resumed" and .required_action == "resume"' "$terminal_case/status.json" >/dev/null || fail "terminal cleanup JSON was incomplete at $checkpoint"
+  set +e; "$ROLLOVER" status --namespace "$terminal_case/ns" --format text >"$terminal_case/status.txt"; terminal_status=$?; set -e
+  [[ $terminal_status -eq 2 ]] || fail "text status ignored interrupted terminal cleanup at $checkpoint"
+  grep -Fx 'status=recovery-required' "$terminal_case/status.txt" >/dev/null && grep -Fx 'terminal_outcome=resumed' "$terminal_case/status.txt" >/dev/null && grep -Fx 'required_action=resume' "$terminal_case/status.txt" >/dev/null && grep -Fx "action=run platform-pki-ca-rollover recover --transaction $transaction --action resume" "$terminal_case/status.txt" >/dev/null || fail "terminal cleanup text was incomplete at $checkpoint"
+done
+"$ROLLOVER" recover --namespace "$terminal_case/ns" --transaction "$transaction" --action resume --yes >/dev/null
+[[ ! -e $terminal_case/ns/pki/state/rollover/journal && ! -e $terminal_case/ns/pki/state/rollover/recovery-required ]] || fail 'terminal cleanup retained recovery control state'
+
+rollback_terminal="$TMP_DIR/prepare-rollback-terminal-cleanup"; crash_prepare_fixture "$rollback_terminal" root after-pointer; transaction=$CRASH_TRANSACTION
+for checkpoint in terminal-transaction-pending terminal-transaction-done terminal-journal-pending terminal-journal-done; do
+  crash_recovery_at "$rollback_terminal/ns" "$transaction" rollback "$checkpoint"
+  set +e; "$ROLLOVER" status --namespace "$rollback_terminal/ns" --format json >"$rollback_terminal/status.json"; terminal_status=$?; set -e
+  [[ $terminal_status -eq 2 ]] || fail "status ignored interrupted rollback cleanup at $checkpoint"
+  jq -e '.schema == 2 and .status == "recovery-required" and .terminal_outcome == "rolled-back" and .required_action == "rollback"' "$rollback_terminal/status.json" >/dev/null || fail "rollback cleanup JSON was incomplete at $checkpoint"
+  set +e; "$ROLLOVER" status --namespace "$rollback_terminal/ns" --format text >"$rollback_terminal/status.txt"; terminal_status=$?; set -e
+  [[ $terminal_status -eq 2 ]] || fail "text status ignored interrupted rollback cleanup at $checkpoint"
+  grep -Fx 'terminal_outcome=rolled-back' "$rollback_terminal/status.txt" >/dev/null && grep -Fx 'required_action=rollback' "$rollback_terminal/status.txt" >/dev/null && grep -Fx "action=run platform-pki-ca-rollover recover --transaction $transaction --action rollback" "$rollback_terminal/status.txt" >/dev/null || fail "rollback cleanup text was incomplete at $checkpoint"
+done
+"$ROLLOVER" recover --namespace "$rollback_terminal/ns" --transaction "$transaction" --action rollback --yes >/dev/null
+
+prepare_unlink="$TMP_DIR/prepare-unlink-race"; cp -a "$seed" "$prepare_unlink"; backup_generation "$prepare_unlink"
+pause_marker="$TMP_DIR/prepare-unlink.pause"; pause_release="$TMP_DIR/prepare-unlink.release"
+PLATFORM_PKI_UNLINK_PAUSE_AT=terminal-journal PLATFORM_PKI_UNLINK_PAUSE_MARKER="$pause_marker" PLATFORM_PKI_UNLINK_PAUSE_RELEASE="$pause_release" "$ROLLOVER" prepare --namespace "$prepare_unlink/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" &
+unlink_pid=$!; wait_for_path "$pause_marker"; unlink_journal="$prepare_unlink/ns/pki/state/rollover/journal"; mv "$unlink_journal" "$unlink_journal.original"; printf '%s\n' hostile-journal >"$unlink_journal"; chmod 600 "$unlink_journal"; touch "$pause_release"
+set +e; wait "$unlink_pid"; unlink_status=$?; set -e
+[[ $unlink_status -ne 0 && $(<"$unlink_journal") == hostile-journal ]] || fail 'prepare terminal journal unlink deleted a concurrent replacement'
+[[ $(<"$prepare_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'prepare terminal unlink race changed active state'
+
+recover_unlink="$TMP_DIR/recover-unlink-race"; crash_prepare_fixture "$recover_unlink" intermediate after-staged
+pause_marker="$TMP_DIR/recover-unlink.pause"; pause_release="$TMP_DIR/recover-unlink.release"
+PLATFORM_PKI_UNLINK_PAUSE_AT=terminal-marker PLATFORM_PKI_UNLINK_PAUSE_MARKER="$pause_marker" PLATFORM_PKI_UNLINK_PAUSE_RELEASE="$pause_release" "$ROLLOVER" recover --namespace "$recover_unlink/ns" --transaction "$CRASH_TRANSACTION" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" &
+unlink_pid=$!; wait_for_path "$pause_marker"; unlink_marker="$recover_unlink/ns/pki/state/rollover/recovery-required"; mv "$unlink_marker" "$unlink_marker.original"; printf '%s\n' hostile-marker >"$unlink_marker"; chmod 600 "$unlink_marker"; touch "$pause_release"
+set +e; wait "$unlink_pid"; unlink_status=$?; set -e
+[[ $unlink_status -ne 0 && $(<"$unlink_marker") == hostile-marker && ! -e $recover_unlink/ns/pki/state/rollover/journal ]] || fail 'recover terminal marker unlink deleted a concurrent replacement'
+[[ $(<"$recover_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'recover terminal unlink race changed active state'
+
+invalid_terminal="$TMP_DIR/invalid-terminal-marker"; cp -a "$seed" "$invalid_terminal"; cat >"$invalid_terminal/ns/pki/state/rollover/recovery-required" <<'EOF'
+transaction=prepare-root-20260730-000000-1
+operation=rollover-prepare
+terminal_outcome=invalid
+EOF
+chmod 600 "$invalid_terminal/ns/pki/state/rollover/recovery-required"
+assert_fails_with 'invalid terminal marker status' 'invalid terminal preparation state' "$ROLLOVER" status --namespace "$invalid_terminal/ns" --format json
+
+for scenario in after-journal:rollback after-staged:resume after-root-candidate:rollback after-intermediate-candidate:resume after-consumed:rollback after-state:resume after-pointer:rollback; do
+  boundary=${scenario%%:*}; action=${scenario#*:}; case_dir="$TMP_DIR/prepare-root-$boundary"; cp -a "$seed" "$case_dir"; write_trust_consumers "$case_dir/private/pki/trust-consumers.yml"; backup_generation "$case_dir"
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$case_dir/private" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "root preparation crash at $boundary returned $crash_status instead of 137"
+  transaction=$(sed -n 's/^transaction=//p' "$case_dir/ns/pki/state/rollover/journal")
+  if [[ $boundary == after-root-candidate ]]; then
+    printf '%s\n' hostile-candidate >"$case_dir/ns/pki/authorities/roots/g2/certs/root-ca.crt"
+    assert_fails_with 'replaced root candidate recovery' 'Candidate root certificate' "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes
+    [[ $(<"$case_dir/ns/pki/authorities/roots/g2/certs/root-ca.crt") == hostile-candidate ]] || fail 'recovery changed a hostile root candidate replacement'
+    continue
+  fi
+  if [[ $boundary == after-staged ]]; then
+    for recovery_boundary in resume-publish-root resume-publish-intermediate resume-consume-root resume-consume-intermediate resume-publish-state resume-publish-pointer terminal-transaction terminal-journal; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
+  elif [[ $boundary == after-pointer ]]; then
+    for recovery_boundary in rollback-pointer rollback-intermediate rollback-root rollback-state rollback-stage rollback-reservation-intermediate rollback-reservation-root rollback-backup-session terminal-transaction terminal-journal; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
+  fi
+  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
+  [[ ! -e $case_dir/ns/pki/state/rollover/journal ]] || fail "root recovery left a journal after $boundary"
+  if [[ $action == resume ]]; then [[ -d $case_dir/ns/pki/authorities/roots/g2 && -d $case_dir/ns/pki/authorities/intermediates/g2-i1 && -f $case_dir/ns/pki/state/active-rollover ]] || fail "root resume did not publish state after $boundary"; else [[ ! -e $case_dir/ns/pki/authorities/roots/g2 && ! -e $case_dir/ns/pki/authorities/intermediates/g2-i1 && ! -e $case_dir/ns/pki/state/active-rollover ]] || fail "root rollback did not restore state after $boundary"; fi
+done
 
 metadata_case="$TMP_DIR/private-metadata"; cp -a "$seed" "$metadata_case"; convert_to_legacy "$metadata_case"; backup_legacy "$metadata_case"; touch "$metadata_case/ns/pki/root-ca/private/root-ca.key"
 if migrate "$metadata_case" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'migration accepted changed private metadata'; fi

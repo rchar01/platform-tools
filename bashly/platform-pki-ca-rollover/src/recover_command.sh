@@ -6,11 +6,12 @@ else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share
 [[ -r $COMMON_PATH ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
+pki_reject_repeated_options --namespace --pki-dir --transaction --action --yes
 
 NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}; PKI_DIR=${args[--pki-dir]:-}
 TRANSACTION=${args[--transaction]}; ACTION=${args[--action]}; YES=false; [[ -v args[--yes] ]] && YES=true
 NAMESPACE=$(pki_expand_path "$NAMESPACE"); PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}; PKI_DIR=$(pki_expand_path "$PKI_DIR")
-[[ $TRANSACTION =~ ^(migrate|root-bootstrap|intermediate-bootstrap)-[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || pki_die 'Recovery transaction ID is invalid'
+[[ $TRANSACTION =~ ^(migrate|root-bootstrap|intermediate-bootstrap|prepare-root|prepare-intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || pki_die 'Recovery transaction ID is invalid'
 if [[ $YES != true ]]; then
   [[ -t 0 ]] || pki_die 'Recovery requires a TTY or --yes'
   printf 'Type recover %s %s to continue: ' "$TRANSACTION" "$ACTION" >&2
@@ -25,8 +26,20 @@ pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INT
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
 pki_acquire_operation_lock "$EXPORT_LOCK" 'export operation'; EXPORT_LOCK_HELD=true
 JOURNAL=$(pki_recovery_journal); MARKER=$(pki_recovery_marker)
+if [[ ! -e $JOURNAL && ! -L $JOURNAL ]]; then
+  TERMINAL_RECEIPT=$(pki_terminal_receipt "$TRANSACTION")
+  pki_read_state_record "$MARKER" 'PKI recovery marker'
+  [[ ${#PKI_RECORD[@]} -eq 3 && ${PKI_RECORD[transaction]:-} == "$TRANSACTION" && ${PKI_RECORD[operation]:-} == rollover-prepare && ${PKI_RECORD[terminal_outcome]:-} =~ ^(resumed|rolled-back)$ ]] || pki_die 'Recovery marker does not describe terminal preparation cleanup'
+  marker_outcome=${PKI_RECORD[terminal_outcome]}
+  pki_read_state_record "$TERMINAL_RECEIPT" 'Preparation terminal receipt'
+  [[ ${#PKI_RECORD[@]} -eq 5 && ${PKI_RECORD[transaction]:-} == "$TRANSACTION" && ${PKI_RECORD[operation]:-} == rollover-prepare && ${PKI_RECORD[terminal_outcome]:-} == "$marker_outcome" ]] || pki_die 'Preparation terminal receipt does not match the recovery marker'
+  pki_require_file_identity "$MARKER" "${PKI_RECORD[marker_identity]}" 'PKI recovery marker'
+  [[ $ACTION == resume && $marker_outcome == resumed || $ACTION == rollback && $marker_outcome == rolled-back ]] || pki_die 'Recovery action does not match the terminal preparation outcome'
+  pki_remove_identity_file "$MARKER" "${PKI_RECORD[marker_identity]}" terminal-marker || pki_die 'Recovery marker changed before terminal unlink'; pki_ok "Completed terminal cleanup for $TRANSACTION"; exit 0
+fi
 pki_read_state_record "$JOURNAL" 'PKI recovery journal'
-[[ ${PKI_RECORD[transaction]:-} == "$TRANSACTION" && ${PKI_RECORD[committed]:-} == false ]] || pki_die 'Recovery journal does not describe the requested uncommitted transaction'
+[[ ${PKI_RECORD[transaction]:-} == "$TRANSACTION" ]] || pki_die 'Recovery journal does not describe the requested transaction'
+[[ ${PKI_RECORD[committed]:-} == false || ${PKI_RECORD[operation]:-} == rollover-prepare && ${PKI_RECORD[committed]:-} == true ]] || pki_die 'Recovery action is not valid for the journaled transaction state'
 recover_fault() { [[ ${PLATFORM_PKI_RECOVER_CRASH_AT:-} != "$1" ]] || kill -KILL "$$"; }
 write_loaded_journal() {
   local phase=$1 committed=${2:-false} key value content=''
@@ -36,6 +49,35 @@ write_loaded_journal() {
   pki_write_journal "$JOURNAL" "$content"
 }
 checkpoint_recovery() { PKI_RECORD[recovery_step]=$1; write_loaded_journal recovering; recover_fault "$1"; }
+finish_recovered_preparation() {
+  local outcome=$1 expected_action journal_identity marker_identity receipt
+  if [[ $outcome == resumed ]]; then expected_action=resume; else expected_action=rollback; fi
+  [[ $ACTION == "$expected_action" ]] || pki_die 'Recovery action does not match the terminal preparation outcome'
+  PKI_RECORD[recovery_action]=$ACTION; PKI_RECORD[terminal_outcome]=$outcome; PKI_RECORD[recovery_step]=terminal-transaction-pending
+  write_loaded_journal terminal-cleanup true
+  pki_atomic_write "$MARKER" "transaction=$TRANSACTION
+operation=rollover-prepare
+terminal_outcome=$outcome
+"
+  recover_fault terminal-transaction-pending
+  if [[ -d $TXN_DIR && ${PKI_RECORD[transaction_tree_manifest]:-none} != none ]]; then
+    pki_remove_manifested_tree "$TXN_DIR" "${PKI_RECORD[transaction_identity]}" "$(dirname -- "$TXN_DIR")" "${PKI_RECORD[transaction_tree_manifest]}" "${PKI_RECORD[transaction_tree_manifest_identity]}" "${PKI_RECORD[transaction_tree_manifest_sha256]}" || pki_die 'Cannot remove preparation transaction staging'
+  elif [[ -d $TXN_DIR ]]; then
+    [[ ${PKI_RECORD[transaction_identity]} == none || -z $(find "$TXN_DIR" -mindepth 1 -print -quit) ]] || pki_die 'Incomplete preparation transaction has no exact cleanup manifest'
+    rmdir -- "$TXN_DIR" || pki_die 'Cannot remove empty incomplete preparation transaction staging'; pki_fsync "$(dirname -- "$TXN_DIR")"
+  elif [[ -e $TXN_DIR || -L $TXN_DIR ]]; then pki_die 'Preparation transaction staging has an unsafe replacement'; fi
+  PKI_RECORD[recovery_step]=terminal-transaction-done; write_loaded_journal terminal-cleanup true; recover_fault terminal-transaction-done
+  PKI_RECORD[recovery_step]=terminal-journal-pending; write_loaded_journal terminal-cleanup true; recover_fault terminal-journal-pending
+  journal_identity=$(pki_file_identity "$JOURNAL"); marker_identity=$(pki_file_identity "$MARKER"); receipt=$(pki_terminal_receipt "$TRANSACTION")
+  pki_atomic_write "$receipt" "transaction=$TRANSACTION
+operation=rollover-prepare
+terminal_outcome=$outcome
+journal_identity=$journal_identity
+marker_identity=$marker_identity
+"
+  pki_remove_identity_file "$JOURNAL" "$journal_identity" terminal-journal || pki_die 'Recovery journal changed before terminal unlink'; recover_fault terminal-journal-done
+  pki_remove_identity_file "$MARKER" "$marker_identity" terminal-marker || pki_die 'Recovery marker changed before terminal unlink'
+}
 file_state_allowed() {
   local path=$1 label=$2 current full expected
   shift 2
@@ -44,6 +86,133 @@ file_state_allowed() {
   for expected in "$@"; do [[ $current != "$expected" && $full != "$expected" ]] || return 0; done
   pki_die "$label is not in a journaled identity state"
 }
+verify_bound_file() { local path=$1 identity=$2 digest=$3 label=$4 actual; pki_require_file_identity "$path" "$identity" "$label"; actual=$(sha256sum "$path"); [[ ${actual%% *} == "$digest" ]] || pki_die "$label digest changed"; }
+if [[ ${PKI_RECORD[operation]:-} == rollover-prepare ]]; then
+  required_fields=(schema operation transaction type phase committed recovery_action recovery_step terminal_outcome active_root active_intermediate active_manifest active_identity candidate_root candidate_intermediate candidate_root_dir candidate_intermediate_dir candidate_root_identity candidate_intermediate_identity candidate_root_key_identity candidate_root_cert_identity candidate_root_cert_sha256 candidate_intermediate_key_identity candidate_intermediate_csr_identity candidate_intermediate_cert_identity candidate_intermediate_cert_sha256 candidate_chain_identity candidate_chain_sha256 candidate_root_tree_manifest candidate_root_tree_manifest_identity candidate_root_tree_manifest_sha256 candidate_intermediate_tree_manifest candidate_intermediate_tree_manifest_identity candidate_intermediate_tree_manifest_sha256 root_stage_tree_manifest root_stage_tree_manifest_identity root_stage_tree_manifest_sha256 stage_tree_manifest stage_tree_manifest_identity stage_tree_manifest_sha256 transaction_tree_manifest transaction_tree_manifest_identity transaction_tree_manifest_sha256 transaction_tree_manifest_sequence transaction_tree_manifest_pending transaction_tree_manifest_pending_destination transaction_tree_manifest_pending_identity transaction_tree_manifest_pending_sha256 transaction_dir transaction_identity stage_dir stage_identity root_stage root_stage_identity root_stage_private_identity root_stage_key_identity intermediate_stage_identity intermediate_stage_private_identity long_stage long_dir long_identity long_manifest_identity long_manifest_sha256 long_tree_manifest long_tree_manifest_identity long_tree_manifest_sha256 trust_snapshot_identity pointer pointer_identity backup_receipt receipt_identity backup_session backup_session_original_identity backup_session_identity root_reservation root_reservation_reserved_identity root_reservation_consumed_identity root_reservation_abandoned_identity intermediate_reservation intermediate_reservation_reserved_identity intermediate_reservation_consumed_identity intermediate_reservation_abandoned_identity root_fingerprint intermediate_fingerprint root_expiry intermediate_expiry trust_bundle_sha256 trust_snapshot_sha256 trust_source trust_source_identity issued_serial root_mutated)
+  for field in "${required_fields[@]}"; do [[ -v PKI_RECORD[$field] ]] || pki_die "Preparation recovery journal is missing field: $field"; done
+  for key in index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert; do for suffix in pre_identity post_identity backup_identity rollback_identity source_identity; do field="root_${key}_${suffix}"; [[ -v PKI_RECORD[$field] ]] || pki_die "Preparation recovery journal is missing field: $field"; done; done
+  [[ ${PKI_RECORD[schema]} == 5 && ${PKI_RECORD[type]} =~ ^(root|intermediate)$ && ${PKI_RECORD[transaction_tree_manifest_sequence]} =~ ^[0-9]+$ ]] || pki_die 'Preparation recovery journal schema is unsupported'
+  TYPE=${PKI_RECORD[type]}; TXN_DIR=${PKI_RECORD[transaction_dir]}; STAGE_DIR=${PKI_RECORD[stage_dir]}; LONG_STAGE=${PKI_RECORD[long_stage]}; LONG_DIR=${PKI_RECORD[long_dir]}; POINTER=${PKI_RECORD[pointer]}; ROOT_RESERVATION=${PKI_RECORD[root_reservation]}; INT_RESERVATION=${PKI_RECORD[intermediate_reservation]}; ROOT_DIR=${PKI_RECORD[candidate_root_dir]}; INT_DIR=${PKI_RECORD[candidate_intermediate_dir]}
+  [[ $TRANSACTION =~ ^prepare-${TYPE}-[0-9]{8}-[0-9]{6}-[0-9]+$ && $TXN_DIR == "$PKI_DIR/state/rollover/$TRANSACTION" && $LONG_DIR == "$(pki_rollover_transaction_dir "$TRANSACTION")" && $LONG_STAGE == "$TXN_DIR/rollover-state" && ( ${PKI_RECORD[stage_tree_manifest]} == none || ${PKI_RECORD[stage_tree_manifest]} == "$TXN_DIR/stage-tree.manifest" ) && $POINTER == "$(pki_active_rollover_pointer)" && $ROOT_DIR == "$(pki_root_authority_dir "${PKI_RECORD[candidate_root]}")" && $INT_DIR == "$(pki_intermediate_authority_dir "${PKI_RECORD[candidate_intermediate]}")" && $ROOT_RESERVATION == "$(pki_generation_reservation "${PKI_RECORD[candidate_root]}")" && $INT_RESERVATION == "$(pki_generation_reservation "${PKI_RECORD[candidate_intermediate]}")" ]] || pki_die 'Preparation recovery paths are outside the journal contract'
+  if [[ ${PKI_RECORD[transaction_tree_manifest]} != none ]]; then manifest_sequence=${PKI_RECORD[transaction_tree_manifest]##*.}; [[ $manifest_sequence =~ ^[1-9][0-9]*$ && ${PKI_RECORD[transaction_tree_manifest]} == "$(dirname -- "$TXN_DIR")/.$TRANSACTION.transaction-tree.$manifest_sequence" ]] || pki_die 'Preparation transaction manifest path is outside the journal contract'; fi
+  if [[ ${PKI_RECORD[transaction_tree_manifest_pending]} != none ]]; then
+    pending=${PKI_RECORD[transaction_tree_manifest_pending]}; pending_destination=${PKI_RECORD[transaction_tree_manifest_pending_destination]}
+    pending_sequence=${pending_destination##*.}
+    [[ $pending_sequence =~ ^[1-9][0-9]*$ && $pending == "$(dirname -- "$TXN_DIR")/.$TRANSACTION.transaction-tree.$pending_sequence" && $pending_destination == "$pending" ]] || pki_die 'Pending transaction manifest paths are outside the journal contract'
+    pki_require_file_identity "$pending" "${PKI_RECORD[transaction_tree_manifest_pending_identity]}" 'Pending transaction manifest'
+    PKI_RECORD[transaction_tree_manifest]=$pending_destination; PKI_RECORD[transaction_tree_manifest_identity]=${PKI_RECORD[transaction_tree_manifest_pending_identity]}; PKI_RECORD[transaction_tree_manifest_sha256]=${PKI_RECORD[transaction_tree_manifest_pending_sha256]}; PKI_RECORD[transaction_tree_manifest_sequence]=${pending_destination##*.}; PKI_RECORD[transaction_tree_manifest_pending]=none; PKI_RECORD[transaction_tree_manifest_pending_destination]=none; PKI_RECORD[transaction_tree_manifest_pending_identity]=none; PKI_RECORD[transaction_tree_manifest_pending_sha256]=none
+    write_loaded_journal "${PKI_RECORD[phase]}" "${PKI_RECORD[committed]}"
+  fi
+  if [[ ${PKI_RECORD[committed]} == true ]]; then
+    ACTIVE_MANIFEST=${PKI_RECORD[active_manifest]}; ACTIVE_IDENTITY=${PKI_RECORD[active_identity]}; POINTER_IDENTITY=${PKI_RECORD[pointer_identity]}; LONG_IDENTITY=${PKI_RECORD[long_identity]}
+    [[ ${PKI_RECORD[terminal_outcome]} =~ ^(resumed|rolled-back)$ ]] || pki_die 'Committed preparation journal has no terminal outcome'
+    pki_require_file_identity "$ACTIVE_MANIFEST" "$ACTIVE_IDENTITY" 'Active issuer manifest'
+    if [[ ${PKI_RECORD[terminal_outcome]} == resumed ]]; then
+      pki_require_file_identity "$POINTER" "$POINTER_IDENTITY" 'Active rollover pointer'
+      [[ -d $LONG_DIR && ! -L $LONG_DIR && $(pki_dir_identity "$LONG_DIR") == "$LONG_IDENTITY" ]] || pki_die 'Prepared rollover state identity changed'
+      pki_validate_tree_manifest "$LONG_DIR" "$LONG_DIR/tree.manifest" "${PKI_RECORD[long_tree_manifest_identity]}" "${PKI_RECORD[long_tree_manifest_sha256]}" tree.manifest
+      pki_validate_tree_manifest "$INT_DIR" "$LONG_DIR/candidate-intermediate-tree.manifest" "${PKI_RECORD[candidate_intermediate_tree_manifest_identity]}" "${PKI_RECORD[candidate_intermediate_tree_manifest_sha256]}"
+      if [[ $TYPE == root ]]; then pki_validate_tree_manifest "$ROOT_DIR" "$LONG_DIR/candidate-root-tree.manifest" "${PKI_RECORD[candidate_root_tree_manifest_identity]}" "${PKI_RECORD[candidate_root_tree_manifest_sha256]}"; fi
+    else
+      pki_require_file_identity "$POINTER" absent 'Active rollover pointer'
+      [[ ! -e $LONG_DIR && ! -L $LONG_DIR ]] || pki_die 'Rolled-back preparation retained rollover state'
+      if [[ $TYPE == root ]]; then [[ ! -e $ROOT_DIR && ! -L $ROOT_DIR ]] || pki_die 'Rolled-back preparation retained a candidate root'
+      else [[ $ROOT_DIR == "$(pki_root_authority_dir "${PKI_RECORD[active_root]}")" && -d $ROOT_DIR && ! -L $ROOT_DIR && $(pki_dir_identity "$ROOT_DIR") == "${PKI_RECORD[candidate_root_identity]}" ]] || pki_die 'Active root changed during rolled-back preparation cleanup'; fi
+      [[ ! -e $INT_DIR && ! -L $INT_DIR ]] || pki_die 'Rolled-back preparation retained a candidate intermediate'
+      pki_require_file_identity "${PKI_RECORD[backup_session]}" "${PKI_RECORD[backup_session_original_identity]}" 'Preparation backup session'
+      pki_require_file_identity "$INT_RESERVATION" "${PKI_RECORD[intermediate_reservation_abandoned_identity]}" 'Abandoned intermediate reservation'
+      if [[ $TYPE == root ]]; then pki_require_file_identity "$ROOT_RESERVATION" "${PKI_RECORD[root_reservation_abandoned_identity]}" 'Abandoned root reservation'; fi
+    fi
+    finish_recovered_preparation "${PKI_RECORD[terminal_outcome]}"; pki_ok "Completed terminal cleanup for $TRANSACTION"; exit 0
+  fi
+  pki_require_file_identity "${PKI_RECORD[active_manifest]}" "${PKI_RECORD[active_identity]}" 'Active issuer manifest'; pki_read_pair_manifest "${PKI_RECORD[active_manifest]}" 'Active issuer'; [[ $ACTIVE_ROOT_ID == "${PKI_RECORD[active_root]}" && $ACTIVE_INTERMEDIATE_ID == "${PKI_RECORD[active_intermediate]}" ]] || pki_die 'Active issuer changed during preparation recovery'
+  pki_require_file_identity "${PKI_RECORD[backup_receipt]}" "${PKI_RECORD[receipt_identity]}" 'Preparation backup receipt'
+  if [[ ${PKI_RECORD[transaction_identity]} == none ]]; then
+    [[ $ACTION == rollback ]] || pki_die 'Planned preparation can only be rolled back before transaction staging'
+    if [[ -d $TXN_DIR && ! -L $TXN_DIR && ${PKI_RECORD[recovery_step]} == transaction-dir-pending ]]; then
+      [[ $(stat -c '%u:%a' "$TXN_DIR") == "$(id -u):700" && -z $(find "$TXN_DIR" -mindepth 1 -print -quit) ]] || pki_die 'Pending preparation transaction directory is not safely empty'
+      PKI_RECORD[transaction_identity]=$(pki_dir_identity "$TXN_DIR")
+    else [[ ! -e $TXN_DIR && ! -L $TXN_DIR ]] || pki_die 'Planned preparation transaction path is ambiguous'; fi
+    [[ ! -e $ROOT_DIR || $TYPE == intermediate && $ROOT_DIR == "$(pki_root_authority_dir "$ACTIVE_ROOT_ID")" ]] || pki_die 'Unjournaled candidate root state exists'
+    [[ ! -e $INT_DIR && ! -e $LONG_DIR && ! -e $POINTER ]] || pki_die 'Unjournaled preparation state exists'
+    finish_recovered_preparation rolled-back; pki_ok "Rolled back planned preparation transaction: $TRANSACTION"; exit 0
+  fi
+  [[ -d $TXN_DIR && ! -L $TXN_DIR && $(pki_dir_identity "$TXN_DIR") == "${PKI_RECORD[transaction_identity]}" ]] || pki_die 'Preparation transaction directory is missing or replaced'
+  file_state_allowed "${PKI_RECORD[backup_session]}" 'Preparation backup session' "${PKI_RECORD[backup_session_original_identity]}" "${PKI_RECORD[backup_session_identity]}"
+  path=$INT_RESERVATION; kind=intermediate; reserved=${PKI_RECORD[intermediate_reservation_reserved_identity]}; consumed=${PKI_RECORD[intermediate_reservation_consumed_identity]}; abandoned=${PKI_RECORD[intermediate_reservation_abandoned_identity]}; file_state_allowed "$path" "$kind reservation" absent "$reserved" "$consumed" "$abandoned"; if [[ $(pki_file_identity_or_absent "$path") != "$abandoned" ]]; then [[ $abandoned != absent ]] || pki_die 'Intermediate reservation lacks rollback evidence'; pki_require_file_identity "$TXN_DIR/$kind-abandoned" "$abandoned" "$kind abandoned reservation stage"; fi
+  if [[ $TYPE == root ]]; then path=$ROOT_RESERVATION; reserved=${PKI_RECORD[root_reservation_reserved_identity]}; consumed=${PKI_RECORD[root_reservation_consumed_identity]}; abandoned=${PKI_RECORD[root_reservation_abandoned_identity]}; file_state_allowed "$path" 'root reservation' absent "$reserved" "$consumed" "$abandoned"; if [[ $(pki_file_identity_or_absent "$path") != "$abandoned" ]]; then [[ $abandoned != absent ]] || pki_die 'Root reservation lacks rollback evidence'; pki_require_file_identity "$TXN_DIR/root-abandoned" "$abandoned" 'Root abandoned reservation stage'; fi; fi
+  if [[ ${PKI_RECORD[candidate_intermediate_identity]} == none ]]; then
+    [[ $ACTION == rollback ]] || pki_die 'Preparation interrupted before candidate staging completed; recover with rollback'
+    [[ ! -e $INT_DIR && ! -L $INT_DIR && ! -e $LONG_DIR && ! -L $LONG_DIR && ! -e $POINTER && ! -L $POINTER ]] || pki_die 'Unjournaled preparation publication exists'
+    [[ $TYPE == intermediate || ! -e $ROOT_DIR && ! -L $ROOT_DIR ]] || pki_die 'Unjournaled candidate root exists'
+    if [[ ${PKI_RECORD[intermediate_reservation_abandoned_identity]} != absent && $(pki_file_identity_or_absent "$INT_RESERVATION") != "${PKI_RECORD[intermediate_reservation_abandoned_identity]}" ]]; then checkpoint_recovery rollback-reservation-intermediate-pending; pki_publish_staged_file "$TXN_DIR/intermediate-abandoned" "$INT_RESERVATION"; checkpoint_recovery rollback-reservation-intermediate-done; fi
+    if [[ $TYPE == root && ${PKI_RECORD[root_reservation_abandoned_identity]} != absent && $(pki_file_identity_or_absent "$ROOT_RESERVATION") != "${PKI_RECORD[root_reservation_abandoned_identity]}" ]]; then checkpoint_recovery rollback-reservation-root-pending; pki_publish_staged_file "$TXN_DIR/root-abandoned" "$ROOT_RESERVATION"; checkpoint_recovery rollback-reservation-root-done; fi
+    current=$(pki_file_identity_or_absent "${PKI_RECORD[backup_session]}"); if [[ ${PKI_RECORD[backup_session_identity]} != absent && $current == "${PKI_RECORD[backup_session_identity]}" ]]; then checkpoint_recovery rollback-backup-session-pending; pki_remove_identity_file "${PKI_RECORD[backup_session]}" "$current" || pki_die 'Cannot restore preparation backup session marker'; checkpoint_recovery rollback-backup-session-done; fi
+    finish_recovered_preparation rolled-back; pki_ok "Rolled back incomplete preparation transaction: $TRANSACTION"; exit 0
+  fi
+  STAGE_ROOT="$STAGE_DIR/root"; STAGE_INT="$STAGE_DIR/intermediate"
+  INT_REMOVED_ALLOWED=false; ROOT_REMOVED_ALLOWED=false; STATE_REMOVED_ALLOWED=false
+  if [[ $ACTION == rollback && ${PKI_RECORD[recovery_action]} == rollback ]]; then
+    case ${PKI_RECORD[recovery_step]} in rollback-intermediate-*|rollback-root-*|rollback-state-*|rollback-stage-*|rollback-reservation-*|rollback-backup-session-*|terminal-*) INT_REMOVED_ALLOWED=true ;; esac
+    case ${PKI_RECORD[recovery_step]} in rollback-root-*|rollback-state-*|rollback-stage-*|rollback-reservation-*|rollback-backup-session-*|terminal-*) ROOT_REMOVED_ALLOWED=true ;; esac
+    case ${PKI_RECORD[recovery_step]} in rollback-state-*|rollback-stage-*|rollback-reservation-*|rollback-backup-session-*|terminal-*) STATE_REMOVED_ALLOWED=true ;; esac
+  fi
+  [[ ! -e $STAGE_DIR && ! -L $STAGE_DIR || -d $STAGE_DIR && ! -L $STAGE_DIR && $(pki_dir_identity "$STAGE_DIR") == "${PKI_RECORD[stage_identity]}" ]] || pki_die 'Preparation staging directory identity changed'
+  if [[ $TYPE == root ]]; then [[ -d $STAGE_ROOT && ! -L $STAGE_ROOT && $(pki_dir_identity "$STAGE_ROOT") == "${PKI_RECORD[candidate_root_identity]}" && ! -e $ROOT_DIR || -d $ROOT_DIR && ! -L $ROOT_DIR && $(pki_dir_identity "$ROOT_DIR") == "${PKI_RECORD[candidate_root_identity]}" && ! -e $STAGE_ROOT || ! -e $STAGE_ROOT && ! -e $ROOT_DIR && $ROOT_REMOVED_ALLOWED == true ]] || pki_die 'Candidate root location is ambiguous or replaced'
+  else [[ -d $ROOT_DIR && ! -L $ROOT_DIR && $(pki_dir_identity "$ROOT_DIR") == "${PKI_RECORD[candidate_root_identity]}" ]] || pki_die 'Active root identity changed'; fi
+  [[ -d $STAGE_INT && ! -L $STAGE_INT && $(pki_dir_identity "$STAGE_INT") == "${PKI_RECORD[candidate_intermediate_identity]}" && ! -e $INT_DIR || -d $INT_DIR && ! -L $INT_DIR && $(pki_dir_identity "$INT_DIR") == "${PKI_RECORD[candidate_intermediate_identity]}" && ! -e $STAGE_INT || ! -e $STAGE_INT && ! -e $INT_DIR && $INT_REMOVED_ALLOWED == true ]] || pki_die 'Candidate intermediate location is ambiguous or replaced'
+  ROOT_LOCATION=$ROOT_DIR; [[ $TYPE != root || -d $ROOT_LOCATION ]] || ROOT_LOCATION=$STAGE_ROOT; INT_LOCATION=$INT_DIR; [[ -d $INT_LOCATION ]] || INT_LOCATION=$STAGE_INT
+  if [[ -d $ROOT_LOCATION ]]; then pki_require_file_identity "$ROOT_LOCATION/private/root-ca.key" "${PKI_RECORD[candidate_root_key_identity]}" 'Candidate root key'; verify_bound_file "$ROOT_LOCATION/certs/root-ca.crt" "${PKI_RECORD[candidate_root_cert_identity]}" "${PKI_RECORD[candidate_root_cert_sha256]}" 'Candidate root certificate'; fi
+  if [[ -d $INT_LOCATION ]]; then pki_require_file_identity "$INT_LOCATION/private/intermediate-ca.key" "${PKI_RECORD[candidate_intermediate_key_identity]}" 'Candidate intermediate key'; verify_bound_file "$INT_LOCATION/certs/intermediate-ca.crt" "${PKI_RECORD[candidate_intermediate_cert_identity]}" "${PKI_RECORD[candidate_intermediate_cert_sha256]}" 'Candidate intermediate certificate'; verify_bound_file "$INT_LOCATION/certs/ca-chain.crt" "${PKI_RECORD[candidate_chain_identity]}" "${PKI_RECORD[candidate_chain_sha256]}" 'Candidate CA chain'; fi
+  [[ -d $LONG_STAGE && ! -L $LONG_STAGE && $(pki_dir_identity "$LONG_STAGE") == "${PKI_RECORD[long_identity]}" && ! -e $LONG_DIR || -d $LONG_DIR && ! -L $LONG_DIR && $(pki_dir_identity "$LONG_DIR") == "${PKI_RECORD[long_identity]}" && ! -e $LONG_STAGE || ! -e $LONG_STAGE && ! -e $LONG_DIR && $STATE_REMOVED_ALLOWED == true ]] || pki_die 'Long-lived rollover state is ambiguous or replaced'
+  if [[ -d $LONG_STAGE ]]; then STATE_LOCATION=$LONG_STAGE; else STATE_LOCATION=$LONG_DIR; fi
+  if [[ -d ${STATE_LOCATION:-} ]]; then
+    verify_bound_file "$STATE_LOCATION/manifest" "${PKI_RECORD[long_manifest_identity]}" "${PKI_RECORD[long_manifest_sha256]}" 'Rollover manifest'
+    pki_validate_tree_manifest "$STATE_LOCATION" "$STATE_LOCATION/tree.manifest" "${PKI_RECORD[long_tree_manifest_identity]}" "${PKI_RECORD[long_tree_manifest_sha256]}" tree.manifest
+    if [[ $TYPE == root ]]; then pki_require_file_identity "$STATE_LOCATION/trust-consumers.yml" "${PKI_RECORD[trust_snapshot_identity]}" 'Trust consumer snapshot'; value=$(sha256sum "$STATE_LOCATION/trust-consumers.yml"); [[ ${value%% *} == "${PKI_RECORD[trust_snapshot_sha256]}" ]] || pki_die 'Trust consumer snapshot digest changed'; fi
+    if [[ $TYPE == root && -d $ROOT_LOCATION ]]; then pki_validate_tree_manifest "$ROOT_LOCATION" "$STATE_LOCATION/candidate-root-tree.manifest" "${PKI_RECORD[candidate_root_tree_manifest_identity]}" "${PKI_RECORD[candidate_root_tree_manifest_sha256]}"; fi
+    if [[ -d $INT_LOCATION ]]; then pki_validate_tree_manifest "$INT_LOCATION" "$STATE_LOCATION/candidate-intermediate-tree.manifest" "${PKI_RECORD[candidate_intermediate_tree_manifest_identity]}" "${PKI_RECORD[candidate_intermediate_tree_manifest_sha256]}"; fi
+  fi
+  file_state_allowed "$POINTER" 'Active rollover pointer' absent "${PKI_RECORD[pointer_identity]}"
+  ROOT_DB_KEYS=(index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert); declare -A ROOT_DB_PATH=() ROOT_DB_BACKUP=()
+  if [[ $TYPE == intermediate ]]; then
+    ROOT_CA_DIR=$ROOT_DIR; issued=${PKI_RECORD[issued_serial]}; backup="$STAGE_DIR/root-backup"; ROOT_DB_PATH[index]="$ROOT_CA_DIR/index.txt"; ROOT_DB_PATH[index_attr]="$ROOT_CA_DIR/index.txt.attr"; ROOT_DB_PATH[serial]="$ROOT_CA_DIR/serial"; ROOT_DB_PATH[crlnumber]="$ROOT_CA_DIR/crlnumber"; ROOT_DB_PATH[index_old]="$ROOT_CA_DIR/index.txt.old"; ROOT_DB_PATH[index_attr_old]="$ROOT_CA_DIR/index.txt.attr.old"; ROOT_DB_PATH[serial_old]="$ROOT_CA_DIR/serial.old"; ROOT_DB_PATH[crlnumber_old]="$ROOT_CA_DIR/crlnumber.old"; ROOT_DB_PATH[newcert]="$ROOT_CA_DIR/newcerts/$issued.pem"; ROOT_DB_BACKUP[index]="$backup/index.txt"; ROOT_DB_BACKUP[index_attr]="$backup/index.txt.attr"; ROOT_DB_BACKUP[serial]="$backup/serial"; ROOT_DB_BACKUP[crlnumber]="$backup/crlnumber"; ROOT_DB_BACKUP[index_old]="$backup/index.txt.old"; ROOT_DB_BACKUP[index_attr_old]="$backup/index.txt.attr.old"; ROOT_DB_BACKUP[serial_old]="$backup/serial.old"; ROOT_DB_BACKUP[crlnumber_old]="$backup/crlnumber.old"; ROOT_DB_BACKUP[newcert]=none
+    for key in "${ROOT_DB_KEYS[@]}"; do
+      [[ -v PKI_RECORD[root_${key}_source_identity] ]] || pki_die "Preparation recovery journal is missing root $key source identity"
+      file_state_allowed "${ROOT_DB_PATH[$key]}" "Root $key" "${PKI_RECORD[root_${key}_pre_identity]}" "${PKI_RECORD[root_${key}_post_identity]}" "${PKI_RECORD[root_${key}_rollback_identity]}"
+      current=$(pki_file_identity_or_absent_full "${ROOT_DB_PATH[$key]}")
+      if [[ $current == "${PKI_RECORD[root_${key}_post_identity]}" && ${PKI_RECORD[root_${key}_pre_identity]} != absent ]]; then pki_require_file_identity "${ROOT_DB_BACKUP[$key]}" "${PKI_RECORD[root_${key}_backup_identity]}" "Root $key rollback copy"; fi
+      if [[ $current == "${PKI_RECORD[root_${key}_pre_identity]}" && ${PKI_RECORD[root_${key}_source_identity]} != absent ]]; then file=${ROOT_DB_PATH[$key]#"$ROOT_CA_DIR/"}; pki_require_file_identity "$STAGE_ROOT/$file" "${PKI_RECORD[root_${key}_source_identity]}" "Staged root $key publication source"; fi
+    done
+    if [[ -d ${PKI_RECORD[root_stage]} ]]; then [[ $(pki_dir_identity "${PKI_RECORD[root_stage]}") == "${PKI_RECORD[root_stage_identity]}" ]] || pki_die 'Sensitive root stage identity changed'; pki_require_file_identity "${PKI_RECORD[root_stage]}/private/root-ca.key" "${PKI_RECORD[root_stage_key_identity]}" 'Copied root signing key'; fi
+  fi
+  PKI_RECORD[recovery_action]=$ACTION
+  if [[ $ACTION == rollback ]]; then
+    current=$(pki_file_identity_or_absent "$POINTER"); if [[ $current == "${PKI_RECORD[pointer_identity]}" ]]; then checkpoint_recovery rollback-pointer-pending; pki_remove_identity_file "$POINTER" "$current" || pki_die 'Cannot remove active rollover pointer'; checkpoint_recovery rollback-pointer-done; fi
+    if [[ $TYPE == intermediate ]]; then for key in "${ROOT_DB_KEYS[@]}"; do current=$(pki_file_identity_or_absent_full "${ROOT_DB_PATH[$key]}"); if [[ $current == "${PKI_RECORD[root_${key}_post_identity]}" && ${PKI_RECORD[root_${key}_pre_identity]} != "${PKI_RECORD[root_${key}_post_identity]}" ]]; then checkpoint_recovery "rollback-root-db-$key-pending"; pki_restore_journaled_file_exact "${ROOT_DB_PATH[$key]}" "${PKI_RECORD[root_${key}_pre_identity]}" "${PKI_RECORD[root_${key}_post_identity]}" "${ROOT_DB_BACKUP[$key]}" "${PKI_RECORD[root_${key}_backup_identity]}" "Root $key"; if [[ ${PKI_RECORD[root_${key}_pre_identity]} != absent ]]; then PKI_RECORD[root_${key}_rollback_identity]=$PKI_PUBLISHED_FILE_IDENTITY; fi; checkpoint_recovery "rollback-root-db-$key-done"; fi; done; fi
+    if [[ -d $INT_DIR ]]; then checkpoint_recovery rollback-intermediate-pending; pki_remove_manifested_tree "$INT_DIR" "${PKI_RECORD[candidate_intermediate_identity]}" "$(dirname -- "$INT_DIR")" "$STATE_LOCATION/candidate-intermediate-tree.manifest" "${PKI_RECORD[candidate_intermediate_tree_manifest_identity]}" "${PKI_RECORD[candidate_intermediate_tree_manifest_sha256]}" || pki_die 'Cannot remove candidate intermediate'; checkpoint_recovery rollback-intermediate-done; fi
+    if [[ $TYPE == root && -d $ROOT_DIR ]]; then checkpoint_recovery rollback-root-pending; pki_remove_manifested_tree "$ROOT_DIR" "${PKI_RECORD[candidate_root_identity]}" "$(dirname -- "$ROOT_DIR")" "$STATE_LOCATION/candidate-root-tree.manifest" "${PKI_RECORD[candidate_root_tree_manifest_identity]}" "${PKI_RECORD[candidate_root_tree_manifest_sha256]}" || pki_die 'Cannot remove candidate root'; checkpoint_recovery rollback-root-done; fi
+    if [[ -d $LONG_DIR ]]; then checkpoint_recovery rollback-state-pending; pki_remove_manifested_tree "$LONG_DIR" "${PKI_RECORD[long_identity]}" "$(dirname -- "$LONG_DIR")" "$LONG_DIR/tree.manifest" "${PKI_RECORD[long_tree_manifest_identity]}" "${PKI_RECORD[long_tree_manifest_sha256]}" tree.manifest || pki_die 'Cannot remove long-lived rollover state'; checkpoint_recovery rollback-state-done; elif [[ -d $LONG_STAGE ]]; then checkpoint_recovery rollback-state-pending; pki_remove_manifested_tree "$LONG_STAGE" "${PKI_RECORD[long_identity]}" "$TXN_DIR" "$LONG_STAGE/tree.manifest" "${PKI_RECORD[long_tree_manifest_identity]}" "${PKI_RECORD[long_tree_manifest_sha256]}" tree.manifest || pki_die 'Cannot remove staged rollover state'; checkpoint_recovery rollback-state-done; fi
+    if [[ -d $STAGE_DIR ]]; then checkpoint_recovery rollback-stage-pending; pki_remove_manifested_tree "$STAGE_DIR" "${PKI_RECORD[stage_identity]}" "$TXN_DIR" "${PKI_RECORD[stage_tree_manifest]}" "${PKI_RECORD[stage_tree_manifest_identity]}" "${PKI_RECORD[stage_tree_manifest_sha256]}" || pki_die 'Cannot remove preparation staging'; checkpoint_recovery rollback-stage-done; fi
+    path=$INT_RESERVATION; kind=intermediate; abandoned=${PKI_RECORD[intermediate_reservation_abandoned_identity]}; if [[ $(pki_file_identity_or_absent "$path") != "$abandoned" ]]; then checkpoint_recovery "rollback-reservation-$kind-pending"; pki_publish_staged_file "$TXN_DIR/$kind-abandoned" "$path"; checkpoint_recovery "rollback-reservation-$kind-done"; fi
+    if [[ $TYPE == root && $(pki_file_identity_or_absent "$ROOT_RESERVATION") != "${PKI_RECORD[root_reservation_abandoned_identity]}" ]]; then checkpoint_recovery rollback-reservation-root-pending; pki_publish_staged_file "$TXN_DIR/root-abandoned" "$ROOT_RESERVATION"; checkpoint_recovery rollback-reservation-root-done; fi
+    current=$(pki_file_identity_or_absent "${PKI_RECORD[backup_session]}"); if [[ $current == "${PKI_RECORD[backup_session_identity]}" ]]; then checkpoint_recovery rollback-backup-session-pending; pki_remove_identity_file "${PKI_RECORD[backup_session]}" "$current" || pki_die 'Cannot restore preparation backup session marker'; checkpoint_recovery rollback-backup-session-done; fi
+    finish_recovered_preparation rolled-back; pki_ok "Rolled back preparation transaction: $TRANSACTION"; exit 0
+  fi
+  [[ ${PKI_RECORD[candidate_intermediate_identity]} != none ]] || pki_die 'Preparation cannot resume before candidate staging completed'
+  current=$(pki_file_identity_or_absent "${PKI_RECORD[backup_session]}"); if [[ $current == absent ]]; then checkpoint_recovery resume-backup-session-pending; pki_publish_staged_file "$TXN_DIR/backup-session.publish" "${PKI_RECORD[backup_session]}"; checkpoint_recovery resume-backup-session-done; fi
+  if [[ $TYPE == root && $(pki_file_identity_or_absent "$ROOT_RESERVATION") == absent ]]; then checkpoint_recovery resume-reserve-root-pending; pki_publish_staged_file "$TXN_DIR/root-reserved" "$ROOT_RESERVATION"; checkpoint_recovery resume-reserve-root-done; fi
+  if [[ $(pki_file_identity_or_absent "$INT_RESERVATION") == absent ]]; then checkpoint_recovery resume-reserve-intermediate-pending; pki_publish_staged_file "$TXN_DIR/intermediate-reserved" "$INT_RESERVATION"; checkpoint_recovery resume-reserve-intermediate-done; fi
+  if [[ $TYPE == root && -d $STAGE_ROOT ]]; then checkpoint_recovery resume-publish-root-pending; mv --no-copy --update=none-fail -T -- "$STAGE_ROOT" "$ROOT_DIR"; pki_fsync_rename_parents "$STAGE_DIR" "$(dirname -- "$ROOT_DIR")"; checkpoint_recovery resume-publish-root-done; fi
+  if [[ -d $STAGE_INT ]]; then checkpoint_recovery resume-publish-intermediate-pending; mv --no-copy --update=none-fail -T -- "$STAGE_INT" "$INT_DIR"; pki_fsync_rename_parents "$STAGE_DIR" "$(dirname -- "$INT_DIR")"; checkpoint_recovery resume-publish-intermediate-done; fi
+  if [[ $TYPE == intermediate ]]; then for key in "${ROOT_DB_KEYS[@]}"; do current=$(pki_file_identity_or_absent_full "${ROOT_DB_PATH[$key]}"); if [[ $current == "${PKI_RECORD[root_${key}_pre_identity]}" && ${PKI_RECORD[root_${key}_pre_identity]} != "${PKI_RECORD[root_${key}_post_identity]}" ]]; then file=${ROOT_DB_PATH[$key]#"$ROOT_CA_DIR/"}; checkpoint_recovery "resume-root-db-$key-pending"; pki_require_file_identity "$STAGE_ROOT/$file" "${PKI_RECORD[root_${key}_source_identity]}" "Staged root $key publication source"; pki_publish_staged_file_exact "$STAGE_ROOT/$file" "${ROOT_DB_PATH[$key]}"; PKI_RECORD[root_${key}_post_identity]=$PKI_PUBLISHED_FILE_IDENTITY; checkpoint_recovery "resume-root-db-$key-done"; fi; done; fi
+  if [[ $TYPE == root && $(pki_file_identity_or_absent "$ROOT_RESERVATION") == "${PKI_RECORD[root_reservation_reserved_identity]}" ]]; then checkpoint_recovery resume-consume-root-pending; pki_publish_staged_file "$TXN_DIR/root-consumed" "$ROOT_RESERVATION"; checkpoint_recovery resume-consume-root-done; fi
+  if [[ $(pki_file_identity_or_absent "$INT_RESERVATION") == "${PKI_RECORD[intermediate_reservation_reserved_identity]}" ]]; then checkpoint_recovery resume-consume-intermediate-pending; pki_publish_staged_file "$TXN_DIR/intermediate-consumed" "$INT_RESERVATION"; checkpoint_recovery resume-consume-intermediate-done; fi
+  if [[ $TYPE == intermediate && -d ${PKI_RECORD[root_stage]} ]]; then checkpoint_recovery resume-cleanup-root-stage-pending; pki_remove_manifested_tree "${PKI_RECORD[root_stage]}" "${PKI_RECORD[root_stage_identity]}" "$STAGE_DIR" "$STATE_LOCATION/root-signing-stage-tree.manifest" "${PKI_RECORD[root_stage_tree_manifest_identity]}" "${PKI_RECORD[root_stage_tree_manifest_sha256]}" || pki_die 'Cannot remove copied root signing stage'; checkpoint_recovery resume-cleanup-root-stage-done; fi
+  if [[ -d $LONG_STAGE ]]; then checkpoint_recovery resume-publish-state-pending; mv --no-copy --update=none-fail -T -- "$LONG_STAGE" "$LONG_DIR"; pki_fsync_rename_parents "$TXN_DIR" "$(dirname -- "$LONG_DIR")"; checkpoint_recovery resume-publish-state-done; fi
+  if [[ $(pki_file_identity_or_absent "$POINTER") == absent ]]; then checkpoint_recovery resume-publish-pointer-pending; pki_publish_staged_file "$TXN_DIR/active-rollover.publish" "$POINTER"; checkpoint_recovery resume-publish-pointer-done; fi
+  finish_recovered_preparation resumed; pki_ok "Resumed preparation transaction: $TRANSACTION"; exit 0
+fi
 if [[ ${PKI_RECORD[operation]:-} == root-bootstrap || ${PKI_RECORD[operation]:-} == intermediate-bootstrap ]]; then
   if [[ ${PKI_RECORD[operation]} == root-bootstrap ]]; then [[ $ACTION == rollback ]] || pki_die 'Root bootstrap recovery supports only rollback'
   elif [[ $ACTION == resume ]]; then [[ ${PKI_RECORD[phase]} == cleanup-* || ${PKI_RECORD[recovery_step]:-} == cleanup-* ]] || pki_die 'Intermediate bootstrap resume is limited to sensitive-stage cleanup'
@@ -114,7 +283,6 @@ elif [[ -d $PROVENANCE_DIR ]]; then
   pki_validate_provenance_manifest "$PROVENANCE_DIR" "$PROVENANCE_DIR/provenance-manifest" "${PKI_RECORD[provenance_manifest_identity]}" "${PKI_RECORD[provenance_manifest_sha256]}"
 fi
 pki_require_file_identity "${PKI_RECORD[backup_receipt]}" "${PKI_RECORD[receipt_identity]}" 'Migration backup receipt'
-verify_bound_file() { local path=$1 identity=$2 digest=$3 label=$4 actual; pki_require_file_identity "$path" "$identity" "$label"; actual=$(sha256sum "$path"); [[ ${actual%% *} == "$digest" ]] || pki_die "$label digest changed"; }
 verify_bound_file "$ISSUER_LEDGER" "${PKI_RECORD[issuer_ledger_identity]}" "${PKI_RECORD[issuer_ledger_sha256]}" 'Migration issuer ledger'
 verify_bound_file "$QUARANTINE_LEDGER" "${PKI_RECORD[quarantine_ledger_identity]}" "${PKI_RECORD[quarantine_ledger_sha256]}" 'Migration quarantine ledger'
 services_current=$(pki_file_identity_or_absent "$TXN_DIR/services")
