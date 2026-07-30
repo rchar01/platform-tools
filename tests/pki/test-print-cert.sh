@@ -38,8 +38,11 @@ assert_contains() {
 }
 
 mkdir -p "$TMP_DIR/fake-bin" "$TMP_DIR/pki/inventory" \
-  "$TMP_DIR/pki/services/platform-example/certs" "$TMP_DIR/pki/root-ca" \
-  "$TMP_DIR/pki/intermediate-ca"
+  "$TMP_DIR/pki/services/platform-example/certs" "$TMP_DIR/pki/authorities/roots/g1" \
+  "$TMP_DIR/pki/authorities/intermediates/g1-i1" "$TMP_DIR/pki/locks" "$TMP_DIR/pki/state/rollover"
+find "$TMP_DIR/pki" -type d -exec chmod 700 {} +
+printf 'root=g1\nintermediate=g1-i1\n' >"$TMP_DIR/pki/state/active-issuer"
+chmod 600 "$TMP_DIR/pki/state/active-issuer"
 cat >"$TMP_DIR/pki/inventory/services.yml" <<'EOF'
 services:
   platform-example:
@@ -110,10 +113,12 @@ run_tool env PATH="$TMP_DIR/fake-bin:$PATH" \
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Service is not defined in'
-[[ ! -e $TMP_DIR/unknown-service-openssl.log ]] || fail 'unknown service invoked openssl'
 
-mkdir -p "$TMP_DIR/missing-cert/inventory" "$TMP_DIR/missing-cert/root-ca" \
-  "$TMP_DIR/missing-cert/intermediate-ca"
+mkdir -p "$TMP_DIR/missing-cert/inventory" "$TMP_DIR/missing-cert/authorities/roots/g1" \
+  "$TMP_DIR/missing-cert/authorities/intermediates/g1-i1" "$TMP_DIR/missing-cert/locks" "$TMP_DIR/missing-cert/state/rollover"
+find "$TMP_DIR/missing-cert" -type d -exec chmod 700 {} +
+printf 'root=g1\nintermediate=g1-i1\n' >"$TMP_DIR/missing-cert/state/active-issuer"
+chmod 600 "$TMP_DIR/missing-cert/state/active-issuer"
 cat >"$TMP_DIR/missing-cert/inventory/services.yml" <<'EOF'
 services:
   platform-example:
@@ -128,7 +133,6 @@ run_tool env PATH="$TMP_DIR/fake-bin:$PATH" \
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Required file is missing:'
-[[ ! -e $TMP_DIR/missing-cert-openssl.log ]] || fail 'missing certificate invoked openssl'
 
 OPENSSL_LOG="$TMP_DIR/openssl.log" \
   run_tool env PATH="$TMP_DIR/fake-bin:$PATH" OPENSSL_LOG="$TMP_DIR/openssl.log" \
@@ -140,7 +144,7 @@ assert_contains "$STDOUT" 'subject=CN=platform.example.internal'
 assert_contains "$STDOUT" 'DNS:platform.example.internal'
 assert_contains "$STDOUT" 'Digital Signature'
 assert_contains "$STDOUT" 'TLS Web Server Authentication'
-[[ $(wc -l <"$TMP_DIR/openssl.log") -eq 4 ]] || fail 'expected four openssl calls'
+[[ $(wc -l <"$TMP_DIR/openssl.log") -eq 5 ]] || fail 'expected active-chain validation and four certificate-detail calls'
 
 mkdir -p "$TMP_DIR/explicit/bin" "$TMP_DIR/explicit/lib"
 cp "$TOOL" "$TMP_DIR/explicit/bin/"

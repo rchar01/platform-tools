@@ -56,6 +56,7 @@ root_command() {
   pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
   pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
   SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-list-expiry.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
+  pki_load_active_issuer_snapshot
   pki_load_inventory_snapshot "$SNAPSHOT_DIR"
 
   printf '%-24s %-22s %-10s %s\n' 'SERVICE' 'EXPIRES' 'DAYS_LEFT' 'STATUS'

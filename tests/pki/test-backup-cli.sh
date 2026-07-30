@@ -86,11 +86,28 @@ assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'invalid option: --help'
 
-mkdir -p "$TMP_DIR/pki/inventory" "$EXEC_DIR/fake-bin"
+mkdir -p "$TMP_DIR/partial-legacy/root-ca"
+chmod 700 "$TMP_DIR/partial-legacy" "$TMP_DIR/partial-legacy/root-ca"
+run_command "$TOOL" --namespace "$TMP_DIR/namespace" --pki-dir "$TMP_DIR/partial-legacy" \
+  --backup-dir "$TMP_DIR/partial-legacy-backup" --allow-plain-backup
+assert_status 1
+assert_contains "$STDERR" 'PKI backup refuses incomplete or ambiguous layout: partial'
+
+mkdir -p "$TMP_DIR/partial-generation/authorities/roots/g1"
+chmod 700 "$TMP_DIR/partial-generation" "$TMP_DIR/partial-generation/authorities" \
+  "$TMP_DIR/partial-generation/authorities/roots" "$TMP_DIR/partial-generation/authorities/roots/g1"
+run_command "$TOOL" --namespace "$TMP_DIR/namespace" --pki-dir "$TMP_DIR/partial-generation" \
+  --backup-dir "$TMP_DIR/partial-generation-backup" --allow-plain-backup
+assert_status 1
+assert_contains "$STDERR" 'PKI backup refuses incomplete or ambiguous layout: partial'
+
+mkdir -p "$TMP_DIR/pki/inventory" "$TMP_DIR/pki/root-ca" "$TMP_DIR/pki/intermediate-ca" "$EXEC_DIR/fake-bin"
+chmod 700 "$TMP_DIR/pki" "$TMP_DIR/pki/inventory" "$TMP_DIR/pki/root-ca" "$TMP_DIR/pki/intermediate-ca"
 printf '%s\n' 'services:' '  backup-test:' \
   '    common_name: backup.example.internal' '    dns:' \
   '      - backup.example.internal' >"$TMP_DIR/pki/inventory/services.yml"
 printf '%s\n' 'private state sentinel' >"$TMP_DIR/pki/private-state"
+chmod 600 "$TMP_DIR/pki/inventory/services.yml" "$TMP_DIR/pki/private-state"
 
 cat >"$EXEC_DIR/fake-bin/age" <<'EOF'
 #!/usr/bin/env bash

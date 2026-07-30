@@ -1,0 +1,73 @@
+name: platform-pki-ca-rollover
+help: Inspect generation-aware CA state or migrate the one-time legacy layout
+version: platform-pki-ca-rollover <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+commands:
+- name: migrate
+  help: Move a verified legacy CA layout into generation g1 and g1-i1
+  flags:
+  - &namespace
+    long: --namespace
+    arg: path
+    help: Platform namespace root
+    validate: not_empty
+  - &pki_dir
+    long: --pki-dir
+    arg: path
+    help: PKI directory
+    validate: not_empty
+  - long: --backup-receipt
+    arg: path
+    help: Receipt from a completed protected legacy-layout backup
+    required: true
+    validate: not_empty
+  - long: --private-repo
+    arg: path
+    help: Private repository containing pki/services.yml
+    default: ../platform-private
+    validate: not_empty
+  - long: --yes
+    help: Use non-interactive fingerprint confirmation
+  - long: --expected-root-sha256
+    arg: digest
+    help: Expected legacy root certificate SHA-256 fingerprint
+    validate: not_empty
+  - long: --expected-intermediate-sha256
+    arg: digest
+    help: Expected legacy intermediate certificate SHA-256 fingerprint
+    validate: not_empty
+  examples:
+  - platform-pki-ca-rollover migrate --backup-receipt /secure/platform-pki.tar.gz.age.receipt
+
+- name: status
+  help: Report legacy, generation-aware, or recovery-required CA state
+  flags:
+  - *namespace
+  - *pki_dir
+  examples:
+  - platform-pki-ca-rollover status
+
+- name: recover
+  help: Resume migration or terminal cleanup, or roll back the journaled transaction
+  flags:
+  - *namespace
+  - *pki_dir
+  - long: --transaction
+    arg: id
+    help: Exact transaction ID reported by status
+    required: true
+    validate: not_empty
+  - long: --action
+    arg: action
+    help: Recovery action (resume or rollback)
+    required: true
+    allowed: [resume, rollback]
+  - long: --yes
+    help: Confirm the exact non-interactive recovery action
+  examples:
+  - platform-pki-ca-rollover recover --transaction migrate-20260730-120000-1234 --action rollback --yes
+
+footer: |-
+  Phase 5 implements legacy migration, migration/bootstrap recovery, and status.
+  Candidate preparation, activation, retirement, and rollover completion arrive
+  in the next milestone.

@@ -47,6 +47,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-print-cert` | Print readable certificate details for a service. |
 | `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
 | `platform-pki-backup` | Create encrypted or explicitly plain backups of PKI state. |
+| `platform-pki-ca-rollover` | Inspect generation state and migrate or recover the one-time legacy layout. |
 | `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
 ## Install
@@ -80,8 +81,9 @@ Core local requirements:
 PKI helpers require:
 
 - `openssl`
+- util-linux `flock` and Linux procfs at `/proc` for stable operation-lock identity checks
 - GNU `date` for certificate expiry calculations
-- GNU `mv` with `--exchange`, `--no-copy`, and `--update=none-fail` for identity-preserving inventory publication
+- GNU `mv` with `--no-copy` and `--update=none-fail`; inventory publication prefers exchange and supports a guarded rename fallback under cooperative same-UID locks
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 
@@ -306,7 +308,15 @@ example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
 
-For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow and safety rules.
+Fresh CA state begins with immutable root `g1` and intermediate `g1-i1`
+generations, with the active pair selected by a protected manifest. Generation
+reservations are monotonic: failed or interrupted bootstrap IDs remain
+permanently abandoned, and retries allocate the next root or intermediate ID.
+Existing singleton CA state is changed only through explicit, receipt-backed
+`platform-pki-ca-rollover migrate`; this milestone does not yet implement later
+rollover lifecycle operations.
+
+For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow, migration procedure, and safety rules.
 
 Service issuance refuses an existing certificate, reuses an existing private
 key unless `--rotate-key` is requested, and transactionally publishes service
@@ -320,16 +330,18 @@ operations hold ordered root, intermediate, and inventory locks through
 verification and consume one validated inventory snapshot.
 
 `platform-pki-root-create` generates its key and certificate in private staging
-before publishing them. Existing root material is refused unless `--force` is
-used; forced generation or publication failures and handled interruptions
-restore the existing configuration, key, and certificate. Root keys remain
-encrypted by default, and unencrypted root keys require the explicit
+before publishing a new immutable generation. It refuses an existing bootstrap
+or active issuer; `--force` cannot replace unproven generation state. Handled
+failures and explicit recovery remove only transaction-owned authority state
+and preserve the reserved ID as abandoned. Root keys remain encrypted by
+default, and unencrypted root keys require the explicit
 `--allow-unencrypted-root-key` opt-in.
 
 `platform-pki-intermediate-create` likewise stages its key, CSR, certificate,
-chain, and root CA database update. Existing intermediate key or certificate
-files are refused unless `--force` is used; failed signing or publication
-restores both intermediate material and root database state. Intermediate keys
+chain, and root CA database update. It refuses an existing active issuer;
+`--force` cannot replace unproven generation state. Failed signing, publication,
+or recovery restores the exact root database state and permanently abandons the
+allocated intermediate ID. Intermediate keys
 remain encrypted by default, and unencrypted keys require the explicit
 `--allow-unencrypted-intermediate-key` opt-in. CA mutation locks use a fixed
 root-before-intermediate acquisition order and cover complete generation,

@@ -20,6 +20,11 @@ flags:
   arg: days
   help: Service certificate lifetime
   validate: days
+- long: --issuer-safety-days
+  arg: days
+  help: Required validity margin before the intermediate expires
+  default: "1"
+  validate: days
 - long: --intermediate-pass-file
   arg: path
   help: Restricted file containing the encrypted intermediate-key passphrase

@@ -330,6 +330,81 @@ pki_require_file() {
   [[ -f "$1" ]] || pki_die "Required file is missing: $1"
 }
 
+pki_file_identity() {
+  stat -c '%d:%i:%u:%a:%h:%s:%Y:%Z:%F' -- "$1"
+}
+
+pki_file_object_state() {
+  stat -c '%d:%i:%u:%a:%h:%s:%F' -- "$1"
+}
+
+pki_dir_identity() {
+  stat -c '%d:%i:%u:%a:%F' -- "$1"
+}
+
+pki_fsync() {
+  sync -f -- "$1" || pki_die "Cannot fsync: $1"
+}
+
+pki_fsync_tree() {
+  local root=$1 path
+  while IFS= read -r -d '' path; do pki_fsync "$path"; done < <(find "$root" -depth -print0)
+  pki_fsync "$(dirname -- "$root")"
+}
+
+pki_remove_identity_file() {
+  local path=$1 expected=$2 current
+  [[ -f $path && ! -L $path ]] || return 1
+  current=$(pki_file_identity "$path") || return 1
+  [[ $current == "$expected" || $(pki_file_object_state "$path") == "$expected" ]] || return 1
+  [[ $(pki_file_identity "$path") == "$current" ]] || return 1
+  rm -f -- "$path" || return 1
+  pki_fsync "$(dirname -- "$path")"
+}
+
+pki_file_identity_or_absent() {
+  local path=$1
+  if [[ ! -e $path && ! -L $path ]]; then
+    printf '%s\n' absent
+    return
+  fi
+  [[ -f $path && ! -L $path ]] || pki_die "Expected a regular file or absent path: $path"
+  pki_file_object_state "$path"
+}
+
+pki_require_file_identity() {
+  local path=$1 expected=$2 label=$3
+  if [[ $expected == absent ]]; then
+    [[ ! -e $path && ! -L $path ]] || pki_die "$label appeared unexpectedly: $path"
+  else
+    [[ -f $path && ! -L $path && ( $(pki_file_identity "$path") == "$expected" || $(pki_file_object_state "$path") == "$expected" ) ]] || \
+      pki_die "$label identity changed: $path"
+  fi
+}
+
+pki_restore_journaled_file() {
+  local path=$1 pre_identity=$2 post_identity=$3 backup=$4 backup_identity=$5 label=$6
+  pki_require_file_identity "$path" "$post_identity" "$label published state"
+  [[ $pre_identity != "$post_identity" ]] || return 0
+  if [[ $pre_identity == absent ]]; then
+    local current_identity
+    current_identity=$(pki_file_identity "$path") || return 1
+    pki_remove_identity_file "$path" "$current_identity" || return 1
+    return
+  fi
+  pki_require_file_identity "$backup" "$backup_identity" "$label rollback copy"
+  pki_publish_staged_file "$backup" "$path"
+}
+
+pki_remove_journaled_tree() {
+  local path=$1 expected=$2 parent=$3
+  [[ $(dirname -- "$path") == "$parent" && -d $path && ! -L $path ]] || return 1
+  [[ $(pki_dir_identity "$path") == "$expected" ]] || return 1
+  [[ $(stat -c '%u:%a:%h' "$path") == "$(id -u):700:2" || $(stat -c '%u:%a' "$path") == "$(id -u):700" ]] || return 1
+  rm -rf -- "$path" || return 1
+  pki_fsync "$parent"
+}
+
 pki_require_pass_file() {
   local path=$1
   local mode
@@ -352,6 +427,15 @@ pki_require_pki_dir() {
   [[ -d "$PKI_DIR" ]] || pki_die "PKI directory does not exist; run platform-pki-init first: $PKI_DIR"
 }
 
+pki_prepare_control_state() {
+  pki_require_private_dir "$PKI_DIR" 'PKI directory'
+  local dir
+  for dir in "$PKI_DIR/locks" "$PKI_DIR/state" "$PKI_DIR/state/rollover" "$PKI_DIR/state/generation-reservations"; do
+    if [[ ! -e $dir && ! -L $dir ]]; then mkdir -m 700 -- "$dir" || pki_die "Cannot create PKI control directory: $dir"; fi
+    pki_require_private_dir "$dir" 'PKI control directory'
+  done
+}
+
 pki_require_no_symlink_path_components() {
   local path=$1 label=$2 current='' component
   local -a components
@@ -371,32 +455,457 @@ pki_require_no_symlink_path_components() {
   done
 }
 
-pki_root_operation_lock() {
-  printf '%s/root-ca/.platform-pki-root-operation.lock\n' "$PKI_DIR"
-}
+pki_lifecycle_operation_lock() { printf '%s/locks/lifecycle\n' "$PKI_DIR"; }
+pki_root_operation_lock() { printf '%s/locks/root\n' "$PKI_DIR"; }
+pki_intermediate_operation_lock() { printf '%s/locks/intermediate\n' "$PKI_DIR"; }
+pki_inventory_operation_lock() { printf '%s/locks/inventory\n' "$PKI_DIR"; }
+pki_export_operation_lock() { printf '%s/locks/export\n' "$PKI_DIR"; }
 
-pki_intermediate_operation_lock() {
-  printf '%s/intermediate-ca/.platform-pki-intermediate-operation.lock\n' "$PKI_DIR"
-}
+declare -Ag PKI_LOCK_FDS=()
+PKI_AUTO_LIFECYCLE=false
 
-pki_inventory_operation_lock() {
-  printf '%s/inventory/.platform-pki-inventory-operation.lock\n' "$PKI_DIR"
+pki_require_private_dir() {
+  local path=$1 label=$2 mode owner
+  [[ -d $path && ! -L $path ]] || pki_die "$label must be a non-symlink directory: $path"
+  mode=$(stat -c '%a' "$path") || pki_die "Cannot inspect $label permissions: $path"
+  owner=$(stat -c '%u' "$path") || pki_die "Cannot inspect $label owner: $path"
+  [[ $mode == 700 && $owner == "$(id -u)" ]] || pki_die "$label must be current-user-owned with mode 700: $path"
 }
 
 pki_acquire_operation_lock() {
-  local path=$1 label=$2
-
-  mkdir -- "$path" 2>/dev/null || pki_die "Another $label is in progress: $path"
-  chmod 700 "$path" || {
-    rmdir "$path" 2>/dev/null || true
-    pki_die "Cannot secure $label lock: $path"
+  local path=$1 label=$2 lock_dir before after fd lifecycle
+  pki_require_cmd flock
+  lock_dir=$(dirname -- "$path")
+  pki_require_private_dir "$lock_dir" 'PKI lock directory'
+  lifecycle=$(pki_lifecycle_operation_lock)
+  if [[ $path != "$lifecycle" && ! -v PKI_LOCK_FDS[$lifecycle] ]]; then
+    pki_acquire_operation_lock "$lifecycle" 'PKI lifecycle operation'
+    PKI_AUTO_LIFECYCLE=true
+  fi
+  [[ ! -v PKI_LOCK_FDS[$path] ]] || pki_die "Lock was acquired more than once: $path"
+  if [[ ! -e $path && ! -L $path ]]; then
+    ( umask 077; : >"$path" ) || pki_die "Cannot create $label lock: $path"
+  fi
+  [[ -f $path && ! -L $path ]] || pki_die "$label lock must be a non-symlink regular file: $path"
+  before=$(stat -c '%d:%i:%u:%a:%h:%F' "$path") || pki_die "Cannot inspect $label lock: $path"
+  [[ $before == *":$(id -u):600:1:regular empty file" || $before == *":$(id -u):600:1:regular file" ]] || \
+    pki_die "$label lock must be current-user-owned, singly linked, and mode 600: $path"
+  exec {fd}<>"$path" || pki_die "Cannot open $label lock: $path"
+  after=$(stat -Lc '%d:%i:%u:%a:%h:%F' "/proc/self/fd/$fd") || {
+    exec {fd}>&-
+    pki_die "Cannot inspect opened $label lock descriptor"
   }
+  [[ $after == "$before" && $(stat -c '%d:%i:%u:%a:%h:%F' "$path") == "$before" ]] || {
+    exec {fd}>&-
+    pki_die "$label lock identity changed while opening: $path"
+  }
+  flock -n "$fd" || {
+    exec {fd}>&-
+    pki_die "Another $label is in progress: $path"
+  }
+  PKI_LOCK_FDS[$path]=$fd
 }
 
 pki_release_operation_lock() {
-  local path=$1
+  local path=$1 fd lifecycle
+  [[ -v PKI_LOCK_FDS[$path] ]] || return 0
+  fd=${PKI_LOCK_FDS[$path]}
+  flock -u "$fd" || return 1
+  exec {fd}>&-
+  unset 'PKI_LOCK_FDS[$path]'
+  lifecycle=$(pki_lifecycle_operation_lock)
+  if [[ $path != "$lifecycle" && $PKI_AUTO_LIFECYCLE == true && ${#PKI_LOCK_FDS[@]} -eq 1 && -v PKI_LOCK_FDS[$lifecycle] ]]; then
+    PKI_AUTO_LIFECYCLE=false
+    pki_release_operation_lock "$lifecycle"
+  fi
+}
 
-  rmdir "$path"
+pki_recovery_journal() { printf '%s/state/rollover/journal\n' "$PKI_DIR"; }
+pki_recovery_marker() { printf '%s/state/rollover/recovery-required\n' "$PKI_DIR"; }
+
+pki_require_no_unresolved_journal() {
+  local journal marker
+  journal=$(pki_recovery_journal)
+  marker=$(pki_recovery_marker)
+  if [[ -e $marker || -L $marker ]]; then
+    [[ -f $marker && ! -L $marker && $(stat -c '%u:%a:%h' "$marker") == "$(id -u):600:1" ]] || pki_die "PKI recovery marker is unsafe: $marker"
+    pki_die "PKI recovery is required before this command can continue: $marker"
+  fi
+  if [[ -e $journal || -L $journal ]]; then
+    pki_read_state_record "$journal" 'PKI recovery journal'
+    [[ ${PKI_RECORD[committed]:-} == true ]] || \
+      pki_die "PKI recovery is required before this command can continue: $journal"
+  fi
+}
+
+pki_validate_root_generation() { [[ $1 =~ ^g[1-9][0-9]*$ ]] || pki_die "Invalid root generation ID: $1"; }
+pki_validate_intermediate_generation() { [[ $1 =~ ^g[1-9][0-9]*-i[1-9][0-9]*$ ]] || pki_die "Invalid intermediate generation ID: $1"; }
+pki_root_authority_dir() { pki_validate_root_generation "$1"; printf '%s/authorities/roots/%s\n' "$PKI_DIR" "$1"; }
+pki_intermediate_authority_dir() { pki_validate_intermediate_generation "$1"; printf '%s/authorities/intermediates/%s\n' "$PKI_DIR" "$1"; }
+pki_active_issuer_manifest() { printf '%s/state/active-issuer\n' "$PKI_DIR"; }
+pki_bootstrap_root_manifest() { printf '%s/state/bootstrap-root\n' "$PKI_DIR"; }
+pki_generation_reservation() { printf '%s/state/generation-reservations/%s\n' "$PKI_DIR" "$1"; }
+
+pki_next_root_generation() {
+  local path name number max=0
+  local -a paths=()
+  shopt -s nullglob
+  paths=("$PKI_DIR/state/generation-reservations"/g* "$PKI_DIR/authorities/roots"/g*)
+  shopt -u nullglob
+  for path in "${paths[@]}"; do
+    name=$(basename -- "$path")
+    if [[ $path == */generation-reservations/* && $name =~ ^g[1-9][0-9]*-i[1-9][0-9]*$ ]]; then continue; fi
+    [[ $name =~ ^g([1-9][0-9]*)$ ]] || pki_die "Invalid root generation state entry: $path"
+    number=${BASH_REMATCH[1]}
+    if [[ $path == */generation-reservations/* ]]; then
+      [[ -f $path && ! -L $path && $(stat -c '%u:%a:%h' "$path") == "$(id -u):600:1" ]] || pki_die "Unsafe root generation reservation: $path"
+    else
+      pki_require_private_dir "$path" 'Root authority generation'
+    fi
+    (( 10#$number > max )) && max=$((10#$number))
+  done
+  printf 'g%d\n' "$((max + 1))"
+}
+
+pki_next_intermediate_generation() {
+  local root=$1 path name number max=0
+  local -a paths=()
+  pki_validate_root_generation "$root"
+  shopt -s nullglob
+  paths=("$PKI_DIR/state/generation-reservations/$root"-i* "$PKI_DIR/authorities/intermediates/$root"-i*)
+  shopt -u nullglob
+  for path in "${paths[@]}"; do
+    name=$(basename -- "$path")
+    [[ $name =~ ^${root}-i([1-9][0-9]*)$ ]] || pki_die "Invalid intermediate generation state entry: $path"
+    number=${BASH_REMATCH[1]}
+    if [[ $path == */generation-reservations/* ]]; then
+      [[ -f $path && ! -L $path && $(stat -c '%u:%a:%h' "$path") == "$(id -u):600:1" ]] || pki_die "Unsafe intermediate generation reservation: $path"
+    else
+      pki_require_private_dir "$path" 'Intermediate authority generation'
+    fi
+    (( 10#$number > max )) && max=$((10#$number))
+  done
+  printf '%s-i%d\n' "$root" "$((max + 1))"
+}
+
+pki_fsync_rename_parents() {
+  local source_parent=$1 destination_parent=$2
+  pki_fsync "$source_parent"
+  [[ $destination_parent == "$source_parent" ]] || pki_fsync "$destination_parent"
+}
+
+pki_provenance_manifest() {
+  local root=$1 path relative identity digest type
+  pki_validate_managed_tree "$root" 'Migration provenance'
+  while IFS= read -r -d '' path; do
+    relative=${path#"$root"/}
+    [[ $relative != "$path" && $relative != *'|'* && $relative != *$'\n'* ]] || pki_die "Migration provenance contains an unsafe path: $path"
+    [[ $relative != provenance-manifest ]] || continue
+    type=$(stat -c '%F' "$path")
+    if [[ $type == directory ]]; then
+      identity=$(pki_dir_identity "$path"); digest='-'
+    else
+      identity=$(pki_file_identity "$path")
+      case $relative in
+        quarantine/*) digest=secret ;;
+        *) digest=$(sha256sum "$path"); digest=${digest%% *} ;;
+      esac
+    fi
+    printf '%s|%s|%s|%s\n' "$type" "$relative" "$identity" "$digest"
+  done < <(find "$root" -mindepth 1 -xdev -print0 | LC_ALL=C sort -z)
+}
+
+pki_validate_provenance_manifest() {
+  local root=$1 manifest=$2 expected_identity=$3 expected_digest=$4 actual tmp
+  pki_require_file_identity "$manifest" "$expected_identity" 'Migration provenance manifest'
+  actual=$(sha256sum "$manifest"); [[ ${actual%% *} == "$expected_digest" ]] || pki_die 'Migration provenance manifest digest changed'
+  tmp=$(mktemp "${TMPDIR:-/tmp}/platform-pki-provenance.XXXXXX") || pki_die 'Cannot stage migration provenance validation'
+  pki_provenance_manifest "$root" >"$tmp" || { rm -f -- "$tmp"; pki_die 'Cannot generate migration provenance manifest'; }
+  cmp -s "$manifest" "$tmp" || { rm -f -- "$tmp"; pki_die 'Migration provenance contents do not match their manifest'; }
+  rm -f -- "$tmp"
+}
+
+pki_read_pair_manifest() {
+  local path=$1 prefix=$2 first second mode owner links before after fd
+  local -a lines=()
+  [[ -f $path && ! -L $path ]] || pki_die "$prefix manifest must be a non-symlink regular file: $path"
+  mode=$(stat -c '%a' "$path"); owner=$(stat -c '%u' "$path"); links=$(stat -c '%h' "$path")
+  [[ $mode == 600 && $owner == "$(id -u)" && $links == 1 ]] || \
+    pki_die "$prefix manifest must be current-user-owned, singly linked, and mode 600: $path"
+  before=$(pki_file_identity "$path") || pki_die "Cannot inspect $prefix manifest"
+  exec {fd}<"$path" || pki_die "Cannot open $prefix manifest"
+  after=$(stat -Lc '%d:%i:%u:%a:%h:%s:%Y:%Z:%F' "/proc/self/fd/$fd") || { exec {fd}<&-; pki_die "Cannot inspect opened $prefix manifest"; }
+  [[ $before == "$after" && $(pki_file_identity "$path") == "$before" ]] || { exec {fd}<&-; pki_die "$prefix manifest identity changed while opening"; }
+  mapfile -t -u "$fd" lines
+  exec {fd}<&-
+  [[ $(pki_file_identity "$path") == "$before" ]] || pki_die "$prefix manifest changed while reading"
+  [[ ${#lines[@]} -eq 2 ]] || pki_die "$prefix manifest has invalid content: $path"
+  first=${lines[0]}; second=${lines[1]}
+  [[ $first == root=* && $second == intermediate=* ]] || pki_die "$prefix manifest has invalid content: $path"
+  ACTIVE_ROOT_ID=${first#root=}
+  ACTIVE_INTERMEDIATE_ID=${second#intermediate=}
+  pki_validate_root_generation "$ACTIVE_ROOT_ID"
+  pki_validate_intermediate_generation "$ACTIVE_INTERMEDIATE_ID"
+  [[ $ACTIVE_INTERMEDIATE_ID == "$ACTIVE_ROOT_ID"-i* ]] || pki_die "$prefix manifest selects mismatched generations"
+}
+
+pki_load_active_issuer_snapshot() {
+  pki_require_no_unresolved_journal
+  pki_read_pair_manifest "$(pki_active_issuer_manifest)" 'Active issuer'
+  ROOT_CA_DIR=$(pki_root_authority_dir "$ACTIVE_ROOT_ID")
+  INTERMEDIATE_CA_DIR=$(pki_intermediate_authority_dir "$ACTIVE_INTERMEDIATE_ID")
+  pki_require_private_dir "$ROOT_CA_DIR" 'Root authority generation'
+  pki_require_private_dir "$INTERMEDIATE_CA_DIR" 'Intermediate authority generation'
+  openssl verify -CAfile "$(pki_root_cert)" "$(pki_intermediate_cert)" >/dev/null || \
+    pki_die 'Active intermediate does not verify against its recorded root'
+}
+
+pki_service_issuer() { printf '%s/issuer\n' "$(pki_service_dir "$1")"; }
+
+pki_load_service_issuer_snapshot() {
+  local service=$1 saved_root=${ACTIVE_ROOT_ID:-} saved_intermediate=${ACTIVE_INTERMEDIATE_ID:-}
+  pki_read_pair_manifest "$(pki_service_issuer "$service")" "Service $service issuer"
+  SERVICE_ROOT_ID=$ACTIVE_ROOT_ID
+  SERVICE_INTERMEDIATE_ID=$ACTIVE_INTERMEDIATE_ID
+  ACTIVE_ROOT_ID=$saved_root
+  ACTIVE_INTERMEDIATE_ID=$saved_intermediate
+}
+
+pki_atomic_write() {
+  local destination=$1 content=$2 directory tmp line state=absent state_object='' guard='' published
+  directory=$(dirname -- "$destination")
+  pki_require_private_dir "$directory" 'State publication directory'
+  if [[ -e $destination || -L $destination ]]; then
+    [[ -f $destination && ! -L $destination && $(stat -c '%u:%a:%h' "$destination") == "$(id -u):600:1" ]] || \
+      pki_die "State destination is unsafe: $destination"
+    state=$(pki_file_identity "$destination") || pki_die "Cannot inspect state destination: $destination"
+    state_object=$(stat -c '%d:%i' "$destination")
+  fi
+  tmp=$(mktemp "$directory/.platform-pki-state.XXXXXX") || pki_die "Cannot stage state file: $destination"
+  : >"$tmp"
+  while IFS= read -r line || [[ -n $line ]]; do
+    # Bashly indents command source; normalize generated multiline literals.
+    [[ $line != '  '* ]] || line=${line#'  '}
+    [[ -n $line ]] || continue
+    printf '%s\n' "$line" >>"$tmp" || { rm -f -- "$tmp"; pki_die "Cannot write staged state file: $destination"; }
+  done < <(printf '%s' "$content")
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; pki_die "Cannot secure staged state file: $destination"; }
+  pki_fsync "$tmp"
+  published=$(pki_file_object_state "$tmp")
+  if [[ $state == absent ]]; then
+    ln -- "$tmp" "$destination" || { rm -f -- "$tmp"; pki_die "State destination appeared before publication: $destination"; }
+    rm -f -- "$tmp"
+    [[ $(pki_file_object_state "$destination") == "$published" ]] || pki_die "State publication identity check failed: $destination"
+  else
+    guard=$(mktemp "$directory/.platform-pki-state-guard.XXXXXX") || { rm -f -- "$tmp"; pki_die 'Cannot stage state publication guard'; }
+    rm -f -- "$guard"
+    ln -- "$destination" "$guard" || { rm -f -- "$tmp"; pki_die "State destination changed before publication: $destination"; }
+    [[ $(stat -c '%d:%i' "$destination") == "$state_object" && $(stat -c '%d:%i' "$guard") == "$state_object" && $(stat -c '%h' "$destination") == 2 ]] || \
+      { rm -f -- "$tmp" "$guard"; pki_die "State destination identity changed before publication: $destination"; }
+    mv -f -- "$tmp" "$destination" || { rm -f -- "$tmp" "$guard"; pki_die "Cannot publish state file: $destination"; }
+    [[ $(pki_file_object_state "$destination") == "$published" && $(stat -c '%d:%i' "$guard") == "$state_object" && $(stat -c '%h' "$guard") == 1 ]] || \
+      pki_die "State publication identity check failed: $destination"
+    rm -f -- "$guard"
+  fi
+  pki_fsync "$directory"
+}
+
+pki_write_journal() {
+  pki_atomic_write "$1" "$2"
+  pki_fsync "$1"
+  pki_fsync "$(dirname -- "$1")"
+}
+
+pki_publish_staged_file() {
+  local source=$1 destination=$2 directory expected_object='' published guard destination_mode
+  directory=$(dirname -- "$destination")
+  [[ -f $source && ! -L $source && $(stat -c '%u:%h' "$source") == "$(id -u):1" ]] || pki_die "Staged publication file is unsafe: $source"
+  pki_fsync "$source"; published=$(pki_file_object_state "$source")
+  if [[ -e $destination || -L $destination ]]; then
+    [[ -f $destination && ! -L $destination && $(stat -c '%u:%h' "$destination") == "$(id -u):1" ]] || pki_die "Publication destination is unsafe: $destination"
+    destination_mode=$(stat -c '%a' "$destination"); (( (8#$destination_mode & 022) == 0 )) || pki_die "Publication destination is writable by group or world: $destination"
+    expected_object=$(stat -c '%d:%i' "$destination")
+    guard=$(mktemp "$directory/.platform-pki-publish-guard.XXXXXX"); rm -f -- "$guard"
+    ln -- "$destination" "$guard" || pki_die "Publication destination changed before guard: $destination"
+    [[ $(stat -c '%d:%i:%h' "$destination") == "$expected_object:2" && $(stat -c '%d:%i' "$guard") == "$expected_object" ]] || pki_die "Publication destination identity changed before replacement: $destination"
+    mv -f -T -- "$source" "$destination" || pki_die "Cannot publish staged file: $destination"
+    [[ $(pki_file_object_state "$destination") == "$published" && $(stat -c '%d:%i:%h' "$guard") == "$expected_object:1" ]] || pki_die "Published file identity is invalid: $destination"
+    rm -f -- "$guard"
+  else
+    ln -- "$source" "$destination" || pki_die "Publication destination appeared: $destination"
+    rm -f -- "$source"
+    [[ $(pki_file_object_state "$destination") == "$published" ]] || pki_die "Published file identity is invalid: $destination"
+  fi
+  pki_fsync "$directory"
+}
+
+pki_read_state_record() {
+  local path=$1 prefix=$2 line key value before after fd
+  declare -gA PKI_RECORD=()
+  [[ -f $path && ! -L $path && $(stat -c '%u:%a:%h' "$path") == "$(id -u):600:1" ]] || pki_die "$prefix is unsafe: $path"
+  before=$(pki_file_identity "$path"); exec {fd}<"$path" || pki_die "Cannot open $prefix"
+  after=$(stat -Lc '%d:%i:%u:%a:%h:%s:%Y:%Z:%F' "/proc/self/fd/$fd")
+  [[ $before == "$after" && $(pki_file_identity "$path") == "$before" ]] || { exec {fd}<&-; pki_die "$prefix identity changed while opening"; }
+  while IFS= read -r -u "$fd" line || [[ -n $line ]]; do
+    [[ $line =~ ^([a-z0-9_]+)=([^[:cntrl:]]*)$ ]] || { exec {fd}<&-; pki_die "$prefix has invalid content"; }
+    key=${BASH_REMATCH[1]}; value=${BASH_REMATCH[2]}
+    [[ ! -v PKI_RECORD[$key] ]] || { exec {fd}<&-; pki_die "$prefix contains duplicate field: $key"; }
+    PKI_RECORD[$key]=$value
+  done
+  exec {fd}<&-
+  [[ $(pki_file_identity "$path") == "$before" ]] || pki_die "$prefix changed while reading"
+}
+
+pki_private_metadata_digest() {
+  local tmp path digest
+  tmp=$(mktemp "${TMPDIR:-/tmp}/platform-pki-private-metadata.XXXXXX") || pki_die 'Cannot stage private metadata manifest'
+  while IFS= read -r -d '' path; do
+    case ${path#"$PKI_DIR"/} in
+      */private/*|private/*|*/quarantine/*|quarantine/*|*passphrase*|*pass-file*|*.key) ;;
+      *) continue ;;
+    esac
+    [[ -f $path && ! -L $path ]] || { rm -f "$tmp"; pki_die "Private state path is unsafe: $path"; }
+    printf '%s|%s\n' "${path#"$PKI_DIR"/}" "$(stat -c '%d:%i:%u:%a:%h:%s:%y:%z' "$path")" >>"$tmp"
+  done < <(find "$PKI_DIR" \( -type f -o -type l \) -print0)
+  LC_ALL=C sort -o "$tmp" "$tmp"; digest=$(sha256sum "$tmp"); rm -f "$tmp"; printf '%s\n' "${digest%% *}"
+}
+
+pki_validate_managed_tree() {
+  local root=$1 label=$2 path mode owner links type
+  [[ -d $root && ! -L $root ]] || pki_die "$label must be a non-symlink directory: $root"
+  while IFS= read -r -d '' path; do
+    [[ ! -L $path ]] || pki_die "$label contains a symbolic link: $path"
+    owner=$(stat -c '%u' "$path"); mode=$(stat -c '%a' "$path"); links=$(stat -c '%h' "$path"); type=$(stat -c '%F' "$path")
+    [[ $owner == "$(id -u)" ]] || pki_die "$label contains foreign-owned state: $path"
+    (( (8#$mode & 022) == 0 )) || pki_die "$label contains group- or world-writable state: $path"
+    case $type in
+      directory) ;;
+      'regular file'|'regular empty file') [[ $links == 1 ]] || pki_die "$label contains hard-linked state: $path" ;;
+      *) pki_die "$label contains an unsupported path type: $path" ;;
+    esac
+  done < <(find "$root" -xdev -print0)
+}
+
+pki_validate_legacy_state() {
+  local service path required certs_dir
+  local -A inventory_services=()
+  pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
+  pki_validate_managed_tree "$PKI_DIR/root-ca" 'Legacy root CA'
+  pki_validate_managed_tree "$PKI_DIR/intermediate-ca" 'Legacy intermediate CA'
+  pki_validate_managed_tree "$PKI_DIR/services" 'Legacy service state'
+  pki_validate_managed_tree "$PKI_DIR/export" 'Legacy export state'
+  for required in \
+    root-ca/private/root-ca.key root-ca/certs/root-ca.crt root-ca/openssl.cnf root-ca/index.txt root-ca/index.txt.attr root-ca/serial root-ca/crlnumber \
+    intermediate-ca/private/intermediate-ca.key intermediate-ca/certs/intermediate-ca.crt intermediate-ca/certs/ca-chain.crt \
+    intermediate-ca/openssl.cnf intermediate-ca/index.txt intermediate-ca/index.txt.attr intermediate-ca/serial intermediate-ca/crlnumber; do
+    [[ -f $PKI_DIR/$required && ! -L $PKI_DIR/$required ]] || pki_die "Legacy PKI state is incomplete: $PKI_DIR/$required"
+  done
+  for service in $(pki_inventory_services); do inventory_services[$service]=1; done
+  while IFS= read -r -d '' path; do
+    service=$(basename -- "$path")
+    pki_validate_service_name "$service"
+    [[ -v inventory_services[$service] ]] || pki_die "Legacy service directory is absent from inventory: $service"
+    certs_dir="$path/certs"
+    if [[ -d $certs_dir ]]; then
+      [[ -f $certs_dir/tls.crt && ! -L $certs_dir/tls.crt ]] || pki_die "Legacy service certificate directory is incomplete: $service"
+      while IFS= read -r -d '' required; do [[ $required == "$certs_dir/tls.crt" ]] || pki_die "Legacy service certificate directory contains unexpected state: $required"; done < <(find "$certs_dir" -mindepth 1 -maxdepth 1 -type f -print0)
+    fi
+  done < <(find "$PKI_DIR/services" -mindepth 1 -maxdepth 1 -type d -print0)
+  while IFS= read -r -d '' path; do
+    service=${path#"$PKI_DIR/services/"}; service=${service%%/*}
+    [[ -v inventory_services[$service] ]] || pki_die "Legacy service certificate is absent from inventory: $service"
+    openssl x509 -in "$path" -noout >/dev/null || pki_die "Legacy service certificate is invalid: $path"
+  done < <(find "$PKI_DIR/services" -mindepth 3 -maxdepth 3 -path '*/certs/tls.crt' -type f -print0)
+  openssl x509 -in "$PKI_DIR/root-ca/certs/root-ca.crt" -noout >/dev/null || pki_die 'Legacy root certificate is invalid'
+  openssl x509 -in "$PKI_DIR/intermediate-ca/certs/intermediate-ca.crt" -noout >/dev/null || pki_die 'Legacy intermediate certificate is invalid'
+  for path in "$PKI_DIR/root-ca/newcerts" "$PKI_DIR/intermediate-ca/newcerts"; do
+    while IFS= read -r -d '' required; do openssl x509 -in "$required" -noout >/dev/null || pki_die "Legacy newcerts entry is invalid: $required"; done < <(find "$path" -mindepth 1 -maxdepth 1 -type f -print0)
+  done
+}
+
+pki_validate_child_validity() {
+  local child=$1 issuer=$2 safety_days=$3 child_start child_end issuer_end now
+  pki_validate_days "$safety_days"
+  child_start=$(date -u -d "$(openssl x509 -in "$child" -noout -startdate | sed 's/^notBefore=//')" +%s) || pki_die 'Cannot parse child certificate notBefore'
+  child_end=$(date -u -d "$(openssl x509 -in "$child" -noout -enddate | sed 's/^notAfter=//')" +%s) || pki_die 'Cannot parse child certificate notAfter'
+  issuer_end=$(date -u -d "$(openssl x509 -in "$issuer" -noout -enddate | sed 's/^notAfter=//')" +%s) || pki_die 'Cannot parse issuer certificate notAfter'
+  now=$(date -u +%s)
+  (( child_start <= now + 300 )) || pki_die 'Child certificate notBefore is more than five minutes in the future'
+  (( child_start <= now && child_end > now )) || pki_die 'Child certificate is not currently valid'
+  (( child_end <= issuer_end - 10#$safety_days * 86400 )) || pki_die "Child certificate exceeds issuer validity safety margin of $safety_days day(s)"
+}
+
+pki_publish_active_issuer() {
+  local root=$1 intermediate=$2
+  pki_validate_root_generation "$root"
+  pki_validate_intermediate_generation "$intermediate"
+  [[ $intermediate == "$root"-i* ]] || pki_die 'Cannot publish mismatched active issuer generations'
+  pki_atomic_write "$(pki_active_issuer_manifest)" "root=$root
+intermediate=$intermediate
+"
+}
+
+pki_publish_service_issuer() {
+  local service=$1 root=$2 intermediate=$3
+  pki_atomic_write "$(pki_service_issuer "$service")" "root=$root
+intermediate=$intermediate
+"
+}
+
+pki_detect_layout() {
+  local legacy_any=false legacy_complete=false generation_any=false generation_complete=false
+  local active first second extra root_id intermediate_id path
+  local -a generation_paths
+  [[ ! -e $PKI_DIR/root-ca && ! -e $PKI_DIR/intermediate-ca ]] || legacy_any=true
+  [[ -d $PKI_DIR/root-ca && ! -L $PKI_DIR/root-ca && -d $PKI_DIR/intermediate-ca && ! -L $PKI_DIR/intermediate-ca ]] && legacy_complete=true
+  active=$(pki_active_issuer_manifest)
+  generation_paths=("$active" "$(pki_bootstrap_root_manifest)" "$PKI_DIR/authorities/roots"/g* "$PKI_DIR/authorities/intermediates"/g*-i*)
+  for path in "${generation_paths[@]}"; do
+    [[ ! -e $path && ! -L $path ]] || { generation_any=true; break; }
+  done
+  if [[ -f $active && ! -L $active ]]; then
+    IFS= read -r first <"$active" || first=''
+    IFS= read -r second < <(tail -n +2 "$active") || second=''
+    IFS= read -r extra < <(tail -n +3 "$active") || extra=''
+    root_id=${first#root=}; intermediate_id=${second#intermediate=}
+    if [[ -z $extra && $first == root=* && $second == intermediate=* &&
+      $root_id =~ ^g[1-9][0-9]*$ && $intermediate_id =~ ^g[1-9][0-9]*-i[1-9][0-9]*$ &&
+      $intermediate_id == "$root_id"-i* && -d $PKI_DIR/authorities/roots/$root_id &&
+      ! -L $PKI_DIR/authorities/roots/$root_id && -d $PKI_DIR/authorities/intermediates/$intermediate_id &&
+      ! -L $PKI_DIR/authorities/intermediates/$intermediate_id ]]; then
+      generation_complete=true
+    fi
+  fi
+  if [[ $legacy_complete == true && $generation_any == false ]]; then printf '%s\n' legacy
+  elif [[ $generation_complete == true && $legacy_any == false ]]; then printf '%s\n' generation
+  elif [[ $legacy_any == false && $generation_any == false ]]; then printf '%s\n' empty
+  else printf '%s\n' partial; fi
+}
+
+pki_public_state_digest() {
+  local layout=$1 tmp path hash relative
+  local -a roots=()
+  pki_require_cmd sha256sum
+  tmp=$(mktemp "${TMPDIR:-/tmp}/platform-pki-state-manifest.XXXXXX") || pki_die 'Cannot stage public state manifest'
+  case $layout in
+    legacy) roots=("$PKI_DIR/inventory" "$PKI_DIR/root-ca" "$PKI_DIR/intermediate-ca" "$PKI_DIR/services" "$PKI_DIR/export") ;;
+    generation) roots=("$PKI_DIR/inventory" "$PKI_DIR/authorities" "$PKI_DIR/state/active-issuer" "$PKI_DIR/services" "$PKI_DIR/export") ;;
+    *) rm -f "$tmp"; pki_die "Cannot digest unsupported PKI layout: $layout" ;;
+  esac
+  for path in "${roots[@]}"; do
+    [[ -e $path ]] || continue
+    if [[ -f $path ]]; then
+      hash=$(sha256sum "$path"); printf '%s  %s\n' "${hash%% *}" "${path#"$PKI_DIR"/}" >>"$tmp"
+      continue
+    fi
+    while IFS= read -r -d '' relative; do
+      case $relative in */private/*|*/backups/*|*.key) continue ;; esac
+      hash=$(sha256sum "$relative") || { rm -f "$tmp"; pki_die "Cannot hash public PKI state: $relative"; }
+      printf '%s  %s\n' "${hash%% *}" "${relative#"$PKI_DIR"/}" >>"$tmp"
+    done < <(find "$path" -type f -print0)
+  done
+  LC_ALL=C sort -o "$tmp" "$tmp"
+  hash=$(sha256sum "$tmp"); rm -f "$tmp"; printf '%s\n' "${hash%% *}"
 }
 
 pki_prepare_dir() {
@@ -457,23 +966,33 @@ pki_new_service_archive_dir() {
 }
 
 pki_root_cert() {
-  printf '%s/root-ca/certs/root-ca.crt\n' "$PKI_DIR"
+  local id=${1:-${ACTIVE_ROOT_ID:-}}
+  [[ -n $id ]] || pki_die 'Root generation snapshot is not loaded'
+  printf '%s/certs/root-ca.crt\n' "$(pki_root_authority_dir "$id")"
 }
 
 pki_root_key() {
-  printf '%s/root-ca/private/root-ca.key\n' "$PKI_DIR"
+  local id=${1:-${ACTIVE_ROOT_ID:-}}
+  [[ -n $id ]] || pki_die 'Root generation snapshot is not loaded'
+  printf '%s/private/root-ca.key\n' "$(pki_root_authority_dir "$id")"
 }
 
 pki_intermediate_cert() {
-  printf '%s/intermediate-ca/certs/intermediate-ca.crt\n' "$PKI_DIR"
+  local id=${1:-${ACTIVE_INTERMEDIATE_ID:-}}
+  [[ -n $id ]] || pki_die 'Intermediate generation snapshot is not loaded'
+  printf '%s/certs/intermediate-ca.crt\n' "$(pki_intermediate_authority_dir "$id")"
 }
 
 pki_intermediate_key() {
-  printf '%s/intermediate-ca/private/intermediate-ca.key\n' "$PKI_DIR"
+  local id=${1:-${ACTIVE_INTERMEDIATE_ID:-}}
+  [[ -n $id ]] || pki_die 'Intermediate generation snapshot is not loaded'
+  printf '%s/private/intermediate-ca.key\n' "$(pki_intermediate_authority_dir "$id")"
 }
 
 pki_ca_chain() {
-  printf '%s/intermediate-ca/certs/ca-chain.crt\n' "$PKI_DIR"
+  local id=${1:-${ACTIVE_INTERMEDIATE_ID:-}}
+  [[ -n $id ]] || pki_die 'Intermediate generation snapshot is not loaded'
+  printf '%s/certs/ca-chain.crt\n' "$(pki_intermediate_authority_dir "$id")"
 }
 
 pki_write_root_config() {
@@ -481,12 +1000,14 @@ pki_write_root_config() {
   local country=$2
   local org=$3
   local name=$4
+  local ca_dir=${5:-${ROOT_CA_DIR:-}}
+  [[ -n $ca_dir ]] || pki_die 'Root authority directory is not resolved'
   cat >"$path" <<EOF
 [ ca ]
 default_ca = CA_default
 
 [ CA_default ]
-dir = $PKI_DIR/root-ca
+dir = $ca_dir
 certs = \$dir/certs
 crl_dir = \$dir/crl
 new_certs_dir = \$dir/newcerts
@@ -540,12 +1061,14 @@ pki_write_intermediate_config() {
   local country=$2
   local org=$3
   local name=$4
+  local ca_dir=${5:-${INTERMEDIATE_CA_DIR:-}}
+  [[ -n $ca_dir ]] || pki_die 'Intermediate authority directory is not resolved'
   cat >"$path" <<EOF
 [ ca ]
 default_ca = CA_default
 
 [ CA_default ]
-dir = $PKI_DIR/intermediate-ca
+dir = $ca_dir
 certs = \$dir/certs
 crl_dir = \$dir/crl
 new_certs_dir = \$dir/newcerts
@@ -699,8 +1222,9 @@ pki_verify_service_certificate() {
   pki_require_service_in_inventory "$service"
   key=$(pki_service_key "$service")
   cert=$(pki_service_cert "$service")
-  root_cert=$(pki_root_cert)
-  int_cert=$(pki_intermediate_cert)
+  pki_load_service_issuer_snapshot "$service"
+  root_cert=$(pki_root_cert "$SERVICE_ROOT_ID")
+  int_cert=$(pki_intermediate_cert "$SERVICE_INTERMEDIATE_ID")
   pki_require_file "$key"
   pki_require_file "$cert"
   pki_require_file "$root_cert"

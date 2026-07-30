@@ -51,9 +51,10 @@ Required:
 
 - `bash`
 - `openssl`
+- util-linux `flock` and Linux procfs at `/proc` for stable operation-lock identity checks
 - `tar` with `--no-wildcards` support for safe backup directory exclusions
 - GNU `date` for certificate expiry calculations
-- GNU `mv` with `--exchange`, `--no-copy`, and `--update=none-fail` for identity-preserving inventory publication
+- GNU `mv` with `--no-copy` and `--update=none-fail`; inventory publication prefers `--exchange` when supported and otherwise uses a guarded rename fallback under cooperative same-UID locks
 - standard Unix tools such as `awk`, `cmp`, `cp`, `find`, `grep`, `mkdir`, `mktemp`, `sed`, and `stat`
 
 Backup encryption requires `age`.
@@ -96,32 +97,25 @@ corresponding commands populate it:
 ~/.config/platform-infrastructure/pki/
 ├── inventory/
 │   └── services.yml.example
-├── root-ca/
-│   ├── certs/
-│   ├── crl/
-│   ├── newcerts/
-│   ├── private/
-│   ├── index.txt
-│   ├── index.txt.attr
-│   ├── serial
-│   └── crlnumber
-├── intermediate-ca/
-│   ├── certs/
-│   ├── crl/
-│   ├── csr/
-│   ├── newcerts/
-│   ├── private/
-│   ├── index.txt
-│   ├── index.txt.attr
-│   ├── serial
-│   └── crlnumber
+├── authorities/
+│   ├── roots/
+│   │   └── g1/
+│   └── intermediates/
+│       └── g1-i1/
+├── state/
+│   ├── active-issuer
+│   ├── bootstrap-root
+│   ├── generation-reservations/
+│   └── rollover/
+├── locks/
 ├── services/
 │   └── <service>/
 │       ├── certs/
 │       ├── chain/
 │       ├── csr/
 │       ├── private/
-│       └── openssl.cnf
+│       ├── openssl.cnf
+│       └── issuer
 ├── export/
 │   └── ansible/
 └── backups/
@@ -153,7 +147,8 @@ The initializer creates only `inventory/services.yml.example`; it does not
 create active inventory. Existing examples are preserved by default. Use
 `--force` to refresh the example. Active inventory, CA keys, certificates, and
 database state are never overwritten by the initializer. Historical local
-copies of `pki.env` or `openssl-*.cnf.tpl` are left untouched but are not used.
+copies of `pki.env` or `openssl-*.cnf.tpl` remain untouched until explicit
+legacy migration quarantines them with migration provenance.
 
 Namespace and PKI paths must be absolute, must not be the filesystem root, and
 must not traverse symbolic links. Existing PKI state containing symbolic links
@@ -183,18 +178,15 @@ platform-pki-root-create \
 
 The root key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_ROOT_DAYS`, or 3650 when that environment variable is unset.
-Root key, certificate, and configuration generation is staged in a private
-directory before publication. Existing key or certificate files are refused
-unless `--force` is used. Failed generation, partial publication, and handled
-interruptions restore all original root configuration, key, and certificate
-files before removing transaction state. The expanded PKI path must not contain
-OpenSSL variable expansion syntax, newlines, or control characters. Before any
-mutation, the PKI and root directory chain, CA database files, and root output
-destinations are checked for expected types, links, ownership, and safe modes.
-Root and database destinations must be regular, singly linked files in
-owner-controlled, non-writable directories; symbolic and hard links are
-rejected. The CA database and unrelated PKI files are not replaced by
-`--force`.
+Root key, certificate, configuration, and database state are staged as a new
+immutable generation. A clean namespace allocates `authorities/roots/g1`.
+Publication records a consumed generation reservation and
+`state/bootstrap-root`; it does not select an active issuer. A failed or
+interrupted allocation remains permanently `abandoned`, so a retry allocates
+the next root ID instead of reusing key identity under the old ID.
+Another root is refused while that bootstrap root exists. `--force` cannot
+replace a completed bootstrap root, an active issuer, or state with descendants;
+future generation changes use `platform-pki-ca-rollover`.
 
 For isolated test namespaces only, use:
 
@@ -216,57 +208,49 @@ platform-pki-intermediate-create \
   --country "PL"
 ```
 
-The intermediate key is encrypted by default. `--days` defaults to
+The first clean bootstrap allocates immutable intermediate generation `g1-i1`.
+Its key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_INTERMEDIATE_DAYS`, or 1825 when that environment variable is
-unset. Intermediate configuration, key, CSR, certificate, chain, and the root
-CA database update are staged privately before publication. Existing
-intermediate key or certificate files are refused unless `--force` is used.
-Failed generation, signing, partial publication, and handled interruptions
-restore all original intermediate files and root CA database files. The root
-database is advanced only when the complete transaction is published.
-Missing intermediate CA database files are restored in staging and published
-with the same transaction: an empty `index.txt`, `index.txt.attr` containing
-`unique_subject = no`, and `serial` and `crlnumber` containing `1000`. Restored
-files use mode `600`; valid existing database files are preserved unchanged.
-Rollback tracks only destinations successfully published by the active
-transaction and verifies their device/inode identity before removal. A file
-that appears at a failed no-clobber destination, or replaces a published file,
-is preserved rather than deleted; unresolved identity changes retain staging
-and locks for operator recovery.
+unset. Intermediate state and the root database update are staged privately.
+After the allocated intermediate verifies against the exact bootstrap root, the command publishes
+`state/active-issuer` and removes `state/bootstrap-root`. Existing active state
+cannot be replaced with `--force`; use the rollover workflow for future
+generations. Failed or interrupted intermediate IDs remain abandoned, and a
+retry allocates the next intermediate ID under the same bootstrap root. The
+identity-bound staging subtree that temporarily contains the copied root key is
+durably removed before commit. An interruption during that terminal cleanup can
+only resume cleanup; earlier intermediate bootstrap states remain rollback-only.
 
-CA and inventory operations use cooperative operation locks inside the current
-CA and inventory directories. The fixed acquisition order is root CA lock,
-intermediate CA lock, then inventory lock, with release in reverse order.
-`platform-pki-root-create` holds the root lock for its
-entire generation and publication transaction. `platform-pki-intermediate-create`
-holds both locks for its entire signing and publication transaction, so a
-cooperating consumer cannot observe forced sequential publication. Inventory
-installation and all six semantic inventory consumers take all three locks; a
-command needing multiple locks must never acquire them in another order.
+Services issued or renewed afterward record the selected pair in mode-600
+`services/<service>/issuer`. Renewal archives the previous issuer record with
+the previous service material. Verification resolves the recorded pair, not the
+issuer that happens to be active for new issuance.
 
-The PKI path, identity values, CA directories, database files, prerequisites,
-and output destinations are validated before mutation. Symbolic links, hard
-links, foreign-owned files, unsafe writable directories, and unexpected file
-types are rejected. `--force` replaces intermediate material and records a new
-root signing event; it does not replace the root key, root certificate, or
-unrelated PKI state.
+All operations use persistent files under `locks/` with `flock`. Acquisition is
+`lifecycle`, `root`, `intermediate`, `inventory`, then `export` as required, and
+release is reverse. Lock files are current-user-owned, singly linked, mode 600,
+and descriptor identity is checked through `/proc/self/fd` before locking.
+After locks are held, normal commands reject an uncommitted migration or
+rollover journal before reading operational snapshots. Rollover `status` is the
+read-only exception and reports recovery-required state with status 2.
 
-`SIGKILL`, host failure, or storage failure cannot run the transaction cleanup
-handler. After an unclean stop, treat operation-lock directories, command-lock
-directories, private `.platform-pki-root-create.*` or
-`.platform-pki-intermediate-create.*` staging directories, and partially
-published sequential state as incident evidence. Do not blindly delete any of
-them. First stop or account for every PKI process, inspect process state and
-artifact timestamps, and make a protected backup of the complete PKI tree.
+`SIGKILL`, host failure, or storage failure cannot run transaction cleanup.
+After an unclean stop, treat journals, recovery markers, private staging
+directories, and partially published state as incident evidence. Persistent
+lock files are normal and must not be deleted; `flock` ownership, not file
+existence, indicates an active operation. First stop or account for every PKI
+process, inspect process state and artifact timestamps, and make a protected
+filesystem-level copy of the complete PKI tree without invoking a normal PKI
+command that rejects unresolved recovery state.
 Compare configuration, key, certificate, CSR, chain, root `index.txt`, serial,
 database sidecars, and `newcerts/` entries with the staging data and a known-good
 backup. Validate matching keys and certificates and verify the certificate
 chain. If publication is partial or consistency cannot be established, restore
 the complete affected transaction state from a known-good protected backup.
 Only after proving that no operation is active and the published state is
-consistent or restored should an operator remove confirmed-stale lock
-directories and securely remove reviewed staging material. Re-run the relevant
-verification commands before resuming CA mutations.
+consistent or restored should an operator resolve the journal and securely
+remove reviewed staging material. Re-run `platform-pki-ca-rollover status` and
+the relevant verification commands before resuming CA mutations.
 
 For isolated test namespaces only, use
 `--allow-unencrypted-intermediate-key`.
@@ -482,6 +466,13 @@ Use `platform-pki-export-ansible --help` for generated option details and
 
 Backups include the full PKI working directory, including CA private keys, service private keys, issued certificates, CSRs, CA database files, inventory, and exports. When the backup output directory is inside the PKI directory, it is excluded from the archive to avoid recursive backups.
 
+The backup command acquires the full lifecycle, root, intermediate, inventory,
+and export lock matrix and accepts only a complete legacy or generation-aware
+layout. It refuses unresolved recovery state. Each successful archive also
+publishes a mode-600 `<archive>.receipt` that binds the archive identity and
+SHA-256 digest to its layout and public-state manifest digest. Keep that receipt
+with the protected archive; one-time legacy migration requires it.
+
 Use `age` recipient encryption for non-interactive backups:
 
 ```bash
@@ -512,6 +503,92 @@ Use `platform-pki-backup --help` for generated option details and
 `platform-pki-backup --version` for the installed platform-tools version.
 
 Plain backup output uses `.tar.gz` and still contains secrets. Keep it outside Git and move it to encrypted storage as soon as practical.
+
+## Migrate Legacy CA State
+
+First install the canonical inventory and create a new independent protected
+backup. Then inspect status and migrate with that backup's receipt:
+
+```bash
+platform-pki-inventory-install
+platform-pki-backup --age-recipient "$AGE_RECIPIENT"
+platform-pki-ca-rollover status
+platform-pki-ca-rollover migrate \
+  --backup-receipt /secure/path/platform-pki-....tar.gz.age.receipt
+```
+
+`status` exits 0 for ready generation-aware state, 1 for legacy state, and 2
+for recovery-required, incomplete, or ambiguous state. It is the only rollover
+operation allowed to inspect an unresolved journal.
+
+Resume or roll back an interrupted migration only through its exact journaled
+transaction ID:
+
+```bash
+platform-pki-ca-rollover recover \
+  --transaction migrate-20260730-120000-1234 \
+  --action rollback \
+  --yes
+```
+
+Recovery validates the journal, backup receipt, transaction directory,
+identity-and-digest-bound service snapshot, and authority identities before
+mutation. A migration command failure never starts a second in-process rollback:
+it preserves an unresolved journal and marker, blocks normal commands, and
+requires explicit `recover`. Missing or replaced evidence is preserved and rejected. Recovery
+records and fsyncs pending and completed state around every mutation, so another
+`recover` invocation can continue after a recovery-process crash. Fresh root
+and first-intermediate bootstrap operations use the same durable journal
+discipline and automatically roll back handled failures; `--force` never
+recursively deletes unproven authority state.
+
+Interactive migration requires typing the exact root and intermediate public
+SHA-256 fingerprints. Non-interactive migration additionally requires `--yes`,
+`--expected-root-sha256`, and `--expected-intermediate-sha256`. Use
+`--private-repo` when the canonical private repository is not
+`../platform-private` relative to the current directory.
+
+Migration verifies the backup receipt and archive identity, public certificate
+chain, current public-state digest, and semantic equality between installed
+inventory and `<private-repo>/pki/services.yml`. It records a recovery journal,
+reserves `g1` and `g1-i1`, and moves legacy CA directories on the same
+filesystem. It regenerates managed OpenSSL paths, publishes service issuer
+records, quarantines legacy scaffolding with provenance, and publishes
+`state/active-issuer` last. It durably publishes the identity-bound migration
+provenance directory before marking the transaction journal committed. Existing
+keys are not copied, hashed, parsed, or regenerated. Provenance includes a
+deterministically ordered relative-path manifest with object identities and
+non-secret file digests; potentially private quarantine contents are marked
+secret and are not hashed. A completed valid migration
+is an idempotent no-op.
+
+The migration journal binds original and published identities for managed
+configurations, reservations, the backup-session record, service issuer
+records, quarantined entries, and the active manifest. Recovery accepts only
+the exact journaled legacy or generation location for each authority and fails
+closed if both paths exist. Bootstrap rollback likewise restores only exact
+transaction-owned CA database, sidecar, serial, and `newcerts/` state. A fully
+verified bootstrap rollback publishes an `abandoned` reservation and never
+deletes or reuses that generation ID; retries allocate the next available ID.
+
+Backup receipts are valid for legacy migration for 24 hours, carry a unique
+session, and bind both public state and metadata-only private state, including
+keys and files under passphrase or quarantine paths. Migration does not read or
+hash private-key or passphrase content.
+
+Certificate issuance checks actual ASN.1 validity against the issuer.
+`--issuer-safety-days` defaults to one day for first-intermediate creation,
+service issuance, and renewal.
+
+Inventory installation prefers atomic exchange. A guarded ordinary atomic-rename
+fallback is supported when the filesystem or rootless container runtime does
+not support `RENAME_EXCHANGE`. The fallback performs a final identity recheck
+under cooperative same-UID lifecycle/root/intermediate/inventory locks. This excludes
+cooperating commands but does not protect against a malicious same-UID process,
+which remains inside the documented trust boundary.
+
+Phase 5 implements only `migrate`, `recover`, and `status`. Candidate
+preparation, activation, retirement, and completion remain deferred.
 
 ## List Expiry
 

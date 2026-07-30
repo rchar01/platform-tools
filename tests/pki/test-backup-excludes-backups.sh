@@ -8,12 +8,14 @@ trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 create_pki_tree() {
   local pki_dir=$1
 
-  mkdir -p "$pki_dir/inventory" "$pki_dir/root-ca/private" "$pki_dir/export/ansible"
+  mkdir -p "$pki_dir/inventory" "$pki_dir/root-ca/private" "$pki_dir/intermediate-ca" "$pki_dir/export/ansible"
+  find "$pki_dir" -type d -exec chmod 700 {} +
   printf '%s\n' 'services:' '  backup-test:' \
     '    common_name: backup.example.internal' '    dns:' \
     '      - backup.example.internal' >"$pki_dir/inventory/services.yml"
   printf '%s\n' 'root key placeholder' >"$pki_dir/root-ca/private/root-ca.key"
   printf '%s\n' 'export placeholder' >"$pki_dir/export/ansible/README.txt"
+  find "$pki_dir" -type f -exec chmod 600 {} +
 }
 
 latest_backup() {
@@ -117,13 +119,12 @@ symlink_pki_alias="$TMP_DIR/symlink-pki/pki-alias"
 create_pki_tree "$symlink_pki_real"
 ln -s "$symlink_pki_real" "$symlink_pki_alias"
 
-"$ROOT_DIR/bin/platform-pki-backup" \
-  --pki-dir "$symlink_pki_alias" \
-  --allow-plain-backup >/dev/null
-
-symlink_pki_archive=$(latest_backup "$symlink_pki_real/backups")
-assert_archive_contains "$symlink_pki_archive" 'pki/inventory/services.yml'
-assert_archive_excludes_prefix "$symlink_pki_archive" 'pki/backups'
+if "$ROOT_DIR/bin/platform-pki-backup" --pki-dir "$symlink_pki_alias" \
+  --allow-plain-backup >"$TMP_DIR/symlink-pki.out" 2>&1; then
+  printf '%s\n' 'backup accepted a symlinked PKI directory' >&2
+  exit 1
+fi
+grep -q 'non-symlink directory' "$TMP_DIR/symlink-pki.out" || exit 1
 
 symlink_backup_pki="$TMP_DIR/symlink-backup/pki"
 symlink_backup_real="$symlink_backup_pki/real-backups"

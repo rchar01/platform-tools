@@ -6,6 +6,12 @@ TMP_DIR=$(mktemp -d)
 EXEC_TMP_DIR=$(mktemp -d "$ROOT_DIR/.test-export-ansible.XXXXXX")
 trap 'rm -rf "$TMP_DIR" "$EXEC_TMP_DIR"' EXIT HUP INT TERM
 VERSION=$(<"$ROOT_DIR/VERSION")
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=ExportRoot \
+  -keyout "$TMP_DIR/root.key" -out "$TMP_DIR/root.crt" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -nodes -subj /CN=ExportIntermediate \
+  -keyout "$TMP_DIR/intermediate.key" -out "$TMP_DIR/intermediate.csr" >/dev/null 2>&1
+openssl x509 -req -in "$TMP_DIR/intermediate.csr" -CA "$TMP_DIR/root.crt" -CAkey "$TMP_DIR/root.key" \
+  -CAcreateserial -days 300 -out "$TMP_DIR/intermediate.crt" >/dev/null 2>&1
 
 if ! "$ROOT_DIR/bin/platform-pki-export-ansible" --help \
   >"$TMP_DIR/help.out" 2>"$TMP_DIR/help.err"; then
@@ -37,11 +43,12 @@ create_generated_pki_tree() {
 
   mkdir -p \
     "$pki_dir/inventory" \
-    "$pki_dir/root-ca/certs" \
-    "$pki_dir/intermediate-ca" \
+    "$pki_dir/authorities/roots/g1/certs" \
+    "$pki_dir/authorities/intermediates/g1-i1/certs" \
+    "$pki_dir/locks" "$pki_dir/state/rollover" \
     "$pki_dir/export/ansible"
   chmod 700 "$(dirname -- "$pki_dir")"
-  chmod 700 "$pki_dir" "$pki_dir/export" "$pki_dir/export/ansible"
+  find "$pki_dir" -type d -exec chmod 700 {} +
   cat >"$pki_dir/inventory/services.yml" <<'YAML'
 services:
   platform-example:
@@ -54,7 +61,10 @@ services:
       - platform-second.internal
 YAML
   chmod 600 "$pki_dir/inventory/services.yml"
-  printf '%s\n' 'root certificate' >"$pki_dir/root-ca/certs/root-ca.crt"
+  cp "$TMP_DIR/root.crt" "$pki_dir/authorities/roots/g1/certs/root-ca.crt"
+  cp "$TMP_DIR/intermediate.crt" "$pki_dir/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+  printf 'root=g1\nintermediate=g1-i1\n' >"$pki_dir/state/active-issuer"
+  chmod 600 "$pki_dir/state/active-issuer"
   for service in platform-example platform-second; do
     mkdir -p "$pki_dir/services/$service/private" \
       "$pki_dir/services/$service/certs" \
@@ -63,6 +73,8 @@ YAML
     printf '%s\n' "$service private key" >"$pki_dir/services/$service/private/tls.key"
     printf '%s\n' "$service ca chain" >"$pki_dir/services/$service/chain/ca-chain.crt"
     printf '%s\n' "$service full chain" >"$pki_dir/services/$service/chain/fullchain.crt"
+    printf 'root=g1\nintermediate=g1-i1\n' >"$pki_dir/services/$service/issuer"
+    chmod 600 "$pki_dir/services/$service/issuer"
   done
 }
 
@@ -183,10 +195,11 @@ grep -q 'Refusing to replace unmarked custom export directory' "$TMP_DIR/unmarke
 assert_file_content "$unmarked_export/sentinel" 'unmarked sentinel'
 
 zero_pki="$TMP_DIR/zero-generated/pki"
-mkdir -p "$zero_pki/inventory" "$zero_pki/root-ca/certs" \
-  "$zero_pki/intermediate-ca" "$zero_pki/export/ansible"
-chmod 700 "$TMP_DIR/zero-generated" "$zero_pki" "$zero_pki/export" \
-  "$zero_pki/export/ansible"
+mkdir -p "$zero_pki/inventory" "$zero_pki/authorities/roots/g1/certs" \
+  "$zero_pki/authorities/intermediates/g1-i1/certs" "$zero_pki/export/ansible" \
+  "$zero_pki/locks" "$zero_pki/state/rollover"
+chmod 700 "$TMP_DIR/zero-generated"
+find "$zero_pki" -type d -exec chmod 700 {} +
 cat >"$zero_pki/inventory/services.yml" <<'YAML'
 services:
   missing-service:
@@ -195,7 +208,10 @@ services:
       - missing.internal
 YAML
 chmod 600 "$zero_pki/inventory/services.yml"
-printf '%s\n' 'root certificate' >"$zero_pki/root-ca/certs/root-ca.crt"
+cp "$TMP_DIR/root.crt" "$zero_pki/authorities/roots/g1/certs/root-ca.crt"
+cp "$TMP_DIR/intermediate.crt" "$zero_pki/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+printf 'root=g1\nintermediate=g1-i1\n' >"$zero_pki/state/active-issuer"
+chmod 600 "$zero_pki/state/active-issuer"
 printf '%s\n' 'zero sentinel' >"$zero_pki/export/ansible/sentinel"
 if "$ROOT_DIR/bin/platform-pki-export-ansible" --pki-dir "$zero_pki" --force \
   >"$TMP_DIR/zero.out" 2>&1; then

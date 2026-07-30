@@ -369,6 +369,7 @@ NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
 PKI_DIR=${args[--pki-dir]:-}
 DAYS_OVERRIDE=${args[--days]:-}
 DAYS=$DAYS_OVERRIDE
+ISSUER_SAFETY_DAYS=${args[--issuer-safety-days]}
 INTERMEDIATE_PASS_FILE=${args[--intermediate-pass-file]:-}
 ROTATE_KEY=false
 [[ -v args[--rotate-key] ]] && ROTATE_KEY=true
@@ -385,8 +386,8 @@ if [[ -n $INTERMEDIATE_PASS_FILE ]]; then
 fi
 pki_require_cmd openssl
 
-ROOT_CA_DIR="$PKI_DIR/root-ca"
-INTERMEDIATE_CA_DIR="$PKI_DIR/intermediate-ca"
+ROOT_CA_DIR=''
+INTERMEDIATE_CA_DIR=''
 SERVICES_DIR="$PKI_DIR/services"
 SERVICE_DIR=$(pki_service_dir "$SERVICE")
 KEY=$(pki_service_key "$SERVICE")
@@ -395,10 +396,10 @@ CERT=$(pki_service_cert "$SERVICE")
 CHAIN=$(pki_service_chain "$SERVICE")
 FULLCHAIN=$(pki_service_fullchain "$SERVICE")
 CONF="$SERVICE_DIR/openssl.cnf"
-ROOT_CERT=$(pki_root_cert)
-INT_KEY=$(pki_intermediate_key)
-INT_CERT=$(pki_intermediate_cert)
-INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"
+ROOT_CERT=''
+INT_KEY=''
+INT_CERT=''
+INT_CONF=''
 INVENTORY=$(pki_inventory_file)
 DNS_FILE=''
 IPS_FILE=''
@@ -519,8 +520,6 @@ DNS_FILE="$INVENTORY_TMP_DIR/dns"
 IPS_FILE="$INVENTORY_TMP_DIR/ips"
 : >"$DNS_FILE"
 : >"$IPS_FILE"
-validate_issue_state
-
 # Root is acquired first because issuance reads root material and mutates the intermediate CA.
 pki_acquire_operation_lock "$ROOT_OPERATION_LOCK" 'root CA operation'
 ROOT_OPERATION_LOCK_HELD=true
@@ -528,16 +527,21 @@ pki_acquire_operation_lock "$INTERMEDIATE_OPERATION_LOCK" 'intermediate CA opera
 INTERMEDIATE_OPERATION_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_OPERATION_LOCK" 'inventory operation'
 INVENTORY_OPERATION_LOCK_HELD=true
+pki_load_active_issuer_snapshot
+ROOT_CERT=$(pki_root_cert)
+INT_KEY=$(pki_intermediate_key)
+INT_CERT=$(pki_intermediate_cert)
+INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"
 pki_load_inventory_snapshot "$INVENTORY_TMP_DIR"
 validate_issue_state
 
 TRANSACTION_DESTINATIONS=(
-  "$CONF" "$CSR" "$CERT" "$CHAIN" "$FULLCHAIN"
+  "$CONF" "$CSR" "$CERT" "$CHAIN" "$FULLCHAIN" "$(pki_service_issuer "$SERVICE")"
   "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial"
   "$INTERMEDIATE_CA_DIR/index.txt.old" "$INTERMEDIATE_CA_DIR/index.txt.attr.old" "$INTERMEDIATE_CA_DIR/serial.old"
   "$INT_NEWCERT"
 )
-TRANSACTION_REPLACE=(true true false true true true true true true true true false)
+TRANSACTION_REPLACE=(true true false true true false true true true true true true false)
 if [[ ! -e $KEY || $ROTATE_KEY == true ]]; then
   PUBLISH_KEY=true
   TRANSACTION_DESTINATIONS+=("$KEY")
@@ -577,6 +581,7 @@ STAGE_CERT="$STAGE_SERVICE_DIR/tls.crt"
 STAGE_CHAIN="$STAGE_SERVICE_DIR/ca-chain.crt"
 STAGE_FULLCHAIN="$STAGE_SERVICE_DIR/fullchain.crt"
 STAGE_CONF="$STAGE_SERVICE_DIR/openssl.cnf"
+STAGE_ISSUER="$STAGE_SERVICE_DIR/issuer"
 if [[ -e $KEY && $ROTATE_KEY != true ]]; then
   cp -p -- "$KEY" "$STAGE_KEY"
   pki_info "Reusing existing service private key: $KEY"
@@ -592,12 +597,15 @@ CA_CMD=(openssl ca -batch -config "$STAGE_INT_DIR/openssl.cnf" -extfile "$STAGE_
 [[ -n $INTERMEDIATE_PASS_FILE ]] && CA_CMD+=(-passin "file:$INTERMEDIATE_PASS_FILE")
 "${CA_CMD[@]}"
 chmod 644 "$STAGE_CERT"
+pki_validate_child_validity "$STAGE_CERT" "$INT_CERT" "$ISSUER_SAFETY_DAYS"
 cat "$INT_CERT" "$ROOT_CERT" >"$STAGE_CHAIN"
 cat "$STAGE_CERT" "$INT_CERT" >"$STAGE_FULLCHAIN"
 chmod 644 "$STAGE_CHAIN" "$STAGE_FULLCHAIN"
+printf 'root=%s\nintermediate=%s\n' "$ACTIVE_ROOT_ID" "$ACTIVE_INTERMEDIATE_ID" >"$STAGE_ISSUER"
+chmod 600 "$STAGE_ISSUER"
 
 TRANSACTION_SOURCES=(
-  "$STAGE_CONF" "$STAGE_CSR" "$STAGE_CERT" "$STAGE_CHAIN" "$STAGE_FULLCHAIN"
+  "$STAGE_CONF" "$STAGE_CSR" "$STAGE_CERT" "$STAGE_CHAIN" "$STAGE_FULLCHAIN" "$STAGE_ISSUER"
   "$STAGE_INT_DIR/index.txt" "$STAGE_INT_DIR/index.txt.attr" "$STAGE_INT_DIR/serial"
   "$STAGE_INT_DIR/index.txt.old" "$STAGE_INT_DIR/index.txt.attr.old" "$STAGE_INT_DIR/serial.old"
   "$STAGE_INT_DIR/newcerts/$ISSUED_SERIAL.pem"

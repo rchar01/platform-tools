@@ -105,7 +105,8 @@ write_export_marker() {
 service_is_generated() {
   local service=$1
   [[ -f $(pki_service_key "$service") && -f $(pki_service_cert "$service") && \
-    -f $(pki_service_chain "$service") && -f $(pki_service_fullchain "$service") ]]
+    -f $(pki_service_chain "$service") && -f $(pki_service_fullchain "$service") && \
+    -f $(pki_service_issuer "$service") ]]
 }
 
 NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
@@ -147,12 +148,13 @@ umask 077
 
 pki_require_pki_dir
 pki_require_inventory
-ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock); INVENTORY_LOCK=$(pki_inventory_operation_lock)
+ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock); INVENTORY_LOCK=$(pki_inventory_operation_lock); EXPORT_LOCK=$(pki_export_operation_lock)
 SNAPSHOT_DIR=''
 finish_export() {
   local status=$?
   trap - EXIT
   [[ -z $SNAPSHOT_DIR ]] || rm -rf -- "$SNAPSHOT_DIR"
+  [[ ${EXPORT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$EXPORT_LOCK" 2>/dev/null || status=1
   [[ ${INVENTORY_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INVENTORY_LOCK" 2>/dev/null || status=1
   [[ ${INTERMEDIATE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INTERMEDIATE_LOCK" 2>/dev/null || status=1
   [[ ${ROOT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$ROOT_LOCK" 2>/dev/null || status=1
@@ -162,7 +164,9 @@ trap finish_export EXIT
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+pki_acquire_operation_lock "$EXPORT_LOCK" 'export operation'; EXPORT_LOCK_HELD=true
 SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-export-ansible.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
+pki_load_active_issuer_snapshot
 pki_load_inventory_snapshot "$SNAPSHOT_DIR"
 pki_require_file "$(pki_root_cert)"
 require_trusted_path_components "$EXPORT_PARENT" 'Export parent'
@@ -226,6 +230,9 @@ prepare_fresh_dir "$EXPORT_DIR/services"
 
 copy_file "$(pki_root_cert)" "$EXPORT_DIR/ca/root-ca.crt" 644
 for service in "${SERVICES[@]}"; do
+  pki_load_service_issuer_snapshot "$service"
+  pki_require_file "$(pki_root_cert "$SERVICE_ROOT_ID")"
+  pki_require_file "$(pki_intermediate_cert "$SERVICE_INTERMEDIATE_ID")"
   target_dir="$EXPORT_DIR/services/$service"
   prepare_fresh_dir "$target_dir"
   copy_file "$(pki_service_cert "$service")" "$target_dir/tls.crt" 644

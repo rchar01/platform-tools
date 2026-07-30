@@ -10,18 +10,25 @@ trap 'rm -rf "$TMP_DIR" "$EXEC_DIR"' EXIT HUP INT TERM
 INIT_TOOL="$ROOT_DIR/bin/platform-pki-init"
 ROOT_TOOL="$ROOT_DIR/bin/platform-pki-root-create"
 TOOL="$ROOT_DIR/bin/platform-pki-intermediate-create"
+RECOVER_TOOL="$ROOT_DIR/bin/platform-pki-ca-rollover"
 VERSION=$(<"$ROOT_DIR/VERSION")
 STDOUT="$TMP_DIR/stdout"
 STDERR="$TMP_DIR/stderr"
 STATUS=0
 ROOT_PASS="$TMP_DIR/root.pass"
 INT_PASS="$TMP_DIR/intermediate.pass"
+ROOT_DB_KEYS=(index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert)
+ROOT_DB_OPTIONAL_KEYS=(index_old index_attr_old serial_old crlnumber_old)
+declare -A ROOT_DB_FILES=(
+  [index]=index.txt [index_attr]=index.txt.attr [serial]=serial [crlnumber]=crlnumber
+  [index_old]=index.txt.old [index_attr_old]=index.txt.attr.old [serial_old]=serial.old [crlnumber_old]=crlnumber.old
+)
 printf '%s\n' 'root-test-passphrase-123' >"$ROOT_PASS"
 printf '%s\n' 'intermediate-test-passphrase-123' >"$INT_PASS"
 chmod 600 "$ROOT_PASS" "$INT_PASS"
 
 fail() {
-  printf 'test-intermediate-create.sh: %s\n' "$*" >&2
+  printf 'test-intermediate-create.sh: %s; stderr=%s\n' "$*" "$(<"$STDERR")" >&2
   exit 1
 }
 
@@ -69,11 +76,11 @@ assert_same_hash() {
 }
 
 assert_no_transaction_residue() {
-  local ca_dir=$1 pki=${1%/intermediate-ca}
+  local ca_dir=$1 pki=${1%/authorities/intermediates/g1-i1}
   if compgen -G "$ca_dir/.platform-pki-intermediate-create.*" >/dev/null; then
     fail "intermediate transaction left staging or lock state in $ca_dir"
   fi
-  [[ ! -e $pki/root-ca/.platform-pki-root-operation.lock ]] || \
+  [[ ! -e $pki/authorities/roots/g1/.platform-pki-root-operation.lock ]] || \
     fail 'root CA operation lock was not removed'
   [[ ! -e $ca_dir/.platform-pki-intermediate-operation.lock ]] || \
     fail 'intermediate CA operation lock was not removed'
@@ -101,22 +108,67 @@ create_intermediate() {
   assert_status 0
 }
 
+prepare_complete_root_db_fixture() {
+  local namespace=$1 key root="$1/pki/authorities/roots/g1"
+  for key in "${ROOT_DB_OPTIONAL_KEYS[@]}"; do
+    printf 'pre-transaction-%s\n' "$key" >"$root/${ROOT_DB_FILES[$key]}"
+    chmod 600 "$root/${ROOT_DB_FILES[$key]}"
+  done
+  cp -p "$root/certs/root-ca.crt" "$root/newcerts/0ABC.pem"
+}
+
+snapshot_root_db_state() {
+  local pki=$1 output=$2 root="$1/authorities/roots/g1" key path name metadata digest
+  : >"$output"
+  for key in "${ROOT_DB_KEYS[@]}"; do
+    [[ $key != newcert ]] || continue
+    path="$root/${ROOT_DB_FILES[$key]}"
+    if [[ ! -e $path && ! -L $path ]]; then printf 'db|%s|absent\n' "$key" >>"$output"; continue; fi
+    [[ -f $path && ! -L $path ]] || fail "root DB snapshot found unsafe state: $path"
+    metadata=$(stat -c '%u|%a|%h|%s|%F' "$path"); digest=$(file_hash "$path")
+    printf 'db|%s|present|%s|%s\n' "$key" "$metadata" "$digest" >>"$output"
+  done
+  metadata=$(stat -c '%u|%a|%h|%F' "$root/newcerts")
+  printf 'newcerts-dir|%s\n' "$metadata" >>"$output"
+  while IFS= read -r -d '' name; do
+    path="$root/newcerts/$name"
+    [[ -f $path && ! -L $path ]] || fail "root newcert snapshot found unsafe state: $path"
+    metadata=$(stat -c '%u|%a|%h|%s|%F' "$path"); digest=$(file_hash "$path")
+    printf 'newcert|%s|%s|%s\n' "$name" "$metadata" "$digest" >>"$output"
+  done < <(find "$root/newcerts" -mindepth 1 -maxdepth 1 -printf '%f\0' | LC_ALL=C sort -z)
+}
+
+assert_root_db_state_restored() {
+  local pki=$1 journal=$2 expected=$3 actual="$3.actual" root="$1/authorities/roots/g1" key path current post issued_serial
+  snapshot_root_db_state "$pki" "$actual"
+  cmp -s "$expected" "$actual" || fail "root CA database/newcert state did not match its pre-transaction snapshot: $(diff -u "$expected" "$actual")"
+  issued_serial=$(sed -n 's/^issued_serial=//p' "$journal")
+  for key in "${ROOT_DB_KEYS[@]}"; do
+    if [[ $key == newcert ]]; then path="$root/newcerts/$issued_serial.pem"
+    else path="$root/${ROOT_DB_FILES[$key]}"; fi
+    if [[ ! -e $path && ! -L $path ]]; then current=absent
+    else current=$(stat -c '%d:%i:%u:%a:%h:%s:%F' "$path"); fi
+    post=$(sed -n "s/^root_${key}_post_identity=//p" "$journal")
+    [[ -n $post && $current != "$post" ]] || fail "rollback retained the transaction-published root $key identity"
+  done
+}
+
 save_state() {
   local pki=$1 path
   SAVED_PATHS=(
-    "$pki/intermediate-ca/openssl.cnf"
-    "$pki/intermediate-ca/private/intermediate-ca.key"
-    "$pki/intermediate-ca/csr/intermediate-ca.csr"
-    "$pki/intermediate-ca/certs/intermediate-ca.crt"
-    "$pki/intermediate-ca/certs/ca-chain.crt"
-    "$pki/root-ca/index.txt" "$pki/root-ca/index.txt.attr" "$pki/root-ca/serial"
-    "$pki/root-ca/index.txt.old" "$pki/root-ca/index.txt.attr.old" "$pki/root-ca/serial.old"
+    "$pki/authorities/intermediates/g1-i1/openssl.cnf"
+    "$pki/authorities/intermediates/g1-i1/private/intermediate-ca.key"
+    "$pki/authorities/intermediates/g1-i1/csr/intermediate-ca.csr"
+    "$pki/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+    "$pki/authorities/intermediates/g1-i1/certs/ca-chain.crt"
+    "$pki/authorities/roots/g1/index.txt" "$pki/authorities/roots/g1/index.txt.attr" "$pki/authorities/roots/g1/serial"
+    "$pki/authorities/roots/g1/index.txt.old" "$pki/authorities/roots/g1/index.txt.attr.old" "$pki/authorities/roots/g1/serial.old"
   )
   SAVED_HASHES=()
   for path in "${SAVED_PATHS[@]}"; do
     SAVED_HASHES+=("$(file_hash "$path")")
   done
-  SAVED_NEWCERTS=$(find "$pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort)
+  SAVED_NEWCERTS=$(find "$pki/authorities/roots/g1/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort)
 }
 
 assert_state_restored() {
@@ -124,13 +176,13 @@ assert_state_restored() {
   for i in "${!SAVED_PATHS[@]}"; do
     assert_same_hash "${SAVED_HASHES[i]}" "${SAVED_PATHS[i]}"
   done
-  [[ $(find "$pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$SAVED_NEWCERTS" ]] || \
+  [[ $(find "$pki/authorities/roots/g1/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$SAVED_NEWCERTS" ]] || \
     fail 'root newcerts changed after failed replacement'
-  assert_no_transaction_residue "$pki/intermediate-ca"
+  assert_no_transaction_residue "$pki/authorities/intermediates/g1-i1"
 }
 
 assert_intermediate_db_defaults() {
-  local pki=$1 db="$1/intermediate-ca"
+  local pki=$1 db="$1/authorities/intermediates/g1-i1"
 
   [[ ! -s $db/index.txt ]] || fail 'initialized intermediate index is not empty'
   [[ $(<"$db/index.txt.attr") == 'unique_subject = no' ]] || \
@@ -149,7 +201,7 @@ assert_missing_db_transaction_rolled_back() {
   local pki=$1 file
 
   for file in index.txt index.txt.attr serial crlnumber; do
-    [[ ! -e $pki/intermediate-ca/$file ]] || \
+    [[ ! -e $pki/authorities/intermediates/g1-i1/$file ]] || \
       fail "failed transaction published missing database file: $file"
   done
   for file in \
@@ -160,11 +212,11 @@ assert_missing_db_transaction_rolled_back() {
     intermediate-ca/certs/ca-chain.crt; do
     [[ ! -e $pki/$file ]] || fail "failed transaction published intermediate material: $file"
   done
-  assert_same_hash "$MISSING_DB_ROOT_INDEX_HASH" "$pki/root-ca/index.txt"
-  assert_same_hash "$MISSING_DB_ROOT_SERIAL_HASH" "$pki/root-ca/serial"
-  [[ $(find "$pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$MISSING_DB_ROOT_NEWCERTS" ]] || \
+  assert_same_hash "$MISSING_DB_ROOT_INDEX_HASH" "$pki/authorities/roots/g1/index.txt"
+  assert_same_hash "$MISSING_DB_ROOT_SERIAL_HASH" "$pki/authorities/roots/g1/serial"
+  [[ $(find "$pki/authorities/roots/g1/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$MISSING_DB_ROOT_NEWCERTS" ]] || \
     fail 'failed missing-database transaction changed root newcerts'
-  assert_no_transaction_residue "$pki/intermediate-ca"
+  assert_no_transaction_residue "$pki/authorities/intermediates/g1-i1"
 }
 
 run_command "$TOOL" --help
@@ -219,568 +271,180 @@ assert_contains "$STDERR" 'PKI directory must not contain OpenSSL variable expan
 
 missing_root_namespace="$TMP_DIR/missing-root"
 init_namespace "$missing_root_namespace"
-missing_root_serial=$(file_hash "$missing_root_namespace/pki/root-ca/serial")
-run_tool "$missing_root_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
+run_tool "$missing_root_namespace" --name Test --org Test --country PL --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
 assert_status 1
-assert_contains "$STDERR" 'Required file is missing'
-assert_same_hash "$missing_root_serial" "$missing_root_namespace/pki/root-ca/serial"
-[[ ! -e $missing_root_namespace/pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'missing root prerequisite created an intermediate key'
+assert_contains "$STDERR" "Bootstrap root manifest is missing"
 
-lock_namespace="$TMP_DIR/intermediate-lock-contention"
-init_namespace "$lock_namespace"
-create_root "$lock_namespace"
-lock_pki="$lock_namespace/pki"
-lock_fixture="$lock_pki/intermediate-ca/.platform-pki-intermediate-operation.lock"
-mkdir -m 700 "$lock_fixture"
-lock_root_index_hash=$(file_hash "$lock_pki/root-ca/index.txt")
-lock_root_serial_hash=$(file_hash "$lock_pki/root-ca/serial")
-lock_intermediate_serial_hash=$(file_hash "$lock_pki/intermediate-ca/serial")
-run_tool "$lock_namespace" --name 'Contended Intermediate' --org Test \
-  --country PL --root-pass-file "$ROOT_PASS" \
-  --intermediate-pass-file "$INT_PASS"
-assert_status 1
-assert_contains "$STDERR" 'Another intermediate CA operation is in progress'
-[[ -d $lock_fixture ]] || fail 'contended intermediate operation lock was removed'
-[[ ! -e $lock_pki/root-ca/.platform-pki-root-operation.lock ]] || \
-  fail 'root operation lock was not released after intermediate lock contention'
-assert_same_hash "$lock_root_index_hash" "$lock_pki/root-ca/index.txt"
-assert_same_hash "$lock_root_serial_hash" "$lock_pki/root-ca/serial"
-assert_same_hash "$lock_intermediate_serial_hash" "$lock_pki/intermediate-ca/serial"
-[[ ! -e $lock_pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'intermediate lock contention allowed material publication'
-if compgen -G "$lock_pki/intermediate-ca/.platform-pki-intermediate-create.*" >/dev/null; then
-  fail 'intermediate lock contention left command staging or lock residue'
-fi
-rmdir "$lock_fixture"
-assert_no_transaction_residue "$lock_pki/intermediate-ca"
+validity_namespace="$TMP_DIR/validity-margin"; init_namespace "$validity_namespace"
+run_command "$ROOT_TOOL" --namespace "$validity_namespace" --name 'Short Root' --org Test --country PL --days 2 --root-pass-file "$ROOT_PASS"; assert_status 0
+run_tool "$validity_namespace" --name 'Too Long Intermediate' --org Test --country PL --days 2 --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
+assert_status 1; assert_contains "$STDERR" 'exceeds issuer validity safety margin'
+[[ ! -e $validity_namespace/pki/authorities/intermediates/g1-i1 && -f $validity_namespace/pki/state/bootstrap-root ]] || fail 'validity rejection published intermediate state'
 
-for missing_db_case in index.txt index.txt.attr serial crlnumber all; do
-  missing_db_namespace="$TMP_DIR/missing-db-${missing_db_case//./-}"
-  init_namespace "$missing_db_namespace"
-  create_root "$missing_db_namespace"
-  missing_db_dir="$missing_db_namespace/pki/intermediate-ca"
-  if [[ $missing_db_case == all ]]; then
-    rm "$missing_db_dir/index.txt" "$missing_db_dir/index.txt.attr" \
-      "$missing_db_dir/serial" "$missing_db_dir/crlnumber"
-  else
-    rm "$missing_db_dir/$missing_db_case"
-  fi
-  preserved_db_files=()
-  preserved_db_hashes=()
-  for file in index.txt index.txt.attr serial crlnumber; do
-    if [[ -e $missing_db_dir/$file ]]; then
-      preserved_db_files+=("$missing_db_dir/$file")
-      preserved_db_hashes+=("$(file_hash "$missing_db_dir/$file")")
-    fi
-  done
-  create_intermediate "$missing_db_namespace"
-  for i in "${!preserved_db_files[@]}"; do
-    assert_same_hash "${preserved_db_hashes[i]}" "${preserved_db_files[i]}"
-  done
-  assert_intermediate_db_defaults "$missing_db_namespace/pki"
-done
-
-collision_namespace="$TMP_DIR/serial-collision"
-init_namespace "$collision_namespace"
-create_root "$collision_namespace"
-collision_pki="$collision_namespace/pki"
-printf '%s\n' 'serial collision sentinel' >"$collision_pki/root-ca/newcerts/1000.pem"
-chmod 600 "$collision_pki/root-ca/newcerts/1000.pem"
-collision_index_hash=$(file_hash "$collision_pki/root-ca/index.txt")
-collision_serial_hash=$(file_hash "$collision_pki/root-ca/serial")
-collision_file_hash=$(file_hash "$collision_pki/root-ca/newcerts/1000.pem")
-run_tool "$collision_namespace" --name Collision --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS" --force
-assert_status 1
-assert_contains "$STDERR" 'Root CA issued-certificate destination already exists'
-assert_same_hash "$collision_index_hash" "$collision_pki/root-ca/index.txt"
-assert_same_hash "$collision_serial_hash" "$collision_pki/root-ca/serial"
-assert_same_hash "$collision_file_hash" "$collision_pki/root-ca/newcerts/1000.pem"
-[[ ! -e $collision_pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'serial collision created intermediate material'
-assert_no_transaction_residue "$collision_pki/intermediate-ca"
-
-for serial_case in \
-  'lowercase|abcd|ABCD|ABCE|cdef|CDEF' \
-  'leading-zero|00ab|AB|AC|00cd|CD'; do
-  IFS='|' read -r case_name serial_input issued_serial next_serial \
-    collision_serial collision_filename <<<"$serial_case"
-  serial_namespace="$TMP_DIR/serial-$case_name"
-  init_namespace "$serial_namespace"
-  create_root "$serial_namespace"
-  serial_pki="$serial_namespace/pki"
-  printf '%s\n' "$serial_input" >"$serial_pki/root-ca/serial"
-  run_tool "$serial_namespace" --name "Serial $case_name" --org Test \
-    --country PL --root-pass-file "$ROOT_PASS" \
-    --intermediate-pass-file "$INT_PASS"
-  assert_status 0
-  serial_cert="$serial_pki/intermediate-ca/certs/intermediate-ca.crt"
-  [[ $(openssl x509 -in "$serial_cert" -noout -serial) == "serial=$issued_serial" ]] || \
-    fail "$case_name serial was not canonicalized by OpenSSL"
-  [[ $(<"$serial_pki/root-ca/serial") == "$next_serial" ]] || \
-    fail "$case_name serial did not advance with OpenSSL semantics"
-  [[ -f $serial_pki/root-ca/newcerts/$issued_serial.pem ]] || \
-    fail "$case_name canonical newcert filename was not published"
-  [[ ! -e $serial_pki/root-ca/newcerts/$serial_input.pem || $serial_input == "$issued_serial" ]] || \
-    fail "$case_name noncanonical newcert filename was published"
-
-  printf '%s\n' "$collision_serial" >"$serial_pki/root-ca/serial"
-  collision_target="$serial_pki/root-ca/newcerts/$collision_filename.pem"
-  printf '%s\n' "$case_name collision sentinel" >"$collision_target"
-  chmod 600 "$collision_target"
-  collision_target_hash=$(file_hash "$collision_target")
-  save_state "$serial_pki"
-  run_tool "$serial_namespace" --name "$case_name collision" --org Test \
-    --country PL --root-pass-file "$ROOT_PASS" \
-    --intermediate-pass-file "$INT_PASS" --force
-  assert_status 1
-  assert_contains "$STDERR" 'Root CA issued-certificate destination already exists'
-  assert_same_hash "$collision_target_hash" "$collision_target"
-  assert_state_restored "$serial_pki"
-done
-
-encrypted_namespace="$TMP_DIR/encrypted"
-init_namespace "$encrypted_namespace"
-create_root "$encrypted_namespace"
-create_intermediate "$encrypted_namespace" --days 5
-encrypted_pki="$encrypted_namespace/pki"
-int_key="$encrypted_pki/intermediate-ca/private/intermediate-ca.key"
-int_cert="$encrypted_pki/intermediate-ca/certs/intermediate-ca.crt"
-int_csr="$encrypted_pki/intermediate-ca/csr/intermediate-ca.csr"
-int_conf="$encrypted_pki/intermediate-ca/openssl.cnf"
-int_chain="$encrypted_pki/intermediate-ca/certs/ca-chain.crt"
-root_cert="$encrypted_pki/root-ca/certs/root-ca.crt"
-assert_contains "$STDOUT" "[OK] Created intermediate CA certificate: $int_cert"
-assert_contains "$STDERR" 'Database updated'
+namespace="$TMP_DIR/primary"
+init_namespace "$namespace"
+create_root "$namespace"
+create_intermediate "$namespace" --days 5
+pki="$namespace/pki"
+int_key="$pki/authorities/intermediates/g1-i1/private/intermediate-ca.key"
+int_cert="$pki/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+root_cert="$pki/authorities/roots/g1/certs/root-ca.crt"
 assert_mode 600 "$int_key"
-assert_mode 600 "$int_csr"
-assert_mode 600 "$int_conf"
 assert_mode 644 "$int_cert"
-assert_mode 644 "$int_chain"
-openssl pkey -in "$int_key" -passin "file:$INT_PASS" -noout >/dev/null 2>&1 || fail 'encrypted intermediate key did not open'
-if openssl pkey -in "$int_key" -passin pass:wrong -noout >/dev/null 2>&1; then
-  fail 'encrypted intermediate key opened with the wrong passphrase'
-fi
-subject=$(openssl x509 -in "$int_cert" -noout -subject -nameopt RFC2253)
-issuer=$(openssl x509 -in "$int_cert" -noout -issuer -nameopt RFC2253)
-[[ $subject == 'subject=CN=Test Intermediate CA,O=Platform Test,C=PL' ]] || fail "unexpected subject: $subject"
-[[ $issuer == 'issuer=CN=Test Root CA,O=Platform Test,C=PL' ]] || fail "unexpected issuer: $issuer"
-openssl verify -CAfile "$root_cert" "$int_cert" >/dev/null || fail 'intermediate certificate does not verify'
-cat "$int_cert" "$root_cert" >"$TMP_DIR/expected-chain"
-cmp "$TMP_DIR/expected-chain" "$int_chain" >/dev/null || fail 'CA chain order or content is wrong'
-openssl x509 -in "$int_cert" -checkend $((4 * 86400)) -noout >/dev/null || fail 'five-day lifetime was too short'
-if openssl x509 -in "$int_cert" -checkend $((6 * 86400)) -noout >/dev/null; then
-  fail 'five-day lifetime was too long'
-fi
-[[ $(wc -l <"$encrypted_pki/root-ca/index.txt") -eq 1 ]] || fail 'root index was not mutated once'
-[[ $(<"$encrypted_pki/root-ca/serial") == 1001 ]] || fail 'root serial was not incremented'
-[[ -f $encrypted_pki/root-ca/newcerts/1000.pem ]] || fail 'root newcert was not published'
-
-key_hash=$(file_hash "$int_key")
-cert_hash=$(file_hash "$int_cert")
-index_hash=$(file_hash "$encrypted_pki/root-ca/index.txt")
-serial_hash=$(file_hash "$encrypted_pki/root-ca/serial")
-run_tool "$encrypted_namespace" --name Replacement --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
+openssl verify -CAfile "$root_cert" "$int_cert" >/dev/null || fail "intermediate did not verify"
+[[ $(<"$pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "active issuer manifest is invalid"
+[[ ! -e $pki/state/bootstrap-root ]] || fail "bootstrap manifest remained"
+run_tool "$namespace" --name Replacement --org Test --country PL --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS" --force
 assert_status 1
-assert_contains "$STDERR" 'Intermediate key exists; use --force to overwrite'
-assert_same_hash "$key_hash" "$int_key"
-assert_same_hash "$cert_hash" "$int_cert"
-assert_same_hash "$index_hash" "$encrypted_pki/root-ca/index.txt"
-assert_same_hash "$serial_hash" "$encrypted_pki/root-ca/serial"
+assert_contains "$STDERR" "active issuer exists"
 
-run_tool "$encrypted_namespace" --name 'Replacement Intermediate' --org Test \
-  --country PL --days 7 --root-pass-file "$ROOT_PASS" \
-  --intermediate-pass-file "$INT_PASS" --force
-assert_status 0
-[[ $(file_hash "$int_key") != "$key_hash" ]] || fail '--force did not replace the key'
-[[ $(file_hash "$int_cert") != "$cert_hash" ]] || fail '--force did not replace the certificate'
-[[ $(wc -l <"$encrypted_pki/root-ca/index.txt") -eq 2 ]] || fail 'forced signing did not append the root index'
-[[ $(<"$encrypted_pki/root-ca/serial") == 1002 ]] || fail 'forced signing did not advance the root serial'
-[[ -f $encrypted_pki/root-ca/newcerts/1001.pem ]] || fail 'forced signing did not publish the root newcert'
-
-unencrypted_namespace="$TMP_DIR/unencrypted"
-init_namespace "$unencrypted_namespace"
-create_root "$unencrypted_namespace"
-run_tool "$unencrypted_namespace" --name 'Unencrypted Intermediate' --org Test \
-  --country PL --root-pass-file "$ROOT_PASS" \
-  --allow-unencrypted-intermediate-key
-assert_status 0
-assert_contains "$STDERR" 'Creating an unencrypted intermediate CA private key'
-openssl pkey -in "$unencrypted_namespace/pki/intermediate-ca/private/intermediate-ca.key" \
-  -noout >/dev/null 2>&1 || fail 'unencrypted intermediate key requires a passphrase'
-
-env_namespace="$TMP_DIR/environment-days"
-init_namespace "$env_namespace"
-create_root "$env_namespace"
-run_command env PLATFORM_PKI_INTERMEDIATE_DAYS=2 "$TOOL" \
-  --namespace "$env_namespace" --name 'Environment Intermediate' --org Test \
-  --country PL --root-pass-file "$ROOT_PASS" \
-  --intermediate-pass-file "$INT_PASS"
-assert_status 0
-env_cert="$env_namespace/pki/intermediate-ca/certs/intermediate-ca.crt"
-openssl x509 -in "$env_cert" -checkend 86400 -noout >/dev/null || fail 'environment lifetime was shorter than one day'
-if openssl x509 -in "$env_cert" -checkend 259200 -noout >/dev/null; then
-  fail 'PLATFORM_PKI_INTERMEDIATE_DAYS was not used as the lifetime default'
-fi
-
-save_state "$encrypted_pki"
-mkdir -p "$EXEC_DIR/failing-bin"
+mkdir -p "$EXEC_DIR/complete-root-db"
 REAL_OPENSSL=$(command -v openssl)
-cat >"$EXEC_DIR/failing-bin/openssl" <<'EOF'
+cat >"$EXEC_DIR/complete-root-db/openssl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ ${1:-} == ca ]]; then
-  exit 42
-fi
-exec "$REAL_OPENSSL" "$@"
+
+if [[ ${1:-} != ca ]]; then exec "$REAL_OPENSSL" "$@"; fi
+"$REAL_OPENSSL" "$@"
+config=''; previous=''
+for argument in "$@"; do
+  if [[ $previous == -config ]]; then config=$argument; break; fi
+  previous=$argument
+done
+[[ -n $config ]] || exit 0
+ca_dir=''
+while IFS= read -r line; do
+  if [[ $line == 'dir = '* ]]; then ca_dir=${line#dir = }; break; fi
+done <"$config"
+[[ -n $ca_dir ]] || exit 0
+for file in index.txt.old index.txt.attr.old serial.old crlnumber.old; do
+  printf 'post-signing-%s\n' "$file" >"$ca_dir/$file"
+  chmod 600 "$ca_dir/$file"
+done
 EOF
-chmod 755 "$EXEC_DIR/failing-bin/openssl"
-run_command env PATH="$EXEC_DIR/failing-bin:$PATH" REAL_OPENSSL="$REAL_OPENSSL" \
-  "$TOOL" --namespace "$encrypted_namespace" --name 'Failed Signing' \
-  --org Test --country PL --root-pass-file "$ROOT_PASS" \
-  --intermediate-pass-file "$INT_PASS" --force
-assert_status 42
-assert_state_restored "$encrypted_pki"
+chmod 755 "$EXEC_DIR/complete-root-db/openssl"
 
-missing_db_failure_namespace="$TMP_DIR/missing-db-signing-failure"
-init_namespace "$missing_db_failure_namespace"
-create_root "$missing_db_failure_namespace"
-missing_db_failure_pki="$missing_db_failure_namespace/pki"
-rm "$missing_db_failure_pki/intermediate-ca/index.txt" \
-  "$missing_db_failure_pki/intermediate-ca/index.txt.attr" \
-  "$missing_db_failure_pki/intermediate-ca/serial" \
-  "$missing_db_failure_pki/intermediate-ca/crlnumber"
-MISSING_DB_ROOT_INDEX_HASH=$(file_hash "$missing_db_failure_pki/root-ca/index.txt")
-MISSING_DB_ROOT_SERIAL_HASH=$(file_hash "$missing_db_failure_pki/root-ca/serial")
-MISSING_DB_ROOT_NEWCERTS=$(find "$missing_db_failure_pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort)
-run_command env PATH="$EXEC_DIR/failing-bin:$PATH" REAL_OPENSSL="$REAL_OPENSSL" \
-  "$TOOL" --namespace "$missing_db_failure_namespace" \
-  --name 'Missing DB Signing Failure' --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-assert_status 42
-assert_missing_db_transaction_rolled_back "$missing_db_failure_pki"
-
-mkdir -p "$EXEC_DIR/publication-bin"
-REAL_MV=$(command -v mv)
-cat >"$EXEC_DIR/publication-bin/mv" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-count=0
-[[ ! -f $MV_COUNTER ]] || count=$(<"$MV_COUNTER")
-count=$((count + 1))
-printf '%s\n' "$count" >"$MV_COUNTER"
-[[ $count != "$MV_FAIL_AT" ]] || exit 42
-if [[ -n ${MV_SIGNAL:-} && $count == "${MV_SIGNAL_AT:-0}" ]]; then
-  kill "-$MV_SIGNAL" "$PPID"
-  exit 143
-fi
-if [[ $count == "${MV_REPLACE_AT:-0}" ]]; then
-  "$REAL_MV" "$@"
-  destination=${!#}
-  foreign="${destination}.foreign-fixture"
-  printf '%s\n' "$MV_REPLACE_SENTINEL" >"$foreign"
-  chmod 600 "$foreign"
-  "$REAL_MV" -f -- "$foreign" "$destination"
-  exit 0
-fi
-exec "$REAL_MV" "$@"
-EOF
-chmod 755 "$EXEC_DIR/publication-bin/mv"
-REAL_LN=$(command -v ln)
-cat >"$EXEC_DIR/publication-bin/ln" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ -n ${LN_COUNTER:-} ]]; then
-  count=0
-  [[ ! -f $LN_COUNTER ]] || count=$(<"$LN_COUNTER")
-  count=$((count + 1))
-  printf '%s\n' "$count" >"$LN_COUNTER"
-  if [[ $count == "${LN_COLLISION_AT:-0}" ]]; then
-    destination=${!#}
-    printf '%s\n' "$LN_COLLISION_SENTINEL" >"$destination"
-    chmod 600 "$destination"
-  fi
-  [[ $count != "${LN_FAIL_AT:-0}" ]] || exit 42
-  if [[ -n ${LN_SIGNAL:-} && $count == "${LN_SIGNAL_AT:-0}" ]]; then
-    kill "-$LN_SIGNAL" "$PPID"
-    exit 143
-  fi
-fi
-exec "$REAL_LN" "$@"
-EOF
-chmod 755 "$EXEC_DIR/publication-bin/ln"
-save_state "$encrypted_pki"
-run_command env PATH="$EXEC_DIR/publication-bin:$PATH" REAL_MV="$REAL_MV" REAL_LN="$REAL_LN" \
-  MV_COUNTER="$TMP_DIR/mv.counter" MV_FAIL_AT=7 \
-  "$TOOL" --namespace "$encrypted_namespace" --name 'Failed Publication' \
-  --org Test --country PL --root-pass-file "$ROOT_PASS" \
-  --intermediate-pass-file "$INT_PASS" --force
-assert_status 1
-assert_contains "$STDERR" 'Failed to publish CA state'
-assert_state_restored "$encrypted_pki"
-
-save_state "$encrypted_pki"
-foreign_intermediate_sentinel='foreign intermediate publication replacement'
-run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-  REAL_MV="$REAL_MV" REAL_LN="$REAL_LN" \
-  MV_COUNTER="$TMP_DIR/intermediate-foreign.counter" \
-  MV_REPLACE_AT=1 MV_FAIL_AT=2 \
-  MV_REPLACE_SENTINEL="$foreign_intermediate_sentinel" \
-  "$TOOL" --namespace "$encrypted_namespace" \
-  --name 'Foreign Intermediate Replacement' --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS" --force
-assert_status 1
-assert_contains "$STDERR" 'Published CA destination identity changed'
-assert_contains "$STDERR" 'preserved staging and locks for recovery'
-[[ $(<"${SAVED_PATHS[0]}") == "$foreign_intermediate_sentinel" ]] || \
-  fail 'foreign intermediate replacement was not preserved'
-for i in "${!SAVED_PATHS[@]}"; do
-  [[ $i -eq 0 ]] || assert_same_hash "${SAVED_HASHES[i]}" "${SAVED_PATHS[i]}"
-done
-[[ $(find "$encrypted_pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$SAVED_NEWCERTS" ]] || \
-  fail 'foreign replacement failure changed root newcerts'
-[[ -d $encrypted_pki/intermediate-ca/.platform-pki-intermediate-create.lock ]] || \
-  fail 'intermediate create lock was not retained for recovery'
-[[ -d $encrypted_pki/root-ca/.platform-pki-root-operation.lock ]] || \
-  fail 'root operation lock was not retained for intermediate recovery'
-[[ -d $encrypted_pki/intermediate-ca/.platform-pki-intermediate-operation.lock ]] || \
-  fail 'intermediate operation lock was not retained for recovery'
-intermediate_recovery_stage=$(compgen -G "$encrypted_pki/intermediate-ca/.platform-pki-intermediate-create.??????")
-[[ -n $intermediate_recovery_stage && -d $intermediate_recovery_stage ]] || \
-  fail 'intermediate staging was not retained for recovery'
-assert_same_hash "${SAVED_HASHES[0]}" "$intermediate_recovery_stage/backup-0"
-
-# Complete the documented recovery manually inside this disposable namespace.
-rm -f -- "${SAVED_PATHS[0]}"
-cp -p -- "$intermediate_recovery_stage/backup-0" "${SAVED_PATHS[0]}"
-rm -rf -- "$intermediate_recovery_stage"
-rmdir "$encrypted_pki/intermediate-ca/.platform-pki-intermediate-create.lock"
-rmdir "$encrypted_pki/intermediate-ca/.platform-pki-intermediate-operation.lock"
-rmdir "$encrypted_pki/root-ca/.platform-pki-root-operation.lock"
-assert_state_restored "$encrypted_pki"
-
-no_clobber_namespace="$TMP_DIR/no-clobber-collision"
-init_namespace "$no_clobber_namespace"
-create_root "$no_clobber_namespace"
-no_clobber_pki="$no_clobber_namespace/pki"
-rm "$no_clobber_pki/intermediate-ca/index.txt"
-no_clobber_attr_hash=$(file_hash "$no_clobber_pki/intermediate-ca/index.txt.attr")
-no_clobber_serial_hash=$(file_hash "$no_clobber_pki/intermediate-ca/serial")
-no_clobber_crl_hash=$(file_hash "$no_clobber_pki/intermediate-ca/crlnumber")
-MISSING_DB_ROOT_INDEX_HASH=$(file_hash "$no_clobber_pki/root-ca/index.txt")
-MISSING_DB_ROOT_SERIAL_HASH=$(file_hash "$no_clobber_pki/root-ca/serial")
-MISSING_DB_ROOT_NEWCERTS=$(find "$no_clobber_pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort)
-collision_sentinel='foreign no-clobber sentinel'
-run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-  REAL_MV="$REAL_MV" REAL_LN="$REAL_LN" \
-  MV_COUNTER="$TMP_DIR/no-clobber-mv.counter" MV_FAIL_AT=0 \
-  LN_COUNTER="$TMP_DIR/no-clobber-ln.counter" LN_FAIL_AT=0 \
-  LN_COLLISION_AT=4 LN_COLLISION_SENTINEL="$collision_sentinel" \
-  "$TOOL" --namespace "$no_clobber_namespace" \
-  --name 'No Clobber Collision' --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-assert_status 1
-assert_contains "$STDERR" 'Intermediate CA material appeared during creation'
-[[ $(<"$no_clobber_pki/intermediate-ca/index.txt") == "$collision_sentinel" ]] || \
-  fail 'rollback removed or replaced the foreign no-clobber sentinel'
-assert_same_hash "$no_clobber_attr_hash" "$no_clobber_pki/intermediate-ca/index.txt.attr"
-assert_same_hash "$no_clobber_serial_hash" "$no_clobber_pki/intermediate-ca/serial"
-assert_same_hash "$no_clobber_crl_hash" "$no_clobber_pki/intermediate-ca/crlnumber"
-assert_same_hash "$MISSING_DB_ROOT_INDEX_HASH" "$no_clobber_pki/root-ca/index.txt"
-assert_same_hash "$MISSING_DB_ROOT_SERIAL_HASH" "$no_clobber_pki/root-ca/serial"
-[[ $(find "$no_clobber_pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$MISSING_DB_ROOT_NEWCERTS" ]] || \
-  fail 'no-clobber collision changed root newcerts'
-for path in \
-  intermediate-ca/openssl.cnf \
-  intermediate-ca/private/intermediate-ca.key \
-  intermediate-ca/csr/intermediate-ca.csr \
-  intermediate-ca/certs/intermediate-ca.crt \
-  intermediate-ca/certs/ca-chain.crt; do
-  [[ ! -e $no_clobber_pki/$path ]] || fail "no-clobber collision left published state: $path"
-done
-assert_no_transaction_residue "$no_clobber_pki/intermediate-ca"
-
-for missing_db_rollback_case in failure TERM; do
-  missing_db_rollback_namespace="$TMP_DIR/missing-db-publication-$missing_db_rollback_case"
-  init_namespace "$missing_db_rollback_namespace"
-  create_root "$missing_db_rollback_namespace"
-  missing_db_rollback_pki="$missing_db_rollback_namespace/pki"
-  rm "$missing_db_rollback_pki/intermediate-ca/index.txt" \
-    "$missing_db_rollback_pki/intermediate-ca/index.txt.attr" \
-    "$missing_db_rollback_pki/intermediate-ca/serial" \
-    "$missing_db_rollback_pki/intermediate-ca/crlnumber"
-  MISSING_DB_ROOT_INDEX_HASH=$(file_hash "$missing_db_rollback_pki/root-ca/index.txt")
-  MISSING_DB_ROOT_SERIAL_HASH=$(file_hash "$missing_db_rollback_pki/root-ca/serial")
-  MISSING_DB_ROOT_NEWCERTS=$(find "$missing_db_rollback_pki/root-ca/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort)
-  if [[ $missing_db_rollback_case == failure ]]; then
-    run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-      REAL_MV="$REAL_MV" REAL_LN="$REAL_LN" \
-      MV_COUNTER="$TMP_DIR/missing-db-failure-mv.counter" MV_FAIL_AT=0 \
-      LN_COUNTER="$TMP_DIR/missing-db-failure-ln.counter" LN_FAIL_AT=5 \
-      "$TOOL" --namespace "$missing_db_rollback_namespace" \
-      --name 'Missing DB Publication Failure' --org Test --country PL \
-      --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-    assert_status 1
-    assert_contains "$STDERR" 'Intermediate CA material appeared during creation'
-  else
-    run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-      REAL_MV="$REAL_MV" REAL_LN="$REAL_LN" \
-      MV_COUNTER="$TMP_DIR/missing-db-TERM-mv.counter" MV_FAIL_AT=0 \
-      LN_COUNTER="$TMP_DIR/missing-db-TERM-ln.counter" LN_FAIL_AT=0 \
-      LN_SIGNAL=TERM LN_SIGNAL_AT=5 \
-      "$TOOL" --namespace "$missing_db_rollback_namespace" \
-      --name 'Missing DB Publication Signal' --org Test --country PL \
-      --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-    assert_status 143
-  fi
-  assert_missing_db_transaction_rolled_back "$missing_db_rollback_pki"
+bootstrap_seed="$TMP_DIR/bootstrap-seed"; init_namespace "$bootstrap_seed"; create_root "$bootstrap_seed"
+for boundary in after-journal after-reservation after-intermediate after-root-db after-reservation-consumed after-active after-bootstrap; do
+  fault_namespace="$TMP_DIR/fault-$boundary"; cp -a "$bootstrap_seed" "$fault_namespace"; fault_pki="$fault_namespace/pki"
+  root_index_hash=$(file_hash "$fault_pki/authorities/roots/g1/index.txt"); root_serial_hash=$(file_hash "$fault_pki/authorities/roots/g1/serial"); root_newcerts=$(find "$fault_pki/authorities/roots/g1/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort)
+  run_command env PLATFORM_PKI_INTERMEDIATE_FAIL_AT="$boundary" "$TOOL" --namespace "$fault_namespace" \
+    --name 'Fault Intermediate' --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+  assert_status 1
+  [[ ! -e $fault_pki/authorities/intermediates/g1-i1 && ! -e $fault_pki/state/active-issuer && -f $fault_pki/state/bootstrap-root ]] || fail "intermediate state was not rolled back after $boundary"
+  assert_same_hash "$root_index_hash" "$fault_pki/authorities/roots/g1/index.txt"; assert_same_hash "$root_serial_hash" "$fault_pki/authorities/roots/g1/serial"
+  [[ $(find "$fault_pki/authorities/roots/g1/newcerts" -maxdepth 1 -type f -printf '%f\n' | sort) == "$root_newcerts" ]] || fail "root newcerts changed after $boundary"
+  grep -Fx 'committed=true' "$fault_pki/state/rollover/journal" >/dev/null || fail "intermediate journal was not closed after $boundary"
+  if [[ -e $fault_pki/state/generation-reservations/g1-i1 ]]; then grep -Fx 'status=abandoned' "$fault_pki/state/generation-reservations/g1-i1" >/dev/null || fail "intermediate reservation was not abandoned after $boundary"; fi
 done
 
-for signal_case in HUP:129 INT:130 TERM:143; do
-  signal=${signal_case%%:*}
-  expected_status=${signal_case#*:}
-  save_state "$encrypted_pki"
-  run_command env PATH="$EXEC_DIR/publication-bin:$PATH" REAL_MV="$REAL_MV" REAL_LN="$REAL_LN" \
-    MV_COUNTER="$TMP_DIR/mv-$signal.counter" MV_FAIL_AT=0 \
-    MV_SIGNAL="$signal" MV_SIGNAL_AT=7 \
-    "$TOOL" --namespace "$encrypted_namespace" --name "Signal $signal" \
-    --org Test --country PL --root-pass-file "$ROOT_PASS" \
-    --intermediate-pass-file "$INT_PASS" --force
-  assert_status "$expected_status"
-  assert_state_restored "$encrypted_pki"
-done
-
-mkdir -p "$EXEC_DIR/pause-bin"
-cat >"$EXEC_DIR/pause-bin/openssl" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ ${1:-} == genpkey && -n ${OPENSSL_PAUSE_MARKER:-} ]]; then
-  : >"$OPENSSL_PAUSE_MARKER"
-  while [[ ! -e $OPENSSL_PAUSE_RELEASE ]]; do
-    sleep 0.02
+for key in "${ROOT_DB_KEYS[@]}"; do
+  for checkpoint in pending 'done'; do
+    crash_namespace="$TMP_DIR/root-publication-$key-$checkpoint"; cp -a "$bootstrap_seed" "$crash_namespace"; crash_pki="$crash_namespace/pki"
+    prepare_complete_root_db_fixture "$crash_namespace"
+    root_snapshot="$TMP_DIR/root-publication-$key-$checkpoint.snapshot"; snapshot_root_db_state "$crash_pki" "$root_snapshot"
+    run_command env PATH="$EXEC_DIR/complete-root-db:$PATH" REAL_OPENSSL="$REAL_OPENSSL" PLATFORM_PKI_INTERMEDIATE_CRASH_AT="root-$key-$checkpoint" "$TOOL" --namespace "$crash_namespace" --name Crash --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+    assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$crash_pki/state/rollover/journal")
+    pre_identity=$(sed -n "s/^root_${key}_pre_identity=//p" "$crash_pki/state/rollover/journal"); post_identity=$(sed -n "s/^root_${key}_post_identity=//p" "$crash_pki/state/rollover/journal")
+    if [[ $key == newcert ]]; then [[ $pre_identity == absent && $post_identity != absent ]] || fail 'newcert publication fixture did not create a new object'
+    else [[ $pre_identity != absent && $post_identity != absent && $pre_identity != "$post_identity" ]] || fail "root DB publication fixture did not mutate $key"; fi
+    run_command "$RECOVER_TOOL" recover --namespace "$crash_namespace" --transaction "$transaction" --action rollback --yes; assert_status 0
+    assert_root_db_state_restored "$crash_pki" "$crash_pki/state/rollover/journal" "$root_snapshot"
   done
-fi
-exec "$REAL_OPENSSL" "$@"
-EOF
-chmod 755 "$EXEC_DIR/pause-bin/openssl"
-concurrent_namespace="$TMP_DIR/concurrent-root"
-init_namespace "$concurrent_namespace"
-create_root "$concurrent_namespace"
-concurrent_pki="$concurrent_namespace/pki"
-concurrent_index_hash=$(file_hash "$concurrent_pki/root-ca/index.txt")
-concurrent_serial_hash=$(file_hash "$concurrent_pki/root-ca/serial")
-pause_marker="$TMP_DIR/root-pause.marker"
-pause_release="$TMP_DIR/root-pause.release"
-env PATH="$EXEC_DIR/pause-bin:$PATH" REAL_OPENSSL="$REAL_OPENSSL" \
-  OPENSSL_PAUSE_MARKER="$pause_marker" OPENSSL_PAUSE_RELEASE="$pause_release" \
-  "$ROOT_TOOL" --namespace "$concurrent_namespace" --name 'Concurrent Root' \
-  --org Test --country PL --root-pass-file "$ROOT_PASS" --force \
-  >"$TMP_DIR/concurrent-root.stdout" 2>"$TMP_DIR/concurrent-root.stderr" &
-root_pid=$!
-for _ in {1..250}; do
-  [[ ! -e $pause_marker ]] || break
-  sleep 0.02
 done
-if [[ ! -e $pause_marker ]]; then
-  : >"$pause_release"
-  wait "$root_pid" || true
-  fail 'root-create concurrency fixture did not reach the locked operation'
-fi
-[[ -d $concurrent_pki/root-ca/.platform-pki-root-operation.lock ]] || \
-  fail 'root-create did not hold the shared root operation lock'
-run_tool "$concurrent_namespace" --name 'Excluded Intermediate' --org Test \
-  --country PL --root-pass-file "$ROOT_PASS" \
-  --intermediate-pass-file "$INT_PASS" --force
-assert_status 1
-assert_contains "$STDERR" 'Another root CA operation is in progress'
-assert_same_hash "$concurrent_index_hash" "$concurrent_pki/root-ca/index.txt"
-assert_same_hash "$concurrent_serial_hash" "$concurrent_pki/root-ca/serial"
-[[ ! -e $concurrent_pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'concurrent root operation allowed intermediate material publication'
-: >"$pause_release"
-wait "$root_pid" || fail 'paused root-create process failed after release'
-assert_no_transaction_residue "$concurrent_pki/intermediate-ca"
 
-symlink_namespace="$TMP_DIR/symlink"
-init_namespace "$symlink_namespace"
-create_root "$symlink_namespace"
-symlink_victim="$TMP_DIR/symlink-victim"
-printf '%s\n' 'victim' >"$symlink_victim"
-ln -s "$symlink_victim" "$symlink_namespace/pki/intermediate-ca/private/intermediate-ca.key"
-run_tool "$symlink_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS" --force
-assert_status 1
-assert_contains "$STDERR" 'Intermediate CA key must not be a symlink'
-[[ $(<"$symlink_victim") == victim ]] || fail 'symlink victim was modified'
+for boundary in cleanup-pending cleanup-removed cleanup-done; do
+  cleanup_namespace="$TMP_DIR/$boundary"; cp -a "$bootstrap_seed" "$cleanup_namespace"; cleanup_pki="$cleanup_namespace/pki"
+  run_command env PLATFORM_PKI_INTERMEDIATE_CRASH_AT="$boundary" "$TOOL" --namespace "$cleanup_namespace" --name Cleanup --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+  assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$cleanup_pki/state/rollover/journal"); sensitive_stage=$(sed -n 's/^root_stage=//p' "$cleanup_pki/state/rollover/journal")
+  run_command "$RECOVER_TOOL" recover --namespace "$cleanup_namespace" --transaction "$transaction" --action resume --yes; assert_status 0
+  [[ ! -e $sensitive_stage && -f $cleanup_pki/state/active-issuer && ! -e $cleanup_pki/state/bootstrap-root ]] || fail "cleanup resume was incomplete after $boundary"
+  grep -Fx 'committed=true' "$cleanup_pki/state/rollover/journal" >/dev/null || fail "cleanup resume did not commit after $boundary"
+done
 
-ancestor_target="$TMP_DIR/ancestor-target"
-init_namespace "$ancestor_target"
-create_root "$ancestor_target"
-ancestor_alias="$TMP_DIR/ancestor-alias"
-ln -s "$ancestor_target" "$ancestor_alias"
-ancestor_serial_hash=$(file_hash "$ancestor_target/pki/root-ca/serial")
-run_tool "$ancestor_alias" --name Test --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-assert_status 1
-assert_contains "$STDERR" 'Namespace path component must not be a symlink'
-assert_same_hash "$ancestor_serial_hash" "$ancestor_target/pki/root-ca/serial"
-[[ ! -e $ancestor_target/pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'ancestor symlink allowed intermediate mutation'
+cleanup_recovery_namespace="$TMP_DIR/cleanup-recovery-of-recovery"; cp -a "$bootstrap_seed" "$cleanup_recovery_namespace"; cleanup_recovery_pki="$cleanup_recovery_namespace/pki"
+run_command env PLATFORM_PKI_INTERMEDIATE_CRASH_AT=cleanup-pending "$TOOL" --namespace "$cleanup_recovery_namespace" --name Cleanup --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$cleanup_recovery_pki/state/rollover/journal")
+for checkpoint in cleanup-pending cleanup-done; do run_command env PLATFORM_PKI_RECOVER_CRASH_AT="$checkpoint" "$RECOVER_TOOL" recover --namespace "$cleanup_recovery_namespace" --transaction "$transaction" --action resume --yes; assert_status 137; done
+run_command "$RECOVER_TOOL" recover --namespace "$cleanup_recovery_namespace" --transaction "$transaction" --action resume --yes; assert_status 0
 
-hardlink_namespace="$TMP_DIR/hardlink"
-init_namespace "$hardlink_namespace"
-create_root "$hardlink_namespace"
-hardlink_key="$hardlink_namespace/pki/intermediate-ca/private/intermediate-ca.key"
-printf '%s\n' 'hard-link sentinel' >"$hardlink_key"
-chmod 600 "$hardlink_key"
-ln "$hardlink_key" "$TMP_DIR/intermediate-hardlink-victim"
-run_tool "$hardlink_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS" --force
-assert_status 1
-assert_contains "$STDERR" 'Intermediate CA key must not be hard-linked'
-[[ $(<"$TMP_DIR/intermediate-hardlink-victim") == 'hard-link sentinel' ]] || \
-  fail 'hard-link victim was modified'
+recovery_crash_namespace="$TMP_DIR/recovery-of-recovery"; cp -a "$bootstrap_seed" "$recovery_crash_namespace"; recovery_crash_pki="$recovery_crash_namespace/pki"; prepare_complete_root_db_fixture "$recovery_crash_namespace"
+recovery_root_snapshot="$TMP_DIR/recovery-of-recovery.snapshot"; snapshot_root_db_state "$recovery_crash_pki" "$recovery_root_snapshot"
+run_command env PATH="$EXEC_DIR/complete-root-db:$PATH" REAL_OPENSSL="$REAL_OPENSSL" PLATFORM_PKI_INTERMEDIATE_CRASH_AT=after-bootstrap "$TOOL" --namespace "$recovery_crash_namespace" --name Crash --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$recovery_crash_pki/state/rollover/journal")
+for key in "${ROOT_DB_OPTIONAL_KEYS[@]}"; do
+  pre_identity=$(sed -n "s/^root_${key}_pre_identity=//p" "$recovery_crash_pki/state/rollover/journal"); post_identity=$(sed -n "s/^root_${key}_post_identity=//p" "$recovery_crash_pki/state/rollover/journal")
+  [[ $pre_identity != absent && $post_identity != absent && $pre_identity != "$post_identity" ]] || fail "optional root DB fixture did not mutate $key"
+done
+recovery_boundaries=(rollback-active-pending rollback-active-done rollback-bootstrap-pending rollback-bootstrap-done)
+for key in "${ROOT_DB_KEYS[@]}"; do recovery_boundaries+=("rollback-root-$key-pending" "rollback-root-$key-done"); done
+recovery_boundaries+=(rollback-authority-pending rollback-authority-done rollback-stage-pending rollback-stage-done rollback-reservation-pending rollback-reservation-done)
+for recovery_boundary in "${recovery_boundaries[@]}"; do
+  run_command env PLATFORM_PKI_RECOVER_CRASH_AT="$recovery_boundary" "$RECOVER_TOOL" recover --namespace "$recovery_crash_namespace" --transaction "$transaction" --action rollback --yes
+  assert_status 137
+done
+run_command "$RECOVER_TOOL" recover --namespace "$recovery_crash_namespace" --transaction "$transaction" --action rollback --yes; assert_status 0
+assert_root_db_state_restored "$recovery_crash_pki" "$recovery_crash_pki/state/rollover/journal" "$recovery_root_snapshot"
+grep -Fx 'status=abandoned' "$recovery_crash_pki/state/generation-reservations/g1-i1" >/dev/null || fail 'recovery-of-recovery lost the intermediate reservation'
 
-writable_namespace="$TMP_DIR/writable-directory"
-init_namespace "$writable_namespace"
-create_root "$writable_namespace"
-chmod 777 "$writable_namespace/pki/intermediate-ca/certs"
-run_tool "$writable_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-assert_status 1
-assert_contains "$STDERR" 'Intermediate CA certificate directory is group- or world-writable'
-assert_mode 777 "$writable_namespace/pki/intermediate-ca/certs"
-[[ ! -e $writable_namespace/pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'unsafe writable directory allowed intermediate mutation'
+hostile_namespace="$TMP_DIR/hostile-generation"; cp -a "$bootstrap_seed" "$hostile_namespace"; mkdir -m 700 "$TMP_DIR/foreign-intermediate"; ln -s "$TMP_DIR/foreign-intermediate" "$hostile_namespace/pki/authorities/intermediates/g1-i1"
+run_tool "$hostile_namespace" --name Hostile --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key --force
+assert_status 1; [[ -L $hostile_namespace/pki/authorities/intermediates/g1-i1 && -d $TMP_DIR/foreign-intermediate ]] || fail 'intermediate --force altered hostile generation state'
 
-owner_namespace="$TMP_DIR/foreign-owner"
-init_namespace "$owner_namespace"
-create_root "$owner_namespace"
-owner_target="$owner_namespace/pki/intermediate-ca/index.txt"
-owner_hash=$(file_hash "$owner_target")
-mkdir -p "$EXEC_DIR/owner-bin"
-REAL_STAT=$(command -v stat)
-cat >"$EXEC_DIR/owner-bin/stat" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ $# -eq 3 && $1 == -c && $2 == %u && $3 == "$STAT_OWNER_TARGET" ]]; then
-  printf '%s\n' "$STAT_FAKE_OWNER"
-  exit 0
-fi
-exec "$REAL_STAT" "$@"
-EOF
-chmod 755 "$EXEC_DIR/owner-bin/stat"
-run_command env PATH="$EXEC_DIR/owner-bin:$PATH" REAL_STAT="$REAL_STAT" \
-  STAT_OWNER_TARGET="$owner_target" STAT_FAKE_OWNER=$(( $(id -u) + 1 )) \
-  "$TOOL" --namespace "$owner_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$ROOT_PASS" --intermediate-pass-file "$INT_PASS"
-assert_status 1
-assert_contains "$STDERR" 'Intermediate CA index is not owned by the current user'
-assert_same_hash "$owner_hash" "$owner_target"
-[[ ! -e $owner_namespace/pki/intermediate-ca/private/intermediate-ca.key ]] || \
-  fail 'foreign-owned database allowed intermediate mutation'
+for boundary in after-journal after-reservation after-intermediate after-root-db after-reservation-consumed after-active after-bootstrap; do
+  crash_namespace="$TMP_DIR/crash-recovery-$boundary"; cp -a "$bootstrap_seed" "$crash_namespace"; crash_pki="$crash_namespace/pki"
+  root_index_hash=$(file_hash "$crash_pki/authorities/roots/g1/index.txt"); root_serial_hash=$(file_hash "$crash_pki/authorities/roots/g1/serial")
+  run_command env PLATFORM_PKI_INTERMEDIATE_CRASH_AT="$boundary" "$TOOL" --namespace "$crash_namespace" --name Crash --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+  assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$crash_pki/state/rollover/journal")
+  run_command "$RECOVER_TOOL" recover --namespace "$crash_namespace" --transaction "$transaction" --action rollback --yes; assert_status 0
+  assert_same_hash "$root_index_hash" "$crash_pki/authorities/roots/g1/index.txt"; assert_same_hash "$root_serial_hash" "$crash_pki/authorities/roots/g1/serial"
+  [[ ! -e $crash_pki/authorities/intermediates/g1-i1 && -f $crash_pki/state/bootstrap-root && -f $crash_pki/state/generation-reservations/g1-i1 ]] || fail "intermediate crash recovery did not preserve its abandoned reservation after $boundary"
+  grep -Fx 'status=abandoned' "$crash_pki/state/generation-reservations/g1-i1" >/dev/null || fail "intermediate crash recovery did not abandon g1-i1 after $boundary"
+  run_tool "$crash_namespace" --name Retry --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key; assert_status 0
+  grep -Fx 'intermediate=g1-i2' "$crash_pki/state/active-issuer" >/dev/null || fail "intermediate crash retry reused g1-i1 after $boundary"
+done
+
+for category in index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert; do
+  hostile_namespace="$TMP_DIR/hostile-root-db-$category"; cp -a "$bootstrap_seed" "$hostile_namespace"; hostile_pki="$hostile_namespace/pki"
+  run_command env PLATFORM_PKI_INTERMEDIATE_CRASH_AT=after-root-db "$TOOL" --namespace "$hostile_namespace" --name Hostile --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key; assert_status 137
+  transaction=$(sed -n 's/^transaction=//p' "$hostile_pki/state/rollover/journal"); issued_serial=$(sed -n 's/^issued_serial=//p' "$hostile_pki/state/rollover/journal")
+  case $category in
+    index) hostile_path="$hostile_pki/authorities/roots/g1/index.txt" ;;
+    index_attr) hostile_path="$hostile_pki/authorities/roots/g1/index.txt.attr" ;;
+    serial) hostile_path="$hostile_pki/authorities/roots/g1/serial" ;;
+    crlnumber) hostile_path="$hostile_pki/authorities/roots/g1/crlnumber" ;;
+    index_old) hostile_path="$hostile_pki/authorities/roots/g1/index.txt.old" ;;
+    index_attr_old) hostile_path="$hostile_pki/authorities/roots/g1/index.txt.attr.old" ;;
+    serial_old) hostile_path="$hostile_pki/authorities/roots/g1/serial.old" ;;
+    crlnumber_old) hostile_path="$hostile_pki/authorities/roots/g1/crlnumber.old" ;;
+    newcert) hostile_path="$hostile_pki/authorities/roots/g1/newcerts/$issued_serial.pem" ;;
+  esac
+  rm -f -- "$hostile_path"; printf '%s\n' "hostile-$category" >"$hostile_path"; chmod 600 "$hostile_path"
+  run_command "$RECOVER_TOOL" recover --namespace "$hostile_namespace" --transaction "$transaction" --action rollback --yes; assert_status 1
+  [[ $(<"$hostile_path") == "hostile-$category" ]] || fail "recovery changed hostile root DB replacement: $category"
+done
+
+signal_namespace="$TMP_DIR/signal-recovery"; cp -a "$bootstrap_seed" "$signal_namespace"
+run_command env PLATFORM_PKI_INTERMEDIATE_SIGNAL_AT=after-root-db "$TOOL" --namespace "$signal_namespace" --name Signal --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+assert_status 143; [[ ! -e $signal_namespace/pki/authorities/intermediates/g1-i1 && -f $signal_namespace/pki/state/bootstrap-root ]] || fail 'intermediate signal rollback left authority state'
+
+openssl_namespace="$TMP_DIR/openssl-failure"; cp -a "$bootstrap_seed" "$openssl_namespace"; mkdir -p "$EXEC_DIR/intermediate-openssl-failure"
+REAL_OPENSSL=$(command -v openssl); printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} != ca ]] || exit 42' 'exec "$REAL_OPENSSL" "$@"' >"$EXEC_DIR/intermediate-openssl-failure/openssl"; chmod 755 "$EXEC_DIR/intermediate-openssl-failure/openssl"
+run_command env PATH="$EXEC_DIR/intermediate-openssl-failure:$PATH" REAL_OPENSSL="$REAL_OPENSSL" "$TOOL" --namespace "$openssl_namespace" --name Failure --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key
+assert_status 42; [[ ! -e $openssl_namespace/pki/authorities/intermediates/g1-i1 && -f $openssl_namespace/pki/state/bootstrap-root ]] || fail 'OpenSSL failure published intermediate state'
+
+lock_namespace="$TMP_DIR/lock-contention"; cp -a "$bootstrap_seed" "$lock_namespace"; : >"$lock_namespace/pki/locks/intermediate"; chmod 600 "$lock_namespace/pki/locks/intermediate"; exec {lock_fd}<>"$lock_namespace/pki/locks/intermediate"; flock -n "$lock_fd"
+run_tool "$lock_namespace" --name Locked --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key; assert_status 1; assert_contains "$STDERR" 'Another intermediate CA operation is in progress'; flock -u "$lock_fd"; exec {lock_fd}>&-
+
+for hostile_case in key-symlink db-hardlink writable-dir; do
+  hostile_namespace="$TMP_DIR/hostile-$hostile_case"; cp -a "$bootstrap_seed" "$hostile_namespace"; hostile_int="$hostile_namespace/pki/authorities/intermediates/g1-i1"; mkdir -m 700 -p "$hostile_int/private" "$hostile_int/certs"
+  case $hostile_case in
+    key-symlink) printf '%s\n' victim >"$TMP_DIR/intermediate-victim"; ln -s "$TMP_DIR/intermediate-victim" "$hostile_int/private/intermediate-ca.key" ;;
+    db-hardlink) printf '%s\n' sentinel >"$hostile_int/serial"; chmod 600 "$hostile_int/serial"; ln "$hostile_int/serial" "$TMP_DIR/intermediate-hardlink" ;;
+    writable-dir) chmod 777 "$hostile_int/certs" ;;
+  esac
+  run_tool "$hostile_namespace" --name Hostile --org Test --country PL --root-pass-file "$ROOT_PASS" --allow-unencrypted-intermediate-key --force; assert_status 1
+  [[ -d $hostile_int && ! -L $hostile_int ]] || fail "hostile intermediate state was deleted: $hostile_case"
+done
 
 printf '%s\n' 'test-intermediate-create.sh: ok'

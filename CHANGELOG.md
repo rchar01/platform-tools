@@ -10,11 +10,23 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added `platform-pki-inventory-install` with exact `../platform-private` default source resolution, `--private-repo` override, strict source and destination identity checks, exact-byte staged validation, ordered root/intermediate/inventory locking, atomic mode-600 publication, safe normalization, and no-op reporting.
+- Added `platform-pki-ca-rollover migrate|recover|status` for explicit one-time migration of verified legacy singleton CA state into immutable `g1` and `g1-i1` generations. Migration requires exact fingerprint confirmation, a matching protected-backup receipt, canonical private inventory equality, same-filesystem identity-preserving moves, and journaled rollback or recovery-required state.
+- Added mode-600 PKI backup receipts that bind archive identity, SHA-256 digest, layout, creation time, and public-state manifest digest.
+- Added `platform-pki-ca-rollover recover` with identity-checked, crash-resumable resume and rollback checkpoints around every legacy migration and bootstrap recovery mutation.
+- Added ASN.1 issuer-validity safety-margin enforcement for first-intermediate creation, service issuance, and renewal.
 
 ### Changed
 
 - Replaced permissive per-field inventory reads with one strict whole-file restricted-YAML parser. All six semantic consumers now lock and consume one canonical private snapshot, rejecting duplicate or unknown structure, malformed grammar, invalid values, missing SANs, and unsupported `deploy` data before operational work.
 - Changed `platform-pki-init` to create and refresh only `inventory/services.yml.example`; active inventory is never initialized or force-replaced. Removed unused installed `pki.env` and `openssl-*.cnf.tpl` assets while leaving existing local copies untouched.
+- Changed fresh root and intermediate creation to begin with immutable `g1` and `g1-i1` generations through bootstrap and active issuer manifests. Failed or interrupted reservations remain permanently abandoned and retries allocate monotonically increasing IDs. Existing completed or descendant-bearing CA state can no longer be replaced with `--force`.
+- Changed service issuance and renewal to snapshot the active issuer and transactionally publish a mode-600 service issuer record; renewal archives the prior record and verification resolves the recorded issuer generations.
+- Changed PKI concurrency control to persistent lifecycle-first `flock` files with fixed lifecycle, root, intermediate, inventory, and export ordering. Normal operations reject unresolved migration or rollover journals after locking.
+- Changed PKI backup to hold the full lock matrix, reject incomplete or ambiguous layouts, and reject unresolved recovery state before archiving.
+- Changed transaction journals and protected state publication to fsync staged files and parent directories, guard destination identity, and reject unsafe journal or marker metadata.
+- Changed bootstrap and migration recovery to mutate only exact journaled original, staged, or transaction-published identities; bind service and deterministic provenance evidence by identity and digest without hashing quarantined secret content; reject simultaneous legacy/generation authority paths; preserve migration failures for explicit recovery; and remove copied root-key staging before intermediate commit through crash-resumable cleanup checkpoints.
+- Changed backup receipts to include a unique 24-hour migration session and metadata-only private-state digest; migration now validates complete legacy CA, database, service, export, path, and inventory state.
+- Changed inventory replacement to prefer capability-probed atomic exchange and support a documented guarded atomic-rename fallback under cooperative same-UID locks when exchange is unsupported.
 
 ## [1.4.0] - 2026-07-27
 

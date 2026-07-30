@@ -47,6 +47,7 @@ pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
 SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-service-verify.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
+pki_load_active_issuer_snapshot
 pki_load_inventory_snapshot "$SNAPSHOT_DIR"
 pki_verify_service_certificate "$SERVICE" "$MIN_DAYS"
 

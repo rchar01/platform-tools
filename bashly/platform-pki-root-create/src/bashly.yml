@@ -39,7 +39,7 @@ flags:
   help: Create an unencrypted root private key
   conflicts: [--root-pass-file]
 - long: --force
-  help: Replace existing root CA key and certificate
+  help: Refuse unproven replacement and direct recovery to the journal workflow
 
 examples:
 - platform-pki-root-create --name "Platform Example Root CA" --org "Platform Example" --country PL
@@ -50,5 +50,7 @@ footer: |-
   configuration home. The PKI directory defaults to <namespace>/pki.
   The lifetime defaults to PLATFORM_PKI_ROOT_DAYS or 3650 days.
   Root keys are encrypted unless --allow-unencrypted-root-key is used.
+  Root generation IDs are allocated monotonically. A failed or interrupted
+  bootstrap permanently abandons its reserved ID; a retry uses the next ID.
   Passphrase files must be mode 600 or stricter and have a first line of at
   least 16 characters containing non-whitespace content.

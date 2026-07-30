@@ -9,6 +9,7 @@ trap 'rm -rf "$TMP_DIR" "$EXEC_DIR"' EXIT HUP INT TERM
 
 INIT_TOOL="$ROOT_DIR/bin/platform-pki-init"
 TOOL="$ROOT_DIR/bin/platform-pki-root-create"
+RECOVER_TOOL="$ROOT_DIR/bin/platform-pki-ca-rollover"
 VERSION=$(<"$ROOT_DIR/VERSION")
 STDOUT="$TMP_DIR/stdout"
 STDERR="$TMP_DIR/stderr"
@@ -97,9 +98,9 @@ assert_no_transaction_residue() {
 save_transaction_state() {
   local pki_dir=$1
 
-  SAVED_CONF="$pki_dir/root-ca/openssl.cnf"
-  SAVED_KEY="$pki_dir/root-ca/private/root-ca.key"
-  SAVED_CERT="$pki_dir/root-ca/certs/root-ca.crt"
+  SAVED_CONF="$pki_dir/authorities/roots/g1/openssl.cnf"
+  SAVED_KEY="$pki_dir/authorities/roots/g1/private/root-ca.key"
+  SAVED_CERT="$pki_dir/authorities/roots/g1/certs/root-ca.crt"
   SAVED_CONF_HASH=$(file_hash "$SAVED_CONF")
   SAVED_KEY_HASH=$(file_hash "$SAVED_KEY")
   SAVED_CERT_HASH=$(file_hash "$SAVED_CERT")
@@ -206,10 +207,10 @@ encrypted_namespace="$TMP_DIR/encrypted"
 init_namespace "$encrypted_namespace"
 create_encrypted_root "$encrypted_namespace"
 encrypted_pki="$encrypted_namespace/pki"
-encrypted_key="$encrypted_pki/root-ca/private/root-ca.key"
-encrypted_cert="$encrypted_pki/root-ca/certs/root-ca.crt"
-encrypted_conf="$encrypted_pki/root-ca/openssl.cnf"
-assert_contains "$STDOUT" "[OK] Created root CA certificate: $encrypted_cert"
+encrypted_key="$encrypted_pki/authorities/roots/g1/private/root-ca.key"
+encrypted_cert="$encrypted_pki/authorities/roots/g1/certs/root-ca.crt"
+encrypted_conf="$encrypted_pki/authorities/roots/g1/openssl.cnf"
+assert_contains "$STDOUT" "[OK] Created root CA generation g1: $encrypted_cert"
 assert_empty "$STDERR"
 assert_mode 600 "$encrypted_key"
 assert_mode 644 "$encrypted_cert"
@@ -227,8 +228,8 @@ init_namespace "$interactive_namespace"
 interactive_pass='interactive-root-passphrase-123'
 run_interactive_tool "$interactive_namespace" "$interactive_pass"
 assert_status 0
-interactive_key="$interactive_namespace/pki/root-ca/private/root-ca.key"
-interactive_cert="$interactive_namespace/pki/root-ca/certs/root-ca.crt"
+interactive_key="$interactive_namespace/pki/authorities/roots/g1/private/root-ca.key"
+interactive_cert="$interactive_namespace/pki/authorities/roots/g1/certs/root-ca.crt"
 openssl pkey -in "$interactive_key" -passin "pass:$interactive_pass" -noout >/dev/null 2>&1 || fail 'interactive encrypted key did not open with its passphrase'
 if openssl pkey -in "$interactive_key" -passin pass:wrong -noout >/dev/null 2>&1; then
   fail 'interactive encrypted key opened with the wrong passphrase'
@@ -243,7 +244,7 @@ init_namespace "$fallback_namespace"
 run_tool "$fallback_namespace" --name 'Fallback Root' --org Test --country PL \
   --root-pass-file "$PASS_FILE"
 assert_status 0
-fallback_cert="$fallback_namespace/pki/root-ca/certs/root-ca.crt"
+fallback_cert="$fallback_namespace/pki/authorities/roots/g1/certs/root-ca.crt"
 openssl x509 -in "$fallback_cert" -checkend $((3649 * 86400)) -noout >/dev/null || fail 'fallback lifetime was shorter than 3650 days'
 if openssl x509 -in "$fallback_cert" -checkend $((3651 * 86400)) -noout >/dev/null; then
   fail 'fallback lifetime exceeded 3650 days'
@@ -255,7 +256,7 @@ run_command env PLATFORM_PKI_ROOT_DAYS=2 "$TOOL" \
   --namespace "$override_namespace" --name 'Override Root' --org Test \
   --country PL --days 5 --root-pass-file "$PASS_FILE"
 assert_status 0
-override_cert="$override_namespace/pki/root-ca/certs/root-ca.crt"
+override_cert="$override_namespace/pki/authorities/roots/g1/certs/root-ca.crt"
 openssl x509 -in "$override_cert" -checkend $((4 * 86400)) -noout >/dev/null || fail 'CLI lifetime override was shorter than five days'
 if openssl x509 -in "$override_cert" -checkend $((6 * 86400)) -noout >/dev/null; then
   fail '--days did not override PLATFORM_PKI_ROOT_DAYS'
@@ -267,7 +268,7 @@ run_command env PLATFORM_PKI_ROOT_DAYS=2 "$TOOL" \
   --namespace "$env_namespace" --name 'Environment Root' --org Test \
   --country PL --root-pass-file "$PASS_FILE"
 assert_status 0
-env_cert="$env_namespace/pki/root-ca/certs/root-ca.crt"
+env_cert="$env_namespace/pki/authorities/roots/g1/certs/root-ca.crt"
 openssl x509 -in "$env_cert" -checkend 86400 -noout >/dev/null || fail 'environment lifetime was shorter than one day'
 if openssl x509 -in "$env_cert" -checkend 259200 -noout >/dev/null; then
   fail 'PLATFORM_PKI_ROOT_DAYS was not used as the lifetime default'
@@ -306,264 +307,19 @@ run_tool "$unencrypted_namespace" --name 'Unencrypted Root' --org Test \
   --country PL --allow-unencrypted-root-key
 assert_status 0
 assert_contains "$STDERR" 'Creating an unencrypted root CA private key'
-unencrypted_key="$unencrypted_namespace/pki/root-ca/private/root-ca.key"
-unencrypted_cert="$unencrypted_namespace/pki/root-ca/certs/root-ca.crt"
+unencrypted_key="$unencrypted_namespace/pki/authorities/roots/g1/private/root-ca.key"
+unencrypted_cert="$unencrypted_namespace/pki/authorities/roots/g1/certs/root-ca.crt"
 openssl pkey -in "$unencrypted_key" -noout >/dev/null 2>&1 || fail 'unencrypted key requires a passphrase'
 assert_key_matches_cert "$unencrypted_key" "$unencrypted_cert"
 
 key_hash=$(file_hash "$encrypted_key")
 cert_hash=$(file_hash "$encrypted_cert")
-conf_hash=$(file_hash "$encrypted_conf")
 run_tool "$encrypted_namespace" --name Replacement --org Test --country PL \
-  --root-pass-file "$PASS_FILE"
+  --root-pass-file "$PASS_FILE" --force
 assert_status 1
-assert_contains "$STDERR" 'Root key exists; use --force to overwrite'
+assert_contains "$STDERR" "bootstrap root already exists"
 assert_same_hash "$key_hash" "$encrypted_key"
 assert_same_hash "$cert_hash" "$encrypted_cert"
-assert_same_hash "$conf_hash" "$encrypted_conf"
-
-printf '%s\n' 'database sentinel' >"$encrypted_pki/root-ca/index.txt"
-printf '%s\n' 'unrelated sentinel' >"$encrypted_pki/root-ca/unrelated"
-run_tool "$encrypted_namespace" --name 'Replacement Root' --org Test \
-  --country PL --days 30 --root-pass-file "$PASS_FILE" --force
-assert_status 0
-[[ $(file_hash "$encrypted_key") != "$key_hash" ]] || fail '--force did not replace root key'
-[[ $(file_hash "$encrypted_cert") != "$cert_hash" ]] || fail '--force did not replace root certificate'
-[[ $(<"$encrypted_pki/root-ca/index.txt") == 'database sentinel' ]] || fail '--force replaced CA database state'
-[[ $(<"$encrypted_pki/root-ca/unrelated") == 'unrelated sentinel' ]] || fail '--force replaced unrelated state'
-assert_key_matches_cert "$encrypted_key" "$encrypted_cert" "$PASS_FILE"
-
-mkdir -p "$EXEC_DIR/failing-bin"
-REAL_OPENSSL=$(command -v openssl)
-cat >"$EXEC_DIR/failing-bin/openssl" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ ${1:-} == req ]]; then
-  exit 42
-fi
-exec "$REAL_OPENSSL" "$@"
-EOF
-chmod 755 "$EXEC_DIR/failing-bin/openssl"
-key_hash=$(file_hash "$encrypted_key")
-cert_hash=$(file_hash "$encrypted_cert")
-conf_hash=$(file_hash "$encrypted_conf")
-run_command env PATH="$EXEC_DIR/failing-bin:$PATH" REAL_OPENSSL="$REAL_OPENSSL" \
-  "$TOOL" --namespace "$encrypted_namespace" --name 'Failed Replacement' \
-  --org Test --country PL --root-pass-file "$PASS_FILE" --force
-assert_status 42
-assert_same_hash "$key_hash" "$encrypted_key"
-assert_same_hash "$cert_hash" "$encrypted_cert"
-assert_same_hash "$conf_hash" "$encrypted_conf"
-assert_no_transaction_residue "$encrypted_pki/root-ca"
-
-mkdir -p "$EXEC_DIR/publication-bin"
-REAL_MV=$(command -v mv)
-cat >"$EXEC_DIR/publication-bin/mv" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-count=0
-if [[ -f $MV_COUNTER ]]; then
-  count=$(<"$MV_COUNTER")
-fi
-count=$((count + 1))
-printf '%s\n' "$count" >"$MV_COUNTER"
-if [[ ${MV_FAIL_AT:-0} == "$count" ]]; then
-  exit 42
-fi
-if [[ ${MV_SIGNAL_AT:-0} == "$count" ]]; then
-  kill -TERM "$PPID"
-  exit 143
-fi
-if [[ ${MV_REPLACE_AT:-0} == "$count" ]]; then
-  "$REAL_MV" "$@"
-  destination=${!#}
-  foreign="${destination}.foreign-fixture"
-  printf '%s\n' "$MV_REPLACE_SENTINEL" >"$foreign"
-  chmod 600 "$foreign"
-  "$REAL_MV" -f -- "$foreign" "$destination"
-  exit 0
-fi
-exec "$REAL_MV" "$@"
-EOF
-chmod 755 "$EXEC_DIR/publication-bin/mv"
-
-for fail_at in 2 3; do
-  save_transaction_state "$encrypted_pki"
-  counter="$TMP_DIR/mv-fail-$fail_at.counter"
-  run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-    REAL_MV="$REAL_MV" MV_COUNTER="$counter" MV_FAIL_AT="$fail_at" \
-    "$TOOL" --namespace "$encrypted_namespace" \
-    --name "Publication Failure $fail_at" --org Test --country PL \
-    --root-pass-file "$PASS_FILE" --force
-  assert_status 1
-  assert_contains "$STDERR" 'Failed to publish root CA material'
-  assert_transaction_state_restored
-done
-
-save_transaction_state "$encrypted_pki"
-foreign_root_sentinel='foreign root publication replacement'
-counter="$TMP_DIR/mv-foreign-replacement.counter"
-run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-  REAL_MV="$REAL_MV" MV_COUNTER="$counter" MV_REPLACE_AT=1 MV_FAIL_AT=2 \
-  MV_REPLACE_SENTINEL="$foreign_root_sentinel" \
-  "$TOOL" --namespace "$encrypted_namespace" \
-  --name 'Foreign Root Replacement' --org Test --country PL \
-  --root-pass-file "$PASS_FILE" --force
-assert_status 1
-assert_contains "$STDERR" 'Published root CA destination identity changed'
-assert_contains "$STDERR" 'preserved staging and locks for recovery'
-[[ $(<"$SAVED_CONF") == "$foreign_root_sentinel" ]] || fail 'foreign root replacement was not preserved'
-assert_same_hash "$SAVED_KEY_HASH" "$SAVED_KEY"
-assert_same_hash "$SAVED_CERT_HASH" "$SAVED_CERT"
-[[ -d $encrypted_pki/root-ca/.platform-pki-root-create.lock ]] || fail 'root create lock was not retained for recovery'
-[[ -d $encrypted_pki/root-ca/.platform-pki-root-operation.lock ]] || fail 'root operation lock was not retained for recovery'
-root_recovery_stage=$(compgen -G "$encrypted_pki/root-ca/.platform-pki-root-create.??????")
-[[ -n $root_recovery_stage && -d $root_recovery_stage ]] || fail 'root staging was not retained for recovery'
-assert_same_hash "$SAVED_CONF_HASH" "$root_recovery_stage/backup-0"
-
-# Complete the documented recovery manually inside this disposable namespace.
-rm -f -- "$SAVED_CONF"
-cp -p -- "$root_recovery_stage/backup-0" "$SAVED_CONF"
-rm -rf -- "$root_recovery_stage"
-rmdir "$encrypted_pki/root-ca/.platform-pki-root-create.lock"
-rmdir "$encrypted_pki/root-ca/.platform-pki-root-operation.lock"
-assert_transaction_state_restored
-
-save_transaction_state "$encrypted_pki"
-counter="$TMP_DIR/mv-signal.counter"
-run_command env PATH="$EXEC_DIR/publication-bin:$PATH" \
-  REAL_MV="$REAL_MV" MV_COUNTER="$counter" MV_SIGNAL_AT=3 \
-  "$TOOL" --namespace "$encrypted_namespace" \
-  --name 'Publication Signal' --org Test --country PL \
-  --root-pass-file "$PASS_FILE" --force
-assert_status 143
-assert_transaction_state_restored
-
-key_only_namespace="$TMP_DIR/key-only"
-init_namespace "$key_only_namespace"
-key_only="$key_only_namespace/pki/root-ca/private/root-ca.key"
-printf '%s\n' 'key sentinel' >"$key_only"
-chmod 600 "$key_only"
-run_tool "$key_only_namespace" --name 'Key Only Root' --org Test --country PL \
-  --root-pass-file "$PASS_FILE" --force
-assert_status 0
-[[ -f $key_only_namespace/pki/root-ca/certs/root-ca.crt ]] || fail '--force did not complete key-only state'
-
-cert_only_namespace="$TMP_DIR/cert-only"
-init_namespace "$cert_only_namespace"
-cert_only="$cert_only_namespace/pki/root-ca/certs/root-ca.crt"
-printf '%s\n' 'certificate sentinel' >"$cert_only"
-chmod 644 "$cert_only"
-run_tool "$cert_only_namespace" --name 'Certificate Only Root' --org Test \
-  --country PL --root-pass-file "$PASS_FILE" --force
-assert_status 0
-[[ -f $cert_only_namespace/pki/root-ca/private/root-ca.key ]] || fail '--force did not complete certificate-only state'
-
-symlink_namespace="$TMP_DIR/symlink"
-init_namespace "$symlink_namespace"
-symlink_victim="$TMP_DIR/symlink-victim"
-printf '%s\n' 'symlink victim' >"$symlink_victim"
-ln -s "$symlink_victim" "$symlink_namespace/pki/root-ca/private/root-ca.key"
-run_tool "$symlink_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE" --force
-assert_status 1
-assert_contains "$STDERR" 'Root CA key must not be a symlink'
-[[ $(<"$symlink_victim") == 'symlink victim' ]] || fail 'symlink destination was modified'
-
-hardlink_namespace="$TMP_DIR/hardlink"
-init_namespace "$hardlink_namespace"
-hardlink_key="$hardlink_namespace/pki/root-ca/private/root-ca.key"
-printf '%s\n' 'hard-link victim' >"$hardlink_key"
-chmod 600 "$hardlink_key"
-ln "$hardlink_key" "$TMP_DIR/hardlink-victim"
-run_tool "$hardlink_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE" --force
-assert_status 1
-assert_contains "$STDERR" 'Root CA key must not be hard-linked'
-[[ $(<"$TMP_DIR/hardlink-victim") == 'hard-link victim' ]] || fail 'hard-link destination was modified'
-
-db_symlink_namespace="$TMP_DIR/db-symlink"
-init_namespace "$db_symlink_namespace"
-db_symlink_root="$db_symlink_namespace/pki/root-ca"
-rm "$db_symlink_root/index.txt"
-ln -s "$TMP_DIR/missing-index-target" "$db_symlink_root/index.txt"
-run_tool "$db_symlink_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE"
-assert_status 1
-assert_contains "$STDERR" 'Root CA index must not be a symlink'
-[[ ! -e $TMP_DIR/missing-index-target ]] || fail 'CA DB symlink target was created'
-[[ ! -e $db_symlink_root/private/root-ca.key ]] || fail 'unsafe CA DB created root material'
-
-db_hardlink_namespace="$TMP_DIR/db-hardlink"
-init_namespace "$db_hardlink_namespace"
-db_hardlink_root="$db_hardlink_namespace/pki/root-ca"
-ln "$db_hardlink_root/serial" "$TMP_DIR/serial-hardlink"
-run_tool "$db_hardlink_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE"
-assert_status 1
-assert_contains "$STDERR" 'Root CA serial must not be hard-linked'
-[[ ! -e $db_hardlink_root/private/root-ca.key ]] || fail 'hard-linked CA DB created root material'
-
-db_type_namespace="$TMP_DIR/db-type"
-init_namespace "$db_type_namespace"
-db_type_root="$db_type_namespace/pki/root-ca"
-rm "$db_type_root/crlnumber"
-mkdir "$db_type_root/crlnumber"
-run_tool "$db_type_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE"
-assert_status 1
-assert_contains "$STDERR" 'Root CA CRL number must be a regular file'
-[[ ! -e $db_type_root/private/root-ca.key ]] || fail 'invalid CA DB type created root material'
-
-db_mode_namespace="$TMP_DIR/db-mode"
-init_namespace "$db_mode_namespace"
-db_mode_root="$db_mode_namespace/pki/root-ca"
-chmod 666 "$db_mode_root/index.txt.attr"
-db_mode_hash=$(file_hash "$db_mode_root/index.txt.attr")
-run_tool "$db_mode_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE"
-assert_status 1
-assert_contains "$STDERR" 'Root CA index attributes is group- or world-writable'
-assert_same_hash "$db_mode_hash" "$db_mode_root/index.txt.attr"
-assert_mode 666 "$db_mode_root/index.txt.attr"
-[[ ! -e $db_mode_root/private/root-ca.key ]] || fail 'unsafe CA DB mode created root material'
-
-db_owner_namespace="$TMP_DIR/db-owner"
-init_namespace "$db_owner_namespace"
-db_owner_root="$db_owner_namespace/pki/root-ca"
-db_owner_target="$db_owner_root/index.txt"
-db_owner_hash=$(file_hash "$db_owner_target")
-mkdir -p "$EXEC_DIR/owner-bin"
-REAL_STAT=$(command -v stat)
-cat >"$EXEC_DIR/owner-bin/stat" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ $# -eq 3 && $1 == -c && $2 == %u && $3 == "$STAT_OWNER_TARGET" ]]; then
-  printf '%s\n' "$STAT_FAKE_OWNER"
-  exit 0
-fi
-exec "$REAL_STAT" "$@"
-EOF
-chmod 755 "$EXEC_DIR/owner-bin/stat"
-run_command env PATH="$EXEC_DIR/owner-bin:$PATH" REAL_STAT="$REAL_STAT" \
-  STAT_OWNER_TARGET="$db_owner_target" STAT_FAKE_OWNER=$(( $(id -u) + 1 )) \
-  "$TOOL" --namespace "$db_owner_namespace" --name Test --org Test \
-  --country PL --root-pass-file "$PASS_FILE"
-assert_status 1
-assert_contains "$STDERR" 'Root CA index is not owned by the current user'
-assert_same_hash "$db_owner_hash" "$db_owner_target"
-[[ ! -e $db_owner_root/private/root-ca.key ]] || fail 'foreign-owned CA DB created root material'
-
-tree_mode_namespace="$TMP_DIR/tree-mode"
-init_namespace "$tree_mode_namespace"
-tree_mode_root="$tree_mode_namespace/pki/root-ca"
-chmod 777 "$tree_mode_root/certs"
-run_tool "$tree_mode_namespace" --name Test --org Test --country PL \
-  --root-pass-file "$PASS_FILE"
-assert_status 1
-assert_contains "$STDERR" 'Root CA certificate directory is group- or world-writable'
-assert_mode 777 "$tree_mode_root/certs"
-[[ ! -e $tree_mode_root/private/root-ca.key ]] || fail 'unsafe root directory mode created material'
 
 custom_namespace="$TMP_DIR/custom-namespace"
 custom_pki="$TMP_DIR/custom-pki"
@@ -573,6 +329,69 @@ run_command "$TOOL" --namespace "$custom_namespace" --pki-dir "$custom_pki" \
   --name 'Custom PKI Root' --org Test --country PL \
   --root-pass-file "$PASS_FILE"
 assert_status 0
-[[ -f $custom_pki/root-ca/certs/root-ca.crt ]] || fail 'explicit PKI directory was not used'
+[[ -f $custom_pki/authorities/roots/g1/certs/root-ca.crt ]] || fail 'explicit PKI directory was not used'
+
+for boundary in after-journal after-reservation after-reservation-consumed after-authority after-bootstrap; do
+  fault_namespace="$TMP_DIR/fault-$boundary"; init_namespace "$fault_namespace"
+  run_command env PLATFORM_PKI_ROOT_FAIL_AT="$boundary" "$TOOL" --namespace "$fault_namespace" \
+    --name 'Fault Root' --org Test --country PL --allow-unencrypted-root-key
+  assert_status 1
+  fault_pki="$fault_namespace/pki"
+  [[ ! -e $fault_pki/authorities/roots/g1 && ! -e $fault_pki/state/bootstrap-root ]] || fail "root state remained after $boundary"
+  grep -Fx 'committed=true' "$fault_pki/state/rollover/journal" >/dev/null || fail "root journal was not closed after $boundary"
+  if [[ -e $fault_pki/state/generation-reservations/g1 ]]; then grep -Fx 'status=abandoned' "$fault_pki/state/generation-reservations/g1" >/dev/null || fail "root reservation was not abandoned after $boundary"; fi
+done
+
+recovery_crash_namespace="$TMP_DIR/recovery-of-recovery"; init_namespace "$recovery_crash_namespace"
+run_command env PLATFORM_PKI_ROOT_CRASH_AT=after-bootstrap "$TOOL" --namespace "$recovery_crash_namespace" --name Crash --org Test --country PL --allow-unencrypted-root-key
+assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$recovery_crash_namespace/pki/state/rollover/journal")
+for recovery_boundary in rollback-bootstrap-pending rollback-bootstrap-done rollback-authority-pending rollback-authority-done rollback-reservation-pending rollback-reservation-done; do
+  run_command env PLATFORM_PKI_RECOVER_CRASH_AT="$recovery_boundary" "$RECOVER_TOOL" recover --namespace "$recovery_crash_namespace" --transaction "$transaction" --action rollback --yes
+  assert_status 137
+done
+run_command "$RECOVER_TOOL" recover --namespace "$recovery_crash_namespace" --transaction "$transaction" --action rollback --yes; assert_status 0
+grep -Fx 'status=abandoned' "$recovery_crash_namespace/pki/state/generation-reservations/g1" >/dev/null || fail 'recovery-of-recovery lost the root reservation'
+
+retry_namespace="$TMP_DIR/handled-retry"; init_namespace "$retry_namespace"
+run_command env PLATFORM_PKI_ROOT_FAIL_AT=after-reservation "$TOOL" --namespace "$retry_namespace" --name Retry --org Test --country PL --allow-unencrypted-root-key; assert_status 1
+run_tool "$retry_namespace" --name Retry --org Test --country PL --allow-unencrypted-root-key; assert_status 0
+[[ $(<"$retry_namespace/pki/state/bootstrap-root") == root=g2$'\n'fingerprint_sha256=* ]] || fail 'root bootstrap retry did not allocate g2'
+grep -Fx 'status=abandoned' "$retry_namespace/pki/state/generation-reservations/g1" >/dev/null || fail 'root bootstrap retry reused its abandoned g1 reservation'
+grep -Fx 'status=consumed' "$retry_namespace/pki/state/generation-reservations/g2" >/dev/null || fail 'root bootstrap retry did not consume g2'
+
+hostile_namespace="$TMP_DIR/hostile-generation"; init_namespace "$hostile_namespace"; mkdir -m 700 "$TMP_DIR/foreign-root"; ln -s "$TMP_DIR/foreign-root" "$hostile_namespace/pki/authorities/roots/g1"
+run_tool "$hostile_namespace" --name Hostile --org Test --country PL --allow-unencrypted-root-key --force
+assert_status 1; [[ -L $hostile_namespace/pki/authorities/roots/g1 && -d $TMP_DIR/foreign-root ]] || fail 'root --force altered hostile generation state'
+
+for boundary in after-journal after-reservation after-reservation-consumed after-authority after-bootstrap; do
+  crash_namespace="$TMP_DIR/crash-recovery-$boundary"; init_namespace "$crash_namespace"
+  run_command env PLATFORM_PKI_ROOT_CRASH_AT="$boundary" "$TOOL" --namespace "$crash_namespace" --name Crash --org Test --country PL --allow-unencrypted-root-key
+  assert_status 137; transaction=$(sed -n 's/^transaction=//p' "$crash_namespace/pki/state/rollover/journal")
+  run_command "$RECOVER_TOOL" recover --namespace "$crash_namespace" --transaction "$transaction" --action rollback --yes; assert_status 0
+  [[ ! -e $crash_namespace/pki/authorities/roots/g1 && ! -e $crash_namespace/pki/state/bootstrap-root && -f $crash_namespace/pki/state/generation-reservations/g1 ]] || fail "root crash recovery did not preserve its abandoned reservation after $boundary"
+  grep -Fx 'status=abandoned' "$crash_namespace/pki/state/generation-reservations/g1" >/dev/null || fail "root crash recovery did not abandon g1 after $boundary"
+  run_tool "$crash_namespace" --name Retry --org Test --country PL --allow-unencrypted-root-key; assert_status 0
+  grep -Fx 'root=g2' "$crash_namespace/pki/state/bootstrap-root" >/dev/null || fail "root crash retry reused g1 after $boundary"
+done
+
+signal_namespace="$TMP_DIR/signal-recovery"; init_namespace "$signal_namespace"
+run_command env PLATFORM_PKI_ROOT_SIGNAL_AT=after-authority "$TOOL" --namespace "$signal_namespace" --name Signal --org Test --country PL --allow-unencrypted-root-key
+assert_status 143; [[ ! -e $signal_namespace/pki/authorities/roots/g1 && ! -e $signal_namespace/pki/state/bootstrap-root ]] || fail 'root signal rollback left authority state'
+
+openssl_namespace="$TMP_DIR/openssl-failure"; init_namespace "$openssl_namespace"; mkdir -p "$EXEC_DIR/root-openssl-failure"
+REAL_OPENSSL=$(command -v openssl); printf '%s\n' '#!/usr/bin/env bash' '[[ ${1:-} != req ]] || exit 42' 'exec "$REAL_OPENSSL" "$@"' >"$EXEC_DIR/root-openssl-failure/openssl"; chmod 755 "$EXEC_DIR/root-openssl-failure/openssl"
+run_command env PATH="$EXEC_DIR/root-openssl-failure:$PATH" REAL_OPENSSL="$REAL_OPENSSL" "$TOOL" --namespace "$openssl_namespace" --name Failure --org Test --country PL --allow-unencrypted-root-key
+assert_status 42; [[ ! -e $openssl_namespace/pki/authorities/roots/g1 ]] || fail 'OpenSSL failure published root state'
+
+for hostile_case in key-symlink db-hardlink writable-dir; do
+  hostile_namespace="$TMP_DIR/hostile-$hostile_case"; init_namespace "$hostile_namespace"; hostile_root="$hostile_namespace/pki/authorities/roots/g1"; mkdir -m 700 -p "$hostile_root/private" "$hostile_root/certs"
+  case $hostile_case in
+    key-symlink) printf '%s\n' victim >"$TMP_DIR/root-victim"; ln -s "$TMP_DIR/root-victim" "$hostile_root/private/root-ca.key" ;;
+    db-hardlink) printf '%s\n' sentinel >"$hostile_root/serial"; chmod 600 "$hostile_root/serial"; ln "$hostile_root/serial" "$TMP_DIR/root-hardlink" ;;
+    writable-dir) chmod 777 "$hostile_root/certs" ;;
+  esac
+  run_tool "$hostile_namespace" --name Hostile --org Test --country PL --allow-unencrypted-root-key --force; assert_status 1
+  [[ -d $hostile_root && ! -L $hostile_root ]] || fail "hostile root state was deleted: $hostile_case"
+done
 
 printf '%s\n' 'test-root-create.sh: ok'

@@ -30,6 +30,11 @@ flags:
   arg: days
   help: Intermediate CA lifetime
   validate: days
+- long: --issuer-safety-days
+  arg: days
+  help: Required validity margin before the root expires
+  default: "1"
+  validate: days
 - long: --root-pass-file
   arg: path
   help: Restricted file containing the encrypted root-key passphrase
@@ -43,7 +48,7 @@ flags:
   help: Create an unencrypted intermediate private key
   conflicts: [--intermediate-pass-file]
 - long: --force
-  help: Replace existing intermediate CA material
+  help: Refuse unproven replacement and direct recovery to the journal workflow
 
 examples:
 - platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org "Platform Example" --country PL
@@ -53,6 +58,8 @@ footer: |-
   The namespace defaults to platform-infrastructure under the XDG
   configuration home. The PKI directory defaults to <namespace>/pki.
   The lifetime defaults to PLATFORM_PKI_INTERMEDIATE_DAYS or 1825 days.
+  Intermediate generation IDs are allocated monotonically under the bootstrap
+  root. A failed or interrupted bootstrap permanently abandons its reserved ID.
   Intermediate keys are encrypted unless
   --allow-unencrypted-intermediate-key is used. Passphrase files must be mode
   600 or stricter and have a first line of at least 16 characters containing

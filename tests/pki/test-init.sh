@@ -84,36 +84,31 @@ assert_contains "$STDOUT" "[OK] PKI directory ready: $pki_dir"
 
 for dir in \
   "$namespace" "$pki_dir" "$pki_dir/inventory" \
-  "$pki_dir/root-ca" "$pki_dir/root-ca/certs" \
-  "$pki_dir/root-ca/private" "$pki_dir/root-ca/crl" \
-  "$pki_dir/root-ca/newcerts" "$pki_dir/intermediate-ca" \
-  "$pki_dir/intermediate-ca/certs" "$pki_dir/intermediate-ca/csr" \
-  "$pki_dir/intermediate-ca/private" "$pki_dir/intermediate-ca/crl" \
-  "$pki_dir/intermediate-ca/newcerts" "$pki_dir/services" \
+  "$pki_dir/authorities" "$pki_dir/authorities/roots" "$pki_dir/authorities/intermediates" \
+  "$pki_dir/state" "$pki_dir/state/generation-reservations" "$pki_dir/state/rollover" \
+  "$pki_dir/locks" "$pki_dir/services" \
   "$pki_dir/export" "$pki_dir/export/ansible" "$pki_dir/backups"; do
   [[ -d $dir ]] || fail "missing directory: $dir"
   assert_mode 700 "$dir"
 done
 
-for file in \
-  "$pki_dir/inventory/services.yml.example" \
-  "$pki_dir/root-ca/index.txt" "$pki_dir/root-ca/index.txt.attr" \
-  "$pki_dir/root-ca/serial" "$pki_dir/root-ca/crlnumber" \
-  "$pki_dir/intermediate-ca/index.txt" \
-  "$pki_dir/intermediate-ca/index.txt.attr" \
-  "$pki_dir/intermediate-ca/serial" \
-  "$pki_dir/intermediate-ca/crlnumber"; do
-  [[ -f $file ]] || fail "missing file: $file"
-  assert_mode 600 "$file"
-done
+file="$pki_dir/inventory/services.yml.example"
+[[ -f $file ]] || fail "missing file: $file"
+assert_mode 600 "$file"
+
+mkdir -m 700 "$pki_dir/authorities/roots/g1" "$pki_dir/authorities/roots/g1/private" \
+  "$pki_dir/authorities/roots/g1/certs" "$pki_dir/authorities/intermediates/g1-i1"
+: >"$pki_dir/authorities/roots/g1/index.txt"
+: >"$pki_dir/authorities/intermediates/g1-i1/serial"
+chmod 600 "$pki_dir/authorities/roots/g1/index.txt" "$pki_dir/authorities/intermediates/g1-i1/serial"
 
 printf '%s\n' 'custom inventory' >"$pki_dir/inventory/services.yml"
 printf '%s\n' 'custom example' >"$pki_dir/inventory/services.yml.example"
-printf '%s\n' 'custom index' >"$pki_dir/root-ca/index.txt"
-printf '%s\n' 'custom serial' >"$pki_dir/intermediate-ca/serial"
-printf '%s\n' 'private key sentinel' >"$pki_dir/root-ca/private/root-ca.key"
-printf '%s\n' 'certificate sentinel' >"$pki_dir/root-ca/certs/root-ca.crt"
-chmod 600 "$pki_dir/root-ca/private/root-ca.key"
+printf '%s\n' 'custom index' >"$pki_dir/authorities/roots/g1/index.txt"
+printf '%s\n' 'custom serial' >"$pki_dir/authorities/intermediates/g1-i1/serial"
+printf '%s\n' 'private key sentinel' >"$pki_dir/authorities/roots/g1/private/root-ca.key"
+printf '%s\n' 'certificate sentinel' >"$pki_dir/authorities/roots/g1/certs/root-ca.crt"
+chmod 600 "$pki_dir/authorities/roots/g1/private/root-ca.key"
 
 run_tool --namespace "$namespace"
 assert_status 0
@@ -127,11 +122,11 @@ assert_empty "$STDERR"
 cmp "$ROOT_DIR/templates/pki/services.yml.example" \
   "$pki_dir/inventory/services.yml.example" >/dev/null || fail 'force did not refresh inventory example'
 assert_content 'custom inventory' "$pki_dir/inventory/services.yml"
-assert_content 'custom index' "$pki_dir/root-ca/index.txt"
-assert_content 'custom serial' "$pki_dir/intermediate-ca/serial"
-assert_content 'private key sentinel' "$pki_dir/root-ca/private/root-ca.key"
-assert_content 'certificate sentinel' "$pki_dir/root-ca/certs/root-ca.crt"
-assert_mode 600 "$pki_dir/root-ca/private/root-ca.key"
+assert_content 'custom index' "$pki_dir/authorities/roots/g1/index.txt"
+assert_content 'custom serial' "$pki_dir/authorities/intermediates/g1-i1/serial"
+assert_content 'private key sentinel' "$pki_dir/authorities/roots/g1/private/root-ca.key"
+assert_content 'certificate sentinel' "$pki_dir/authorities/roots/g1/certs/root-ca.crt"
+assert_mode 600 "$pki_dir/authorities/roots/g1/private/root-ca.key"
 
 run_tool --namespace /
 assert_status 1
@@ -198,8 +193,7 @@ assert_mode 755 "$TMP_DIR/race-victim"
 mkdir -p "$TMP_DIR/nested-link-namespace/pki" "$TMP_DIR/nested-link-victim"
 chmod 755 "$TMP_DIR/nested-link-namespace" \
   "$TMP_DIR/nested-link-namespace/pki" "$TMP_DIR/nested-link-victim"
-ln -s "$TMP_DIR/nested-link-victim" \
-  "$TMP_DIR/nested-link-namespace/pki/root-ca"
+ln -s "$TMP_DIR/nested-link-victim" "$TMP_DIR/nested-link-namespace/pki/authorities"
 run_tool --namespace "$TMP_DIR/nested-link-namespace"
 assert_status 1
 assert_empty "$STDOUT"
@@ -211,55 +205,55 @@ assert_mode 755 "$TMP_DIR/nested-link-victim"
 run_tool --namespace "$TMP_DIR/hard-link-namespace"
 assert_status 0
 hard_link_pki="$TMP_DIR/hard-link-namespace/pki"
+mkdir -m 700 "$hard_link_pki/services/custom" "$hard_link_pki/services/custom/private"
 printf '%s\n' 'hard link key sentinel' \
-  >"$hard_link_pki/root-ca/private/root-ca.key"
+  >"$hard_link_pki/services/custom/private/tls.key"
 rm "$hard_link_pki/inventory/services.yml.example"
-ln "$hard_link_pki/root-ca/private/root-ca.key" "$hard_link_pki/inventory/services.yml.example"
+ln "$hard_link_pki/services/custom/private/tls.key" "$hard_link_pki/inventory/services.yml.example"
 run_tool --namespace "$TMP_DIR/hard-link-namespace" --force
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Existing PKI state must not contain hard-linked files'
 assert_content 'hard link key sentinel' \
-  "$hard_link_pki/root-ca/private/root-ca.key"
+  "$hard_link_pki/services/custom/private/tls.key"
 
 run_tool --namespace "$TMP_DIR/template-link-namespace"
 assert_status 0
 template_link_pki="$TMP_DIR/template-link-namespace/pki"
+mkdir -m 700 "$template_link_pki/services/custom" "$template_link_pki/services/custom/private"
 printf '%s\n' 'symlink key sentinel' \
-  >"$template_link_pki/root-ca/private/root-ca.key"
+  >"$template_link_pki/services/custom/private/tls.key"
 rm "$template_link_pki/inventory/services.yml.example"
-ln -s "$template_link_pki/root-ca/private/root-ca.key" \
+ln -s "$template_link_pki/services/custom/private/tls.key" \
   "$template_link_pki/inventory/services.yml.example"
 run_tool --namespace "$TMP_DIR/template-link-namespace" --force
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Existing PKI state must not contain symlinks'
 assert_content 'symlink key sentinel' \
-  "$template_link_pki/root-ca/private/root-ca.key"
+  "$template_link_pki/services/custom/private/tls.key"
 
-mkdir -p "$TMP_DIR/directory-collision/pki/root-ca/index.txt"
-chmod 755 "$TMP_DIR/directory-collision" \
-  "$TMP_DIR/directory-collision/pki" \
-  "$TMP_DIR/directory-collision/pki/root-ca"
+mkdir -p "$TMP_DIR/directory-collision/pki/state"
+printf '%s\n' collision >"$TMP_DIR/directory-collision/pki/authorities"
+chmod 755 "$TMP_DIR/directory-collision" "$TMP_DIR/directory-collision/pki"
 run_tool --namespace "$TMP_DIR/directory-collision"
 assert_status 1
 assert_empty "$STDOUT"
-assert_contains "$STDERR" 'PKI file destination must be a non-symlink regular file'
+assert_contains "$STDERR" 'PKI directory destination must be a non-symlink directory'
 assert_mode 755 "$TMP_DIR/directory-collision"
 assert_mode 755 "$TMP_DIR/directory-collision/pki"
 [[ ! -e $TMP_DIR/directory-collision/pki/inventory ]] || \
   fail 'directory collision allowed partial initialization'
 
-mkdir -p "$TMP_DIR/fifo-collision/pki/intermediate-ca"
-chmod 755 "$TMP_DIR/fifo-collision" "$TMP_DIR/fifo-collision/pki" \
-  "$TMP_DIR/fifo-collision/pki/intermediate-ca"
-mkfifo "$TMP_DIR/fifo-collision/pki/intermediate-ca/serial"
+mkdir -p "$TMP_DIR/fifo-collision/pki"
+chmod 755 "$TMP_DIR/fifo-collision" "$TMP_DIR/fifo-collision/pki"
+mkfifo "$TMP_DIR/fifo-collision/pki/locks"
 run_tool --namespace "$TMP_DIR/fifo-collision"
 assert_status 1
 assert_empty "$STDOUT"
-assert_contains "$STDERR" 'PKI file destination must be a non-symlink regular file'
+assert_contains "$STDERR" 'PKI directory destination must be a non-symlink directory'
 assert_mode 755 "$TMP_DIR/fifo-collision/pki"
-[[ ! -e $TMP_DIR/fifo-collision/pki/root-ca ]] || \
+[[ ! -e $TMP_DIR/fifo-collision/pki/authorities/roots/g1 ]] || \
   fail 'FIFO collision allowed partial initialization'
 
 mkdir -p "$TMP_DIR/file-collision/pki"
@@ -270,19 +264,19 @@ assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'PKI directory destination must be a non-symlink directory'
 assert_mode 755 "$TMP_DIR/file-collision/pki"
-[[ ! -e $TMP_DIR/file-collision/pki/root-ca ]] || \
+[[ ! -e $TMP_DIR/file-collision/pki/authorities/roots/g1 ]] || \
   fail 'file collision allowed partial initialization'
 
-mkdir -p "$TMP_DIR/unsafe-mode/pki/root-ca"
+mkdir -p "$TMP_DIR/unsafe-mode/pki/state"
 chmod 755 "$TMP_DIR/unsafe-mode" "$TMP_DIR/unsafe-mode/pki"
-chmod 777 "$TMP_DIR/unsafe-mode/pki/root-ca"
+chmod 777 "$TMP_DIR/unsafe-mode/pki/state"
 run_tool --namespace "$TMP_DIR/unsafe-mode"
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'PKI directory destination is group- or world-writable'
 assert_mode 755 "$TMP_DIR/unsafe-mode"
 assert_mode 755 "$TMP_DIR/unsafe-mode/pki"
-assert_mode 777 "$TMP_DIR/unsafe-mode/pki/root-ca"
+assert_mode 777 "$TMP_DIR/unsafe-mode/pki/state"
 [[ ! -e $TMP_DIR/unsafe-mode/pki/inventory ]] || \
   fail 'unsafe late directory allowed partial initialization'
 
@@ -290,13 +284,11 @@ run_tool --namespace "$TMP_DIR/writable-file"
 assert_status 0
 writable_file_pki="$TMP_DIR/writable-file/pki"
 chmod 666 "$writable_file_pki/inventory/services.yml.example"
-printf '%s\n' 'database sentinel' >"$writable_file_pki/root-ca/index.txt"
 run_tool --namespace "$TMP_DIR/writable-file"
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'PKI file destination is group- or world-writable'
 assert_mode 666 "$writable_file_pki/inventory/services.yml.example"
-assert_content 'database sentinel' "$writable_file_pki/root-ca/index.txt"
 
 run_tool --namespace "$TMP_DIR/writable-private"
 assert_status 0

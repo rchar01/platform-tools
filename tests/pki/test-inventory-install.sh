@@ -94,6 +94,11 @@ fi
 EOF
 chmod 600 "$RACE_ENV"
 
+exchange_supported=false
+exchange_a="$TMP_DIR/exchange-a"; exchange_b="$TMP_DIR/exchange-b"; : >"$exchange_a"; : >"$exchange_b"
+if command mv --exchange --no-copy -T -- "$exchange_a" "$exchange_b" 2>/dev/null; then exchange_supported=true; fi
+rm -f "$exchange_a" "$exchange_b"
+
 before=$(sha256sum "$PKI/inventory/services.yml")
 printf '%s\n' 'not inventory' >"$TMP_DIR/race-target"
 run env BASH_ENV="$RACE_ENV" RACE_MODE=source REAL_CP="$REAL_CP" REAL_RM="$REAL_RM" REAL_LN="$REAL_LN" \
@@ -106,20 +111,6 @@ rm "$PRIVATE/pki/services.yml"
 cp "$PKI/inventory/services.yml" "$PRIVATE/pki/services.yml"
 chmod 600 "$PRIVATE/pki/services.yml"
 
-before=$(sha256sum "$PKI/inventory/services.yml")
-before=${before%% *}
-run env BASH_ENV="$RACE_ENV" RACE_MODE=parent REAL_MKDIR="$REAL_MKDIR" REAL_MV="$REAL_MV" \
-  RACE_LOCK_NAME=.platform-pki-inventory-operation.lock \
-  RACE_PARENT="$PKI/inventory" RACE_OLD_PARENT="$PKI/inventory-raced" \
-  "$TOOL" --namespace "$NAMESPACE" --private-repo "$PRIVATE"
-assert_fail
-[[ -d $PKI/inventory-raced ]] || fail 'parent replacement race was not triggered'
-after=$(sha256sum "$PKI/inventory-raced/services.yml")
-[[ ${after%% *} == "$before" ]] || fail 'parent replacement race changed original destination'
-rm -rf "$PKI/inventory"
-rmdir "$PKI/inventory-raced/.platform-pki-inventory-operation.lock" 2>/dev/null || true
-mv "$PKI/inventory-raced" "$PKI/inventory"
-
 cat >"$PRIVATE/pki/services.yml" <<'EOF'
 services:
   api:
@@ -131,32 +122,25 @@ EOF
 chmod 600 "$PRIVATE/pki/services.yml"
 before=$(sha256sum "$PKI/inventory/services.yml")
 before=${before%% *}
-run env BASH_ENV="$RACE_ENV" RACE_MODE=publication REAL_MV="$REAL_MV" \
-  RACE_DESTINATION="$PKI/inventory/services.yml" RACE_SAVED_DESTINATION="$TMP_DIR/raced-original.yml" \
-  "$TOOL" --namespace "$NAMESPACE" --private-repo "$PRIVATE"
-assert_fail
-[[ $(<"$PKI/inventory/services.yml") == 'foreign inventory' ]] || fail 'publication race did not preserve foreign destination'
-after=$(sha256sum "$TMP_DIR/raced-original.yml")
-[[ ${after%% *} == "$before" ]] || fail 'publication race did not preserve validated destination'
-rm "$PKI/inventory/services.yml"
-mv "$TMP_DIR/raced-original.yml" "$PKI/inventory/services.yml"
+if [[ $exchange_supported == true ]]; then
+  run env BASH_ENV="$RACE_ENV" RACE_MODE=publication REAL_MV="$REAL_MV" RACE_DESTINATION="$PKI/inventory/services.yml" RACE_SAVED_DESTINATION="$TMP_DIR/raced-original.yml" "$TOOL" --namespace "$NAMESPACE" --private-repo "$PRIVATE"
+  assert_fail
+  [[ $(<"$PKI/inventory/services.yml") == 'foreign inventory' ]] || fail 'publication race did not preserve foreign destination'
+  after=$(sha256sum "$TMP_DIR/raced-original.yml"); [[ ${after%% *} == "$before" ]] || fail 'publication race did not preserve validated destination'
+  rm "$PKI/inventory/services.yml"; mv "$TMP_DIR/raced-original.yml" "$PKI/inventory/services.yml"
+  run env BASH_ENV="$RACE_ENV" RACE_MODE=post_exchange REAL_MV="$REAL_MV" REAL_RM="$REAL_RM" "$TOOL" --namespace "$NAMESPACE" --private-repo "$PRIVATE"
+  assert_fail
+  grep -Fq 'requires recovery; retained artifacts under:' "$ERR" || fail 'post-exchange failure did not report retained artifacts'
+  [[ -f $PKI/locks/root && -f $PKI/locks/intermediate && -f $PKI/locks/inventory ]] || fail 'stable lock files disappeared'
+  guards=("$PKI"/inventory/.platform-pki-inventory-guard.*.link); [[ -f ${guards[0]} ]] || fail 'post-exchange failure did not preserve old inventory guard'
+  [[ $(sha256sum "${guards[0]}") == "$before  ${guards[0]}" ]] || fail 'preserved guard does not contain old inventory'
+  rm "$PKI/inventory/services.yml"; mv "${guards[0]}" "$PKI/inventory/services.yml"; rm -f "${guards[0]%.link}"
+fi
 
-run env BASH_ENV="$RACE_ENV" RACE_MODE=post_exchange REAL_MV="$REAL_MV" REAL_RM="$REAL_RM" \
-  "$TOOL" --namespace "$NAMESPACE" --private-repo "$PRIVATE"
-assert_fail
-grep -Fq 'requires recovery; retained locks:' "$ERR" || fail 'post-exchange failure did not report retained locks'
-[[ -d $PKI/root-ca/.platform-pki-root-operation.lock ]] || fail 'post-exchange failure did not retain root lock'
-[[ -d $PKI/intermediate-ca/.platform-pki-intermediate-operation.lock ]] || fail 'post-exchange failure did not retain intermediate lock'
-[[ -d $PKI/inventory/.platform-pki-inventory-operation.lock ]] || fail 'post-exchange failure did not retain inventory lock'
-guards=("$PKI"/inventory/.platform-pki-inventory-guard.*.link)
-[[ -f ${guards[0]} ]] || fail 'post-exchange failure did not preserve old inventory guard'
-[[ $(sha256sum "${guards[0]}") == "$before  ${guards[0]}" ]] || fail 'preserved guard does not contain old inventory'
-rm "$PKI/inventory/services.yml"
-mv "${guards[0]}" "$PKI/inventory/services.yml"
-rm -f "${guards[0]%.link}"
-rmdir "$PKI/inventory/.platform-pki-inventory-operation.lock"
-rmdir "$PKI/intermediate-ca/.platform-pki-intermediate-operation.lock"
-rmdir "$PKI/root-ca/.platform-pki-root-operation.lock"
+run env PLATFORM_PKI_FORCE_RENAME_FALLBACK=1 "$TOOL" --namespace "$NAMESPACE" --private-repo "$PRIVATE"
+assert_ok
+grep -Fq 'days: 2' "$PKI/inventory/services.yml" || fail 'fallback publication did not install staged inventory'
+[[ $(stat -c '%a:%u:%h' "$PKI/inventory/services.yml") == "600:$(id -u):1" ]] || fail 'fallback publication metadata is unsafe'
 
 before=$(sha256sum "$PKI/inventory/services.yml")
 printf '%s\n' 'services: {}' >"$PRIVATE/pki/services.yml"

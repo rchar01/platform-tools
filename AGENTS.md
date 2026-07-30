@@ -39,7 +39,7 @@
 - `reports/*` is ignored except `reports/.gitkeep`; use `reports/platform-vm-env-collect/` only for local analysis copies.
 - PKI passphrase files are plaintext secrets; keep them outside Git, mode `600` or stricter, first-line passphrase length at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts such as `/run/secrets`.
 - PKI backups are encrypted with `age` by default; plain `.tar.gz` backups require the explicit `--allow-plain-backup` flag and still contain secrets.
-- PKI CA mutations use shared operation locks. Acquire the root CA lock before the intermediate CA lock whenever both are needed, release in reverse order, and hold the applicable lock across all protected reads, mutations, and sequential publication. Service issue and renewal must use the intermediate lock when migrated.
+- PKI operations use persistent shared lock files under `pki/locks/`. Acquire lifecycle before root, intermediate, inventory, and export locks as needed, release in reverse order, and hold locks across protected reads, mutations, and publication. After locking, normal commands must reject unresolved migration or rollover journals before reading operational snapshots.
 - Service signing must reject OpenSSL include/global directives and signing paths outside staged CA state; snapshot validated publication destinations under lock and recheck identity immediately before each replacement.
 
 ## Tooling Notes

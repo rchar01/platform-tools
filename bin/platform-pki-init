@@ -174,12 +174,10 @@ root_command() {
 
     for path in \
       "$NAMESPACE" "$PKI_DIR" "$PKI_DIR/inventory" \
-      "$PKI_DIR/root-ca" "$PKI_DIR/root-ca/certs" \
-      "$PKI_DIR/root-ca/private" "$PKI_DIR/root-ca/crl" \
-      "$PKI_DIR/root-ca/newcerts" "$PKI_DIR/intermediate-ca" \
-      "$PKI_DIR/intermediate-ca/certs" "$PKI_DIR/intermediate-ca/csr" \
-      "$PKI_DIR/intermediate-ca/private" "$PKI_DIR/intermediate-ca/crl" \
-      "$PKI_DIR/intermediate-ca/newcerts" "$PKI_DIR/services" \
+      "$PKI_DIR/authorities" "$PKI_DIR/authorities/roots" \
+      "$PKI_DIR/authorities/intermediates" "$PKI_DIR/state" \
+      "$PKI_DIR/state/generation-reservations" "$PKI_DIR/state/rollover" \
+      "$PKI_DIR/locks" "$PKI_DIR/services" \
       "$PKI_DIR/export" "$PKI_DIR/export/ansible" "$PKI_DIR/backups"; do
       if [[ -e $path || -L $path ]]; then
         [[ -d $path && ! -L $path ]] || pki_die "PKI directory destination must be a non-symlink directory: $path"
@@ -193,14 +191,7 @@ root_command() {
       fi
     done
 
-    for path in \
-      "$PKI_DIR/root-ca/index.txt" "$PKI_DIR/root-ca/index.txt.attr" \
-      "$PKI_DIR/root-ca/serial" "$PKI_DIR/root-ca/crlnumber" \
-      "$PKI_DIR/intermediate-ca/index.txt" \
-      "$PKI_DIR/intermediate-ca/index.txt.attr" \
-      "$PKI_DIR/intermediate-ca/serial" \
-      "$PKI_DIR/intermediate-ca/crlnumber" \
-      "$PKI_DIR/inventory/services.yml.example"; do
+    path="$PKI_DIR/inventory/services.yml.example"
       if [[ -e $path || -L $path ]]; then
         [[ -f $path && ! -L $path ]] || pki_die "PKI file destination must be a non-symlink regular file: $path"
         owner=$(stat -c '%u' "$path") || pki_die "Cannot inspect PKI file destination owner: $path"
@@ -211,7 +202,6 @@ root_command() {
           pki_die "PKI file destination is group- or world-writable: $path"
         fi
       fi
-    done
   }
 
   NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
@@ -244,16 +234,11 @@ root_command() {
 
   for dir in \
     "$PKI_DIR/inventory" \
-    "$PKI_DIR/root-ca" "$PKI_DIR/root-ca/certs" "$PKI_DIR/root-ca/private" "$PKI_DIR/root-ca/crl" "$PKI_DIR/root-ca/newcerts" \
-    "$PKI_DIR/intermediate-ca" "$PKI_DIR/intermediate-ca/certs" "$PKI_DIR/intermediate-ca/csr" "$PKI_DIR/intermediate-ca/private" "$PKI_DIR/intermediate-ca/crl" "$PKI_DIR/intermediate-ca/newcerts" \
+    "$PKI_DIR/authorities" "$PKI_DIR/authorities/roots" "$PKI_DIR/authorities/intermediates" \
+    "$PKI_DIR/state" "$PKI_DIR/state/generation-reservations" "$PKI_DIR/state/rollover" "$PKI_DIR/locks" \
     "$PKI_DIR/services" "$PKI_DIR/export" "$PKI_DIR/export/ansible" "$PKI_DIR/backups"; do
     prepare_private_path "$dir" 'PKI directory'
   done
-
-  pki_init_ca_db "$PKI_DIR/root-ca"
-  pki_init_ca_db "$PKI_DIR/intermediate-ca"
-  chmod 600 "$PKI_DIR/root-ca/index.txt" "$PKI_DIR/root-ca/serial" "$PKI_DIR/root-ca/crlnumber" "$PKI_DIR/root-ca/index.txt.attr"
-  chmod 600 "$PKI_DIR/intermediate-ca/index.txt" "$PKI_DIR/intermediate-ca/serial" "$PKI_DIR/intermediate-ca/crlnumber" "$PKI_DIR/intermediate-ca/index.txt.attr"
 
   copy_template "$TEMPLATE_DIR/services.yml.example" "$PKI_DIR/inventory/services.yml.example"
 

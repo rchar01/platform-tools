@@ -35,6 +35,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
 - Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
+- Inspect or migrate legacy PKI CA state: use [`pki-openssl.md`](./pki-openssl.md#migrate-legacy-ca-state).
 - Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).
 - Clean up one known Proxmox VM: use [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md).
@@ -59,6 +60,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki-print-cert`](../bin/platform-pki-print-cert): Certificate detail printing helper.
 - [`../bin/platform-pki-export-ansible`](../bin/platform-pki-export-ansible): Ansible export helper for generated PKI files.
 - [`../bin/platform-pki-backup`](../bin/platform-pki-backup): PKI state backup helper.
+- [`../bin/platform-pki-ca-rollover`](../bin/platform-pki-ca-rollover): Generation state inspection and explicit legacy migration helper.
 - [`../bin/platform-bastion-policy`](../bin/platform-bastion-policy): Bastion access-policy validation and rendering helper.
 - [`../assets/brand/`](../assets/brand/): Project brand assets for release metadata and forge profiles.
 - [`handoffs/`](./handoffs/): Handoff notes for downstream coding agents and platform repositories.

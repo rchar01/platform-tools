@@ -11,6 +11,12 @@ VERSION=$(<"$ROOT_DIR/VERSION")
 STDOUT="$TMP_DIR/stdout"
 STDERR="$TMP_DIR/stderr"
 STATUS=0
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=TestRoot \
+  -keyout "$TMP_DIR/root.key" -out "$TMP_DIR/root.crt" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -nodes -subj /CN=TestIntermediate \
+  -keyout "$TMP_DIR/intermediate.key" -out "$TMP_DIR/intermediate.csr" >/dev/null 2>&1
+openssl x509 -req -in "$TMP_DIR/intermediate.csr" -CA "$TMP_DIR/root.crt" -CAkey "$TMP_DIR/root.key" \
+  -CAcreateserial -days 300 -out "$TMP_DIR/intermediate.crt" >/dev/null 2>&1
 
 fail() {
   printf 'test-list-expiry.sh: %s\n' "$*" >&2
@@ -43,7 +49,12 @@ assert_contains() {
 
 create_inventory() {
   local pki_dir=$1 service=$2
-  mkdir -p "$pki_dir/inventory" "$pki_dir/root-ca" "$pki_dir/intermediate-ca"
+  mkdir -p "$pki_dir/inventory" "$pki_dir/authorities/roots/g1/certs" "$pki_dir/authorities/intermediates/g1-i1/certs" "$pki_dir/locks" "$pki_dir/state/rollover"
+  find "$pki_dir" -type d -exec chmod 700 {} +
+  cp "$TMP_DIR/root.crt" "$pki_dir/authorities/roots/g1/certs/root-ca.crt"
+  cp "$TMP_DIR/intermediate.crt" "$pki_dir/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+  printf 'root=g1\nintermediate=g1-i1\n' >"$pki_dir/state/active-issuer"
+  chmod 600 "$pki_dir/state/active-issuer"
   printf 'services:\n  %s:\n    common_name: %s.example.internal\n    dns:\n      - %s.example.internal\n' \
     "$service" "$service" "$service" >"$pki_dir/inventory/services.yml"
   chmod 600 "$pki_dir/inventory/services.yml"
@@ -142,9 +153,14 @@ EOF
 create_mixed_inventory() {
   local pki_dir=$1 first=$2 second=$3
   mkdir -p "$pki_dir/inventory" \
-    "$pki_dir/root-ca" "$pki_dir/intermediate-ca" \
+    "$pki_dir/authorities/roots/g1/certs" "$pki_dir/authorities/intermediates/g1-i1/certs" "$pki_dir/locks" "$pki_dir/state/rollover" \
     "$pki_dir/services/critical-boundary/certs" \
     "$pki_dir/services/warn-boundary/certs"
+  find "$pki_dir" -type d -exec chmod 700 {} +
+  cp "$TMP_DIR/root.crt" "$pki_dir/authorities/roots/g1/certs/root-ca.crt"
+  cp "$TMP_DIR/intermediate.crt" "$pki_dir/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+  printf 'root=g1\nintermediate=g1-i1\n' >"$pki_dir/state/active-issuer"
+  chmod 600 "$pki_dir/state/active-issuer"
   printf 'services:\n  %s:\n    common_name: %s.example.internal\n    dns:\n      - %s.example.internal\n  warn-boundary:\n    common_name: warn.example.internal\n    dns:\n      - warn.example.internal\n  %s:\n    common_name: %s.example.internal\n    dns:\n      - %s.example.internal\n' \
     "$first" "$first" "$first" "$second" "$second" "$second" >"$pki_dir/inventory/services.yml"
   chmod 600 "$pki_dir/inventory/services.yml"

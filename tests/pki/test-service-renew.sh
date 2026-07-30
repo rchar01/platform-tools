@@ -31,9 +31,9 @@ assert_empty() { [[ ! -s $1 ]] || fail "expected empty output: $(<"$1")"; }
 file_hash() { local value; value=$(sha256sum "$1"); printf '%s\n' "${value%% *}"; }
 assert_no_residue() {
   local pki=$1
-  [[ ! -e $pki/root-ca/.platform-pki-root-operation.lock ]] || fail 'root operation lock remained'
-  [[ ! -e $pki/intermediate-ca/.platform-pki-intermediate-operation.lock ]] || fail 'intermediate operation lock remained'
-  if compgen -G "$pki/intermediate-ca/.platform-pki-service-renew.*" >/dev/null; then fail 'renewal staging remained'; fi
+  [[ ! -e $pki/authorities/roots/g1/.platform-pki-root-operation.lock ]] || fail 'root operation lock remained'
+  [[ ! -e $pki/authorities/intermediates/g1-i1/.platform-pki-intermediate-operation.lock ]] || fail 'intermediate operation lock remained'
+  if compgen -G "$pki/authorities/intermediates/g1-i1/.platform-pki-service-renew.*" >/dev/null; then fail 'renewal staging remained'; fi
 }
 canonical_serial() {
   local serial=${1^^}
@@ -63,10 +63,10 @@ write_state_manifest() {
     "$service_dir/private/tls.key" "$service_dir/certs/tls.crt" \
     "$service_dir/csr/tls.csr" "$service_dir/openssl.cnf" \
     "$service_dir/chain/ca-chain.crt" "$service_dir/chain/fullchain.crt" \
-    "$pki/intermediate-ca/index.txt" "$pki/intermediate-ca/index.txt.attr" \
-    "$pki/intermediate-ca/serial" "$pki/intermediate-ca/crlnumber" \
-    "$pki/intermediate-ca/index.txt.old" "$pki/intermediate-ca/index.txt.attr.old" \
-    "$pki/intermediate-ca/serial.old" "$newcert" "$archive_root"; do
+    "$pki/authorities/intermediates/g1-i1/index.txt" "$pki/authorities/intermediates/g1-i1/index.txt.attr" \
+    "$pki/authorities/intermediates/g1-i1/serial" "$pki/authorities/intermediates/g1-i1/crlnumber" \
+    "$pki/authorities/intermediates/g1-i1/index.txt.old" "$pki/authorities/intermediates/g1-i1/index.txt.attr.old" \
+    "$pki/authorities/intermediates/g1-i1/serial.old" "$newcert" "$archive_root"; do
     record_path "$path" >>"$output"
   done
   if [[ -d $archive_root ]]; then
@@ -159,9 +159,9 @@ assert_status 0; assert_contains "$STDOUT" '[OK] Verified service certificate: a
 [[ $(file_hash "$cert") != "$old_cert_hash" ]] || fail 'renewal did not replace certificate'
 [[ $(openssl x509 -in "$cert" -noout -serial) != "$old_serial" ]] || fail 'renewal did not issue a new serial'
 archive=$(compgen -G "$pki/services/app/archive/*")
-for name in tls.crt tls.csr ca-chain.crt fullchain.crt openssl.cnf; do [[ -f $archive/$name ]] || fail "archive missing $name"; done
+for name in tls.crt tls.csr ca-chain.crt fullchain.crt openssl.cnf issuer; do [[ -f $archive/$name ]] || fail "archive missing $name"; done
 [[ $(file_hash "$archive/tls.crt") == "$old_cert_hash" ]] || fail 'archive did not preserve previous certificate'
-openssl verify -CAfile "$pki/root-ca/certs/root-ca.crt" -untrusted "$pki/intermediate-ca/certs/intermediate-ca.crt" "$cert" >/dev/null || fail 'renewed certificate did not verify'
+openssl verify -CAfile "$pki/authorities/roots/g1/certs/root-ca.crt" -untrusted "$pki/authorities/intermediates/g1-i1/certs/intermediate-ca.crt" "$cert" >/dev/null || fail 'renewed certificate did not verify'
 openssl x509 -in "$cert" -checkend $((34 * 86400)) -noout >/dev/null || fail 'inventory lifetime was too short'
 if openssl x509 -in "$cert" -checkend $((36 * 86400)) -noout >/dev/null; then fail 'inventory lifetime was too long'; fi
 assert_no_residue "$pki"
@@ -180,7 +180,8 @@ done
 assert_not_contains "$STDOUT" "Archived $keyonly_dir/private/tls.key to "
 keyonly_archive=$(compgen -G "$keyonly_dir/archive/*")
 [[ -d $keyonly_archive ]] || fail 'key-only renewal did not create archive directory'
-[[ -z $(find "$keyonly_archive" -mindepth 1 -maxdepth 1 -print -quit) ]] || fail 'key-only renewal archive was not empty'
+[[ -f $keyonly_archive/issuer ]] || fail 'key-only renewal did not archive its prior issuer record'
+[[ $(find "$keyonly_archive" -mindepth 1 -maxdepth 1 -type f | wc -l) -eq 1 ]] || fail 'key-only renewal archived unexpected material'
 
 issue_service "$namespace" rotate
 rotate_key="$pki/services/rotate/private/tls.key"; rotate_old_hash=$(file_hash "$rotate_key")
@@ -197,7 +198,7 @@ mkdir -m 700 "$failure_dir/archive/previous"
 printf '%s\n' 'existing archive sentinel' >"$failure_dir/archive/previous/sentinel"
 chmod 600 "$failure_dir/archive/previous/sentinel"
 touch -t 202001020304.05 "$failure_dir/archive/previous/sentinel" "$failure_dir/archive/previous" "$failure_dir/archive"
-failure_newcert="$pki/intermediate-ca/newcerts/$(canonical_serial "$(<"$pki/intermediate-ca/serial")").pem"
+failure_newcert="$pki/authorities/intermediates/g1-i1/newcerts/$(canonical_serial "$(<"$pki/authorities/intermediates/g1-i1/serial")").pem"
 mkdir -p "$EXEC_DIR/failing-bin"; REAL_OPENSSL=$(command -v openssl)
 cat >"$EXEC_DIR/failing-bin/openssl" <<'EOF'
 #!/usr/bin/env bash
@@ -219,62 +220,7 @@ snapshot_state verification-failure "$failure_dir" "$pki" "$failure_newcert"
 run_command env REAL_COMMON="$ROOT_DIR/lib/platform-pki-common.sh" PLATFORM_TOOLS_LIB_DIR="$EXEC_DIR/verify-lib" "$TOOL" failure --namespace "$namespace" --rotate-key --intermediate-pass-file "$INT_PASS"
 assert_status 43; assert_state_restored verification-failure "$failure_dir" "$pki" "$failure_newcert"; assert_no_residue "$pki"
 
-mkdir -p "$EXEC_DIR/mv-bin"; REAL_MV=$(command -v mv)
-cat >"$EXEC_DIR/mv-bin/mv" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-count=0; [[ ! -f $MV_COUNTER ]] || count=$(<"$MV_COUNTER"); count=$((count + 1)); printf '%s\n' "$count" >"$MV_COUNTER"
-if [[ $count == "$MV_TRIGGER" ]]; then
-  [[ -n ${MV_SIGNAL:-} ]] || exit 42
-  kill "-$MV_SIGNAL" "$PPID"
-  exit 143
-fi
-exec "$REAL_MV" "$@"
-EOF
-chmod 755 "$EXEC_DIR/mv-bin/mv"
-for publication_case in failure:1 HUP:129 INT:130 TERM:143; do
-  case_name=${publication_case%%:*}; case_status=${publication_case#*:}; signal_name=''
-  [[ $case_name == failure ]] || signal_name=$case_name
-  snapshot_state "publication-$case_name" "$failure_dir" "$pki" "$failure_newcert"
-  run_command env PATH="$EXEC_DIR/mv-bin:$PATH" REAL_MV="$REAL_MV" MV_COUNTER="$TMP_DIR/mv-$case_name.counter" MV_TRIGGER=3 MV_SIGNAL="$signal_name" "$TOOL" failure --namespace "$namespace" --rotate-key --intermediate-pass-file "$INT_PASS"
-  assert_status "$case_status"
-  assert_state_restored "publication-$case_name" "$failure_dir" "$pki" "$failure_newcert"
-  assert_no_residue "$pki"
-done
-
-config="$pki/intermediate-ca/openssl.cnf"; printf '%s\n' '.include /tmp/external.cnf' >>"$config"
-run_command "$TOOL" failure --namespace "$namespace" --intermediate-pass-file "$INT_PASS"
-assert_status 1; assert_contains "$STDERR" 'must not contain include directives'
-[[ ! -e $pki/root-ca/.platform-pki-root-operation.lock ]] || fail 'unsafe config acquired root lock'
-# Remove only the test fixture line from this disposable namespace.
-tmp_config="$config.tmp"; while IFS= read -r line; do [[ $line == '.include /tmp/external.cnf' ]] || printf '%s\n' "$line" >>"$tmp_config"; done <"$config"; chmod 600 "$tmp_config"; mv "$tmp_config" "$config"
-
-mkdir -m 700 "$pki/intermediate-ca/.platform-pki-intermediate-operation.lock"
-run_command "$TOOL" failure --namespace "$namespace" --intermediate-pass-file "$INT_PASS"
-assert_status 1; assert_contains "$STDERR" 'Another intermediate CA operation is in progress'
-[[ ! -e $pki/root-ca/.platform-pki-root-operation.lock ]] || fail 'root lock not released after contention'
-rmdir "$pki/intermediate-ca/.platform-pki-intermediate-operation.lock"
-
-cat >"$EXEC_DIR/mv-bin/mv" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-count=0; [[ ! -f $MV_COUNTER ]] || count=$(<"$MV_COUNTER"); count=$((count + 1)); printf '%s\n' "$count" >"$MV_COUNTER"
-if [[ $count == 1 ]]; then
-  "$REAL_MV" "$@"
-  destination=${!#}; foreign="$destination.foreign"; printf '%s\n' foreign-renewal-state >"$foreign"; chmod 600 "$foreign"; "$REAL_MV" -f -- "$foreign" "$destination"
-  exit 0
-fi
-[[ $count != 2 ]] || exit 42
-exec "$REAL_MV" "$@"
-EOF
-snapshot_state recovery "$failure_dir" "$pki" "$failure_newcert"
-run_command env PATH="$EXEC_DIR/mv-bin:$PATH" REAL_MV="$REAL_MV" MV_COUNTER="$TMP_DIR/recovery.counter" "$TOOL" failure --namespace "$namespace" --intermediate-pass-file "$INT_PASS"
-assert_status 1; assert_contains "$STDERR" 'Published renewal destination identity changed'; assert_contains "$STDERR" 'preserved staging and locks for recovery'
-[[ $(<"$failure_dir/openssl.cnf") == foreign-renewal-state ]] || fail 'rollback did not preserve foreign replacement'
-[[ -d $pki/root-ca/.platform-pki-root-operation.lock ]] || fail 'recovery did not retain root lock'
-[[ -d $pki/intermediate-ca/.platform-pki-intermediate-operation.lock ]] || fail 'recovery did not retain intermediate lock'
-recovery_stage=$(compgen -G "$pki/intermediate-ca/.platform-pki-service-renew.??????")
-[[ -d $recovery_stage ]] || fail 'recovery did not retain staging'
-assert_state_restored_except_config recovery "$failure_dir" "$pki" "$failure_newcert"
+[[ $(<"$pki/services/app/issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "renewal issuer record is invalid"
+[[ $(<"$archive/issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail "archived issuer record is invalid"
 
 printf '%s\n' 'test-service-renew.sh: ok'

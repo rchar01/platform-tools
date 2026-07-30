@@ -44,9 +44,11 @@ assert_contains() {
 mkdir -p "$TMP_DIR/pki/inventory" \
   "$TMP_DIR/pki/services/platform-example/private" \
   "$TMP_DIR/pki/services/platform-example/certs" \
-  "$TMP_DIR/pki/root-ca/certs" \
-  "$TMP_DIR/pki/intermediate-ca/certs" \
+  "$TMP_DIR/pki/authorities/roots/g1/certs" \
+  "$TMP_DIR/pki/authorities/intermediates/g1-i1/certs" \
+  "$TMP_DIR/pki/locks" "$TMP_DIR/pki/state/rollover" \
   "$TMP_DIR/fake-lib" "$TMP_DIR/fake-bin"
+find "$TMP_DIR/pki" -type d -exec chmod 700 {} +
 cat >"$TMP_DIR/pki/inventory/services.yml" <<'EOF'
 services:
   platform-example:
@@ -60,8 +62,11 @@ chmod 600 "$TMP_DIR/pki/inventory/services.yml"
 touch \
   "$TMP_DIR/pki/services/platform-example/private/tls.key" \
   "$TMP_DIR/pki/services/platform-example/certs/tls.crt" \
-  "$TMP_DIR/pki/root-ca/certs/root-ca.crt" \
-  "$TMP_DIR/pki/intermediate-ca/certs/intermediate-ca.crt"
+  "$TMP_DIR/pki/authorities/roots/g1/certs/root-ca.crt" \
+  "$TMP_DIR/pki/authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+printf 'root=g1\nintermediate=g1-i1\n' >"$TMP_DIR/pki/state/active-issuer"
+printf 'root=g1\nintermediate=g1-i1\n' >"$TMP_DIR/pki/services/platform-example/issuer"
+chmod 600 "$TMP_DIR/pki/state/active-issuer" "$TMP_DIR/pki/services/platform-example/issuer"
 
 cat >"$TMP_DIR/fake-lib/platform-pki-common.sh" <<'EOF'
 # shellcheck source=../../../lib/platform-pki-common.sh
@@ -139,7 +144,7 @@ run_verify none
 assert_status 0
 assert_empty "$STDERR"
 assert_contains "$STDOUT" '[OK] Verified service certificate: platform-example'
-[[ $(<"$TMP_DIR/verify.log") == $'trust\nkey\nca\neku\ndns\nip\nlifetime' ]] || \
+[[ $(<"$TMP_DIR/verify.log") == $'trust\ntrust\nkey\nca\neku\ndns\nip\nlifetime' ]] || \
   fail "unexpected verification order: $(<"$TMP_DIR/verify.log")"
 
 run_verify trust
@@ -152,7 +157,7 @@ run_verify key
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Private key does not match certificate'
-[[ $(<"$TMP_DIR/verify.log") == $'trust\nkey' ]] || fail 'key failure did not stop verification'
+[[ $(<"$TMP_DIR/verify.log") == $'trust\ntrust\nkey' ]] || fail 'key failure did not stop verification'
 
 for failure in ca eku dns ip lifetime; do
   run_verify "$failure"
@@ -177,7 +182,7 @@ run_command env PATH="$TMP_DIR/fake-bin:$PATH" \
 assert_status 1
 assert_empty "$STDOUT"
 assert_contains "$STDERR" 'Service is not defined in'
-assert_empty "$TMP_DIR/verify.log"
+[[ $(<"$TMP_DIR/verify.log") == trust ]] || fail 'unknown service read beyond the active issuer snapshot'
 
 mkdir -p "$TMP_DIR/installed/bin" "$TMP_DIR/installed/share/lib"
 cp "$TOOL" "$TMP_DIR/installed/bin/"

@@ -238,6 +238,7 @@ SERVICE=${args[service]}
 NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
 PKI_DIR=${args[--pki-dir]:-}
 DAYS_OVERRIDE=${args[--days]:-}
+ISSUER_SAFETY_DAYS=${args[--issuer-safety-days]}
 INTERMEDIATE_PASS_FILE=${args[--intermediate-pass-file]:-}
 ROTATE_KEY=false; [[ -v args[--rotate-key] ]] && ROTATE_KEY=true
 pki_validate_service_name "$SERVICE"
@@ -247,11 +248,11 @@ pki_validate_openssl_config_value 'PKI directory' "$PKI_DIR"
 if [[ -n $INTERMEDIATE_PASS_FILE ]]; then INTERMEDIATE_PASS_FILE=$(pki_expand_path "$INTERMEDIATE_PASS_FILE"); pki_require_pass_file "$INTERMEDIATE_PASS_FILE"; fi
 pki_require_cmd openssl
 
-ROOT_CA_DIR="$PKI_DIR/root-ca"; INTERMEDIATE_CA_DIR="$PKI_DIR/intermediate-ca"; SERVICES_DIR="$PKI_DIR/services"
+ROOT_CA_DIR=''; INTERMEDIATE_CA_DIR=''; SERVICES_DIR="$PKI_DIR/services"
 SERVICE_DIR=$(pki_service_dir "$SERVICE"); KEY=$(pki_service_key "$SERVICE"); CSR="$SERVICE_DIR/csr/tls.csr"
 CERT=$(pki_service_cert "$SERVICE"); CHAIN=$(pki_service_chain "$SERVICE"); FULLCHAIN=$(pki_service_fullchain "$SERVICE")
-CONF="$SERVICE_DIR/openssl.cnf"; ROOT_CERT=$(pki_root_cert); INT_KEY=$(pki_intermediate_key); INT_CERT=$(pki_intermediate_cert)
-INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"; INVENTORY=$(pki_inventory_file)
+CONF="$SERVICE_DIR/openssl.cnf"; ROOT_CERT=''; INT_KEY=''; INT_CERT=''
+INT_CONF=''; INVENTORY=$(pki_inventory_file)
 DNS_FILE=''; IPS_FILE=''
 
 validate_renewal_state() {
@@ -287,10 +288,11 @@ trap finish_renewal EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 1
 umask 077
 INVENTORY_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-service-renew.XXXXXX") || pki_die 'Cannot create inventory staging directory'
 DNS_FILE="$INVENTORY_TMP_DIR/dns"; IPS_FILE="$INVENTORY_TMP_DIR/ips"; : >"$DNS_FILE"; : >"$IPS_FILE"
-validate_renewal_state
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+pki_load_active_issuer_snapshot
+ROOT_CERT=$(pki_root_cert); INT_KEY=$(pki_intermediate_key); INT_CERT=$(pki_intermediate_cert); INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"
 pki_load_inventory_snapshot "$INVENTORY_TMP_DIR"
 validate_renewal_state
 
@@ -301,13 +303,14 @@ ARCHIVE_ROOT="$SERVICE_DIR/archive"; archive_base="$ARCHIVE_ROOT/$(date -u '+%Y%
 while [[ -e $ARCHIVE_DIR || -L $ARCHIVE_DIR ]]; do ARCHIVE_DIR=$(printf '%s-%02d' "$archive_base" "$archive_n"); archive_n=$((archive_n + 1)); done
 if [[ -e $ARCHIVE_ROOT || -L $ARCHIVE_ROOT ]]; then ARCHIVE_ROOT_STATE="present:$(stat -c '%d:%i' "$ARCHIVE_ROOT")"; else ARCHIVE_ROOT_STATE=absent; fi
 
-DESTINATIONS=("$CONF" "$CSR" "$CERT" "$CHAIN" "$FULLCHAIN" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/index.txt.old" "$INTERMEDIATE_CA_DIR/index.txt.attr.old" "$INTERMEDIATE_CA_DIR/serial.old" "$INT_NEWCERT")
-REPLACE=(true true true true true true true true true true true false)
+ISSUER=$(pki_service_issuer "$SERVICE")
+DESTINATIONS=("$CONF" "$CSR" "$CERT" "$CHAIN" "$FULLCHAIN" "$ISSUER" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/index.txt.old" "$INTERMEDIATE_CA_DIR/index.txt.attr.old" "$INTERMEDIATE_CA_DIR/serial.old" "$INT_NEWCERT")
+REPLACE=(true true true true true true true true true true true true false)
 [[ $ROTATE_KEY != true ]] || { DESTINATIONS+=("$KEY"); REPLACE+=(true); }
 FIRST_ARCHIVE_INDEX=${#DESTINATIONS[@]}
 ARCHIVE_MARKER="$ARCHIVE_DIR/.platform-pki-renew-archive"
 DESTINATIONS+=("$ARCHIVE_MARKER"); REPLACE+=(false)
-archive_candidates=("$CERT|tls.crt" "$CSR|tls.csr" "$CHAIN|ca-chain.crt" "$FULLCHAIN|fullchain.crt" "$CONF|openssl.cnf")
+archive_candidates=("$CERT|tls.crt" "$CSR|tls.csr" "$CHAIN|ca-chain.crt" "$FULLCHAIN|fullchain.crt" "$CONF|openssl.cnf" "$ISSUER|issuer")
 [[ $ROTATE_KEY != true ]] || archive_candidates+=("$KEY|tls.key")
 for specification in "${archive_candidates[@]}"; do
   [[ -e ${specification%%|*} ]] || continue
@@ -329,14 +332,16 @@ for file in index.txt index.txt.attr serial crlnumber; do cp -p -- "$INTERMEDIAT
 process_intermediate_signing_config "$INT_CONF" "$STAGE_INT_DIR/openssl.cnf"; chmod 600 "$STAGE_INT_DIR/openssl.cnf"
 STAGE_KEY="$STAGE_SERVICE_DIR/tls.key"; STAGE_CSR="$STAGE_SERVICE_DIR/tls.csr"; STAGE_CERT="$STAGE_SERVICE_DIR/tls.crt"
 STAGE_CHAIN="$STAGE_SERVICE_DIR/ca-chain.crt"; STAGE_FULLCHAIN="$STAGE_SERVICE_DIR/fullchain.crt"; STAGE_CONF="$STAGE_SERVICE_DIR/openssl.cnf"
+STAGE_ISSUER="$STAGE_SERVICE_DIR/issuer"
 if [[ $ROTATE_KEY == true ]]; then openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -out "$STAGE_KEY"
 else cp -p -- "$KEY" "$STAGE_KEY"; pki_info "Reusing existing service private key: $KEY"; fi
 chmod 600 "$STAGE_KEY"; pki_write_service_config "$STAGE_CONF" "$COMMON_NAME" "$DNS_FILE" "$IPS_FILE"; chmod 600 "$STAGE_CONF"
 openssl req -config "$STAGE_CONF" -key "$STAGE_KEY" -new -sha384 -out "$STAGE_CSR"; chmod 600 "$STAGE_CSR"
 CA_CMD=(openssl ca -batch -config "$STAGE_INT_DIR/openssl.cnf" -extfile "$STAGE_CONF" -extensions server_cert -days "$DAYS" -notext -md sha384 -in "$STAGE_CSR" -out "$STAGE_CERT")
 [[ -z $INTERMEDIATE_PASS_FILE ]] || CA_CMD+=(-passin "file:$INTERMEDIATE_PASS_FILE")
-"${CA_CMD[@]}"; chmod 644 "$STAGE_CERT"; cat "$INT_CERT" "$ROOT_CERT" >"$STAGE_CHAIN"; cat "$STAGE_CERT" "$INT_CERT" >"$STAGE_FULLCHAIN"; chmod 644 "$STAGE_CHAIN" "$STAGE_FULLCHAIN"
-SOURCES=("$STAGE_CONF" "$STAGE_CSR" "$STAGE_CERT" "$STAGE_CHAIN" "$STAGE_FULLCHAIN" "$STAGE_INT_DIR/index.txt" "$STAGE_INT_DIR/index.txt.attr" "$STAGE_INT_DIR/serial" "$STAGE_INT_DIR/index.txt.old" "$STAGE_INT_DIR/index.txt.attr.old" "$STAGE_INT_DIR/serial.old" "$STAGE_INT_DIR/newcerts/$ISSUED_SERIAL.pem")
+"${CA_CMD[@]}"; chmod 644 "$STAGE_CERT"; pki_validate_child_validity "$STAGE_CERT" "$INT_CERT" "$ISSUER_SAFETY_DAYS"; cat "$INT_CERT" "$ROOT_CERT" >"$STAGE_CHAIN"; cat "$STAGE_CERT" "$INT_CERT" >"$STAGE_FULLCHAIN"; chmod 644 "$STAGE_CHAIN" "$STAGE_FULLCHAIN"
+printf 'root=%s\nintermediate=%s\n' "$ACTIVE_ROOT_ID" "$ACTIVE_INTERMEDIATE_ID" >"$STAGE_ISSUER"; chmod 600 "$STAGE_ISSUER"
+SOURCES=("$STAGE_CONF" "$STAGE_CSR" "$STAGE_CERT" "$STAGE_CHAIN" "$STAGE_FULLCHAIN" "$STAGE_ISSUER" "$STAGE_INT_DIR/index.txt" "$STAGE_INT_DIR/index.txt.attr" "$STAGE_INT_DIR/serial" "$STAGE_INT_DIR/index.txt.old" "$STAGE_INT_DIR/index.txt.attr.old" "$STAGE_INT_DIR/serial.old" "$STAGE_INT_DIR/newcerts/$ISSUED_SERIAL.pem")
 [[ $ROTATE_KEY != true ]] || SOURCES+=("$STAGE_KEY")
 SOURCES+=("$STAGE_ARCHIVE_DIR/.platform-pki-renew-archive")
 for i in "${!ARCHIVE_SOURCES[@]}"; do

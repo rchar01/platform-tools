@@ -7,6 +7,13 @@ This file gives a short, release-oriented view of what changed between versions.
 - Added `platform-pki-inventory-install` for strict, atomic mode-600 installation from `../platform-private/pki/services.yml`, with `--private-repo` override and guarded source/destination handling.
 - PKI inventory now has one strict whole-file schema and one-snapshot consumption across issuance, renewal, verification, expiry listing, certificate printing, and Ansible export.
 - `platform-pki-init` now writes only `services.yml.example`, preserves active inventory even with `--force`, and no longer installs unused PKI environment or OpenSSL template files.
+- Fresh PKI state now begins with immutable `g1` root and `g1-i1` intermediate generations, protected active/bootstrap manifests, recorded service issuers, and persistent lifecycle-first operation locks. Failed bootstrap IDs remain abandoned and retries allocate monotonically increasing IDs.
+- Added `platform-pki-ca-rollover migrate|recover|status` for verified, receipt-backed one-time migration of legacy singleton CA state. Later rollover lifecycle operations remain deferred.
+- PKI backups now reject incomplete or recovery-required state and publish a mode-600 receipt binding each archive to its identity, digest, layout, and public state.
+- Migration and fresh bootstrap transactions now use fsynced identity-complete journals; `platform-pki-ca-rollover recover` resumes or rolls back every mutation and remains resumable if recovery itself is interrupted.
+- Recovery now requires exact journaled identities for CA database files, configurations, reservations, issuer records, quarantine entries, backup sessions, active manifests, the service snapshot, and a digest-bound provenance manifest. Migration failures require explicit recovery, sensitive root-key staging is removed before intermediate commit, and verified bootstrap rollback permanently abandons rather than reuses its generation ID.
+- Intermediate and service certificate publication now enforces actual ASN.1 validity against the issuer with a one-day default safety margin.
+- Inventory publication prefers `RENAME_EXCHANGE` and supports a guarded rename fallback under cooperative same-UID locks, including rootless Podman filesystems.
 
 ## v1.4.0 - 2026-07-27
 
