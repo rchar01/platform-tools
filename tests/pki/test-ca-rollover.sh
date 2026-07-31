@@ -383,6 +383,19 @@ run_ca_self_signature_selector_test() {
   run_ca_self_signature_corruption_test "$source"
 }
 
+IDENTITY_CASE=''; IDENTITY_AFTER=''
+
+run_file_identity_rewrite_test() {
+  local identity_before
+  IDENTITY_CASE="$TMP_DIR/nanosecond-identity"
+  mkdir -m 700 "$IDENTITY_CASE"
+  printf '%s' first >"$IDENTITY_CASE/key"; chmod 600 "$IDENTITY_CASE/key"
+  identity_before=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$IDENTITY_CASE/key")
+  printf '%s' other >"$IDENTITY_CASE/key"
+  IDENTITY_AFTER=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$IDENTITY_CASE/key")
+  [[ $identity_before != "$IDENTITY_AFTER" ]] || fail 'same-size same-second rewrite retained its file identity'
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
@@ -399,6 +412,7 @@ case ${1:-all} in
   ca-profile-noncritical-basic-constraints) run_ca_profile_noncritical_basic_constraints_test; exit 0 ;;
   ca-profile-extra-key-usage) run_ca_profile_extra_key_usage_test; exit 0 ;;
   ca-self-signature-corruption) run_ca_self_signature_selector_test; exit 0 ;;
+  file-identity-rewrite) run_file_identity_rewrite_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -406,13 +420,9 @@ seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
 run_missing_service_issuer_test "$seed"
 run_ready_status_test "$seed"
 
-identity_case="$TMP_DIR/nanosecond-identity"; mkdir -m 700 "$identity_case"; printf '%s' first >"$identity_case/key"; chmod 600 "$identity_case/key"
-identity_before=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")
-printf '%s' other >"$identity_case/key"
-identity_after=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")
-[[ $identity_before != "$identity_after" ]] || fail 'same-size same-second rewrite retained its file identity'
+run_file_identity_rewrite_test
 bash -c 'source "$1"; pki_atomic_write "$2" "identity=$3
-"; pki_read_state_record "$2" Identity; [[ ${PKI_RECORD[identity]} == "$3" ]]' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/state" "$identity_after" || fail 'state parser did not preserve a nanosecond identity'
+"; pki_read_state_record "$2" Identity; [[ ${PKI_RECORD[identity]} == "$3" ]]' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$IDENTITY_CASE/state" "$IDENTITY_AFTER" || fail 'state parser did not preserve a nanosecond identity'
 
 manifest_case="$TMP_DIR/manifest-removal"; mkdir -m 700 "$manifest_case" "$manifest_case/tree"; printf '%s' first >"$manifest_case/tree/key"; chmod 600 "$manifest_case/tree/key"
 bash -c 'source "$1"; pki_tree_manifest "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" >"$manifest_case/manifest"; chmod 600 "$manifest_case/manifest"
