@@ -312,3 +312,83 @@ def test_committed_migration_journal_remains_operational(
     assert metadata_after.st_mode == metadata_before.st_mode
     assert metadata_after.st_size == metadata_before.st_size
     assert metadata_after.st_mtime_ns == metadata_before.st_mtime_ns
+
+
+def test_ca_profile_rejects_noncritical_basic_constraints(
+    tmp_path: Path,
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    common_library = (
+        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+    )
+    private_key = tmp_path / "basic.key"
+    certificate = tmp_path / "basic.crt"
+    generated = process_runner(
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-subj",
+            "/CN=bad-basic",
+            "-days",
+            "1",
+            "-keyout",
+            private_key,
+            "-out",
+            certificate,
+            "-addext",
+            "basicConstraints=CA:true,pathlen:1",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert generated.status == 0
+    assert certificate.is_file() and not certificate.is_symlink()
+    assert private_key.is_file() and not private_key.is_symlink()
+
+    profile = process_runner(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            certificate,
+            "-noout",
+            "-ext",
+            "basicConstraints",
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert profile.status == 0
+    assert profile.stderr == ""
+    assert profile.stdout == (
+        "X509v3 Basic Constraints: \n"
+        "    CA:TRUE, pathlen:1\n"
+    )
+
+    result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test',
+            "_",
+            common_library,
+            certificate,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Test must have critical CA:TRUE Basic Constraints "
+        "with pathlen:1\n"
+    )
