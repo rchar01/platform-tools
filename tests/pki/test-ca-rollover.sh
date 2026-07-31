@@ -204,45 +204,89 @@ run_parser_tests() {
   [[ ! -e $parser_unused && ! -e $parser_unused.receipt && ! -e $parser_other && ! -e $parser_private ]] || fail 'parser tests created PKI operand paths'
 }
 
+declare -a STATUS_ENV=()
+STATUS_NAMESPACE=''; STATUS_PKI=''
+
+create_status_control_fixture() {
+  local base=$1 lock
+  mkdir -m 700 "$base" "$base/ns" "$base/ns/pki" "$base/ns/pki/locks" \
+    "$base/ns/pki/state" "$base/ns/pki/state/rollover" \
+    "$base/ns/pki/state/rollovers" "$base/ns/pki/state/generation-reservations"
+  for lock in lifecycle root intermediate inventory export; do
+    (umask 077; : >"$base/ns/pki/locks/$lock")
+  done
+  mkdir -m 700 "$base/environment" "$base/environment/home" \
+    "$base/environment/config" "$base/environment/tmp"
+  STATUS_NAMESPACE="$base/ns"; STATUS_PKI="$base/ns/pki"
+  STATUS_ENV=(env -i HOME="$base/environment/home" XDG_CONFIG_HOME="$base/environment/config" TMPDIR="$base/environment/tmp" LC_ALL=C NO_COLOR=1 PATH=/usr/local/bin:/usr/bin:/bin)
+}
+
+status_control_manifest() {
+  local root=$1 path relative metadata detail
+  while IFS= read -r -d '' path; do
+    relative=${path#"$root"}; relative=${relative#/}; relative=${relative:-.}
+    metadata=$(stat -c '%F\t%a\t%d:%i:%h\t%s\t%y' "$path")
+    if [[ -f $path && ! -L $path ]]; then
+      detail=$(sha256sum "$path"); detail=${detail%% *}
+    elif [[ -d $path && ! -L $path ]]; then detail=directory
+    else detail=other
+    fi
+    printf '%s\t%s\t%s\n' "$relative" "$metadata" "$detail"
+  done < <(find "$root" -print0 | LC_ALL=C sort -z)
+}
+
 run_invalid_terminal_marker_test() {
   local invalid_terminal="$TMP_DIR/invalid-terminal-marker" marker status control_before control_after
-  mkdir -m 700 "$invalid_terminal" "$invalid_terminal/ns" "$invalid_terminal/ns/pki" \
-    "$invalid_terminal/ns/pki/locks" "$invalid_terminal/ns/pki/state" \
-    "$invalid_terminal/ns/pki/state/rollover" "$invalid_terminal/ns/pki/state/rollovers" \
-    "$invalid_terminal/ns/pki/state/generation-reservations"
-  for lock in lifecycle root intermediate inventory export; do
-    (umask 077; : >"$invalid_terminal/ns/pki/locks/$lock")
-  done
-  mkdir -m 700 "$invalid_terminal/environment" "$invalid_terminal/environment/home" \
-    "$invalid_terminal/environment/config" "$invalid_terminal/environment/tmp"
-  marker="$invalid_terminal/ns/pki/state/rollover/recovery-required"
+  create_status_control_fixture "$invalid_terminal"
+  marker="$STATUS_PKI/state/rollover/recovery-required"
   (umask 077; : >"$marker")
   cat >"$marker" <<'EOF'
 transaction=prepare-root-20260730-000000-1
 operation=rollover-prepare
 terminal_outcome=invalid
 EOF
-  control_before=$(find "$invalid_terminal/ns/pki" -printf '%P\t%y\t%m\t%D:%i:%n\t%s\t%T@\n' | LC_ALL=C sort)
+  control_before=$(status_control_manifest "$STATUS_PKI")
   set +e
-  env -i HOME="$invalid_terminal/environment/home" \
-    XDG_CONFIG_HOME="$invalid_terminal/environment/config" \
-    TMPDIR="$invalid_terminal/environment/tmp" LC_ALL=C NO_COLOR=1 \
-    PATH=/usr/local/bin:/usr/bin:/bin \
-    "$ROLLOVER" status --namespace "$invalid_terminal/ns" --format json >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  "${STATUS_ENV[@]}" "$ROLLOVER" status --namespace "$STATUS_NAMESPACE" --format json >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
   status=$?
   set -e
   [[ $status -eq 1 ]] || fail "invalid terminal marker status was $status instead of 1"
   [[ ! -s $TMP_DIR/stdout ]] || fail 'invalid terminal marker status wrote stdout'
   [[ $(<"$TMP_DIR/stderr") == '[ERROR] PKI recovery marker has invalid terminal preparation state' ]] || fail "invalid terminal marker status stderr was unexpected: $(<"$TMP_DIR/stderr")"
   [[ $(<"$marker") == $'transaction=prepare-root-20260730-000000-1\noperation=rollover-prepare\nterminal_outcome=invalid' ]] || fail 'invalid terminal marker status changed the marker'
-  control_after=$(find "$invalid_terminal/ns/pki" -printf '%P\t%y\t%m\t%D:%i:%n\t%s\t%T@\n' | LC_ALL=C sort)
+  control_after=$(status_control_manifest "$STATUS_PKI")
   [[ $control_after == "$control_before" ]] || fail 'invalid terminal marker status changed the control tree'
 }
 
+run_unresolved_migration_journal_test() {
+  local base="$TMP_DIR/unresolved-migration-journal" journal status control_before control_after
+  create_status_control_fixture "$base"
+  journal="$STATUS_PKI/state/rollover/journal"
+  (umask 077; : >"$journal")
+  cat >"$journal" <<'EOF'
+schema=2
+operation=legacy-migrate
+transaction=migrate-20260730-000000-1
+phase=root-renamed
+committed=false
+EOF
+  control_before=$(status_control_manifest "$STATUS_PKI")
+  set +e
+  "${STATUS_ENV[@]}" "$ROLLOVER" status --namespace "$STATUS_NAMESPACE" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  status=$?
+  set -e
+  [[ $status -eq 2 ]] || fail "unresolved migration journal status was $status instead of 2"
+  [[ ! -s $TMP_DIR/stderr ]] || fail "unresolved migration journal wrote stderr: $(<"$TMP_DIR/stderr")"
+  [[ $(<"$TMP_DIR/stdout") == $'status=recovery-required\nrecovery_required=true\ntransaction=migrate-20260730-000000-1\noperation=legacy-migrate\nphase=root-renamed\nterminal_outcome=none\nrequired_action=rollback\naction=run platform-pki-ca-rollover recover --transaction migrate-20260730-000000-1 --action rollback' ]] || fail "unresolved migration journal stdout was unexpected: $(<"$TMP_DIR/stdout")"
+  control_after=$(status_control_manifest "$STATUS_PKI")
+  [[ $control_after == "$control_before" ]] || fail 'unresolved migration journal status changed the control tree'
+}
+
 case ${1:-all} in
-  all) run_parser_tests; run_invalid_terminal_marker_test ;;
+  all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
   invalid-terminal-marker) run_invalid_terminal_marker_test; exit 0 ;;
+  unresolved-migration-journal) run_unresolved_migration_journal_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -715,20 +759,5 @@ convert_to_legacy "$primary"; backup_legacy "$primary"; migrate "$primary" >/dev
 [[ $(<"$pki/services/app/issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'migrated issuer record is invalid'
 migrate "$primary" >"$TMP_DIR/noop"
 grep -Fq 'already complete' "$TMP_DIR/noop" || fail 'idempotent migration did not report no-op'
-
-cat >"$pki/state/rollover/journal" <<'EOF'
-schema=2
-operation=legacy-migrate
-transaction=migrate-20260730-000000-1
-phase=root-renamed
-committed=false
-EOF
-chmod 600 "$pki/state/rollover/journal"
-set +e
-"$ROLLOVER" status --namespace "$primary/ns" >"$TMP_DIR/recovery-status"
-status=$?
-set -e
-[[ $status -eq 2 ]] || fail "recovery-required status was $status instead of 2"
-grep -Fq 'status=recovery-required' "$TMP_DIR/recovery-status" || fail 'status did not report recovery-required'
 
 printf '%s\n' 'test-ca-rollover.sh: ok'
