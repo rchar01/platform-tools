@@ -288,7 +288,7 @@ EOF
 }
 
 run_missing_service_issuer_test() {
-  local source=$1 base="$TMP_DIR/missing-service-issuer" issuer status state_before state_after locks_before locks_after
+  local source=$1 base="$TMP_DIR/missing-service-issuer" issuer status pass_mode state_before state_after locks_before locks_after
   cp -a "$source" "$base"
   configure_status_environment "$base"
   mkdir -m 700 "$STATUS_PKI/state/rollovers"
@@ -304,15 +304,53 @@ run_missing_service_issuer_test() {
   set +e
   "${STATUS_ENV[@]}" "$ROLLOVER" status --namespace "$STATUS_NAMESPACE" --format json >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
   status=$?
+  pass_mode=$(stat -c %a "$PASS")
   chmod 600 "$PASS"
   set -e
   [[ $status -eq 1 ]] || fail "missing service issuer status was $status instead of 1"
   [[ ! -s $TMP_DIR/stdout ]] || fail 'missing service issuer status wrote stdout'
   [[ $(<"$TMP_DIR/stderr") == '[ERROR] Service app issuer manifest is missing or unsafe' ]] || fail "missing service issuer stderr was unexpected: $(<"$TMP_DIR/stderr")"
   [[ ! -e $issuer && ! -L $issuer ]] || fail 'missing service issuer status recreated the issuer manifest'
+  [[ $pass_mode == 0 ]] || fail 'missing service issuer status changed the passphrase mode'
   state_after=$(status_control_manifest "$STATUS_PKI/state")
   locks_after=$(status_control_manifest "$STATUS_PKI/locks")
   [[ $state_after == "$state_before" && $locks_after == "$locks_before" ]] || fail 'missing service issuer status changed public control state'
+}
+
+run_ready_status_test() {
+  local source=$1 base="$TMP_DIR/ready-status" status pass_mode state_before state_after locks_before locks_after
+  local root_fp root_end root_expiry int_fp int_end int_expiry expected actual
+  cp -a "$source" "$base"
+  configure_status_environment "$base"
+  mkdir -m 700 "$STATUS_PKI/state/rollovers"
+  for lock in lifecycle root intermediate inventory export; do
+    [[ -e $STATUS_PKI/locks/$lock ]] || (umask 077; : >"$STATUS_PKI/locks/$lock")
+  done
+  chmod 000 "$STATUS_PKI/authorities/roots/g1/private/root-ca.key" \
+    "$STATUS_PKI/authorities/intermediates/g1-i1/private/intermediate-ca.key" "$PASS"
+  root_fp=$(openssl x509 -in "$STATUS_PKI/authorities/roots/g1/certs/root-ca.crt" -noout -fingerprint -sha256); root_fp=${root_fp#*=}; root_fp=${root_fp//:/}
+  root_end=$(openssl x509 -in "$STATUS_PKI/authorities/roots/g1/certs/root-ca.crt" -noout -enddate); root_expiry=$(date -u -d "${root_end#notAfter=}" '+%Y-%m-%dT%H:%M:%SZ')
+  int_fp=$(openssl x509 -in "$STATUS_PKI/authorities/intermediates/g1-i1/certs/intermediate-ca.crt" -noout -fingerprint -sha256); int_fp=${int_fp#*=}; int_fp=${int_fp//:/}
+  int_end=$(openssl x509 -in "$STATUS_PKI/authorities/intermediates/g1-i1/certs/intermediate-ca.crt" -noout -enddate); int_expiry=$(date -u -d "${int_end#notAfter=}" '+%Y-%m-%dT%H:%M:%SZ')
+  state_before=$(status_control_manifest "$STATUS_PKI/state")
+  locks_before=$(status_control_manifest "$STATUS_PKI/locks")
+  set +e
+  "${STATUS_ENV[@]}" "$ROLLOVER" status --namespace "$STATUS_NAMESPACE" --format json >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  status=$?
+  pass_mode=$(stat -c %a "$PASS")
+  chmod 600 "$PASS"
+  set -e
+  [[ $status -eq 0 ]] || fail "ready status was $status instead of 0: $(<"$TMP_DIR/stderr")"
+  [[ ! -s $TMP_DIR/stderr ]] || fail "ready status wrote stderr: $(<"$TMP_DIR/stderr")"
+  expected=$(jq -cn --arg root_fp "$root_fp" --arg root_expiry "$root_expiry" --arg int_fp "$int_fp" --arg int_expiry "$int_expiry" '{schema:1,status:"ready",recovery_required:false,phase:"idle",active:{root:{generation:"g1",fingerprint_sha256:$root_fp,expires_at:$root_expiry},intermediate:{generation:"g1-i1",fingerprint_sha256:$int_fp,expires_at:$int_expiry}},candidate:null,retired:[],trust_snapshot_sha256:null,services_on_old_issuer:[],required_action:null}')
+  actual=$(jq -Sc . <"$TMP_DIR/stdout")
+  expected=$(jq -Sc . <<<"$expected")
+  [[ $actual == "$expected" ]] || fail "ready status JSON was unexpected: $actual"
+  [[ $pass_mode == 0 ]] || fail 'ready status changed the passphrase mode'
+  state_after=$(status_control_manifest "$STATUS_PKI/state")
+  locks_after=$(status_control_manifest "$STATUS_PKI/locks")
+  [[ $state_after == "$state_before" && $locks_after == "$locks_before" ]] || fail 'ready status changed public control state'
+  [[ $(stat -c %a "$STATUS_PKI/authorities/roots/g1/private/root-ca.key") == 0 && $(stat -c %a "$STATUS_PKI/authorities/intermediates/g1-i1/private/intermediate-ca.key") == 0 ]] || fail 'ready status changed private-key modes'
 }
 
 case ${1:-all} in
@@ -324,11 +362,16 @@ case ${1:-all} in
     selector_seed="$TMP_DIR/selector-seed"; mkdir -m 700 "$selector_seed"; create_generation_fixture "$selector_seed"
     run_missing_service_issuer_test "$selector_seed"; exit 0
     ;;
+  ready-status)
+    selector_seed="$TMP_DIR/selector-seed"; mkdir -m 700 "$selector_seed"; create_generation_fixture "$selector_seed"
+    run_ready_status_test "$selector_seed"; exit 0
+    ;;
   *) fail "unknown test group: $1" ;;
 esac
 
 seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
 run_missing_service_issuer_test "$seed"
+run_ready_status_test "$seed"
 
 identity_case="$TMP_DIR/nanosecond-identity"; mkdir -m 700 "$identity_case"; printf '%s' first >"$identity_case/key"; chmod 600 "$identity_case/key"
 identity_before=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")

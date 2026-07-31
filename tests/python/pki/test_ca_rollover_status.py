@@ -1,3 +1,4 @@
+import json
 import stat
 from collections.abc import Callable, Mapping
 from hashlib import sha256
@@ -55,6 +56,43 @@ def create_status_control_workspace(
     for lock in ("lifecycle", "root", "intermediate", "inventory", "export"):
         private_text_writer(workspace.pki / "locks" / lock, "")
     return workspace
+
+
+def certificate_observables(
+    certificate: Path,
+    environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> tuple[str, str]:
+    fingerprint = process_runner(
+        ["openssl", "x509", "-in", certificate, "-noout", "-fingerprint", "-sha256"],
+        env=environment,
+        timeout=10,
+    )
+    assert fingerprint.status == 0
+    assert fingerprint.stderr == ""
+    fingerprint_value = fingerprint.stdout.strip().partition("=")[2].replace(":", "")
+
+    enddate = process_runner(
+        ["openssl", "x509", "-in", certificate, "-noout", "-enddate"],
+        env=environment,
+        timeout=10,
+    )
+    assert enddate.status == 0
+    assert enddate.stderr == ""
+    expiry = process_runner(
+        [
+            "date",
+            "-u",
+            "-d",
+            enddate.stdout.strip().removeprefix("notAfter="),
+            "+%Y-%m-%dT%H:%M:%SZ",
+        ],
+        env=environment,
+        timeout=10,
+    )
+    assert expiry.status == 0
+    assert expiry.stderr == ""
+    return fingerprint_value, expiry.stdout.strip()
 
 
 def test_status_rejects_invalid_terminal_marker(
@@ -172,13 +210,14 @@ def test_status_rejects_missing_service_issuer(
             private_text_writer(lock, "")
     issuer = workspace.pki / "services/app/issuer"
     issuer.unlink()
-    workspace.passphrase_file.chmod(0)
-    for key in (
+    restricted = (
+        workspace.passphrase_file,
         workspace.pki / "authorities/roots/g1/private/root-ca.key",
         workspace.pki
         / "authorities/intermediates/g1-i1/private/intermediate-ca.key",
-    ):
-        key.chmod(0)
+    )
+    for path in restricted:
+        path.chmod(0)
     public_before = public_state_snapshot(workspace)
     controls_before = (
         control_tree_snapshot(workspace.pki / "state"),
@@ -209,3 +248,90 @@ def test_status_rejects_missing_service_issuer(
         control_tree_snapshot(workspace.pki / "state"),
         control_tree_snapshot(workspace.pki / "locks"),
     ) == controls_before
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0 for path in restricted)
+
+
+def test_status_reports_ready_generation(
+    rollover_tools,
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    public_state_snapshot: Callable[[RolloverWorkspace], tuple[str, ...]],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = rollover_case_factory("ready-generation")
+    (workspace.pki / "state/rollovers").mkdir(mode=0o700)
+    for name in ("lifecycle", "root", "intermediate", "inventory", "export"):
+        lock = workspace.pki / "locks" / name
+        if not lock.exists():
+            private_text_writer(lock, "")
+    restricted = (
+        workspace.passphrase_file,
+        workspace.pki / "authorities/roots/g1/private/root-ca.key",
+        workspace.pki
+        / "authorities/intermediates/g1-i1/private/intermediate-ca.key",
+    )
+    for path in restricted:
+        path.chmod(0)
+
+    root_fingerprint, root_expiry = certificate_observables(
+        workspace.pki / "authorities/roots/g1/certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint, intermediate_expiry = certificate_observables(
+        workspace.pki
+        / "authorities/intermediates/g1-i1/certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    public_before = public_state_snapshot(workspace)
+    controls_before = (
+        control_tree_snapshot(workspace.pki / "state"),
+        control_tree_snapshot(workspace.pki / "locks"),
+    )
+
+    result = process_runner(
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+            "--format",
+            "json",
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 0
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == {
+        "schema": 1,
+        "status": "ready",
+        "recovery_required": False,
+        "phase": "idle",
+        "active": {
+            "root": {
+                "generation": "g1",
+                "fingerprint_sha256": root_fingerprint,
+                "expires_at": root_expiry,
+            },
+            "intermediate": {
+                "generation": "g1-i1",
+                "fingerprint_sha256": intermediate_fingerprint,
+                "expires_at": intermediate_expiry,
+            },
+        },
+        "candidate": None,
+        "retired": [],
+        "trust_snapshot_sha256": None,
+        "services_on_old_issuer": [],
+        "required_action": None,
+    }
+    assert public_state_snapshot(workspace) == public_before
+    assert (
+        control_tree_snapshot(workspace.pki / "state"),
+        control_tree_snapshot(workspace.pki / "locks"),
+    ) == controls_before
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0 for path in restricted)
