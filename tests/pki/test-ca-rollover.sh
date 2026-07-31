@@ -401,6 +401,16 @@ run_state_record_identity_test() {
 "; pki_read_state_record "$2" Identity; [[ ${PKI_RECORD[identity]} == "$3" ]]' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$IDENTITY_CASE/state" "$IDENTITY_AFTER" || fail 'state parser did not preserve a nanosecond identity'
 }
 
+run_manifested_tree_rewrite_test() {
+  local manifest_case="$TMP_DIR/manifest-removal" manifest_identity manifest_digest tree_identity
+  mkdir -m 700 "$manifest_case" "$manifest_case/tree"; printf '%s' first >"$manifest_case/tree/key"; chmod 600 "$manifest_case/tree/key"
+  bash -c 'source "$1"; pki_tree_manifest "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" >"$manifest_case/manifest"; chmod 600 "$manifest_case/manifest"
+  manifest_identity=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/manifest"); manifest_digest=$(sha256sum "$manifest_case/manifest"); manifest_digest=${manifest_digest%% *}; tree_identity=$(bash -c 'source "$1"; pki_dir_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree")
+  printf '%s' other >"$manifest_case/tree/key"
+  if bash -c 'source "$1"; pki_remove_manifested_tree "$2" "$3" "$4" "$5" "$6" "$7"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" "$tree_identity" "$manifest_case" "$manifest_case/manifest" "$manifest_identity" "$manifest_digest"; then fail 'manifest cleanup accepted a hostile same-size replacement'; fi
+  [[ $(<"$manifest_case/tree/key") == other ]] || fail 'manifest cleanup modified a hostile replacement'
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
@@ -419,6 +429,7 @@ case ${1:-all} in
   ca-self-signature-corruption) run_ca_self_signature_selector_test; exit 0 ;;
   file-identity-rewrite) run_file_identity_rewrite_test; exit 0 ;;
   state-record-nanosecond-identity) run_file_identity_rewrite_test; run_state_record_identity_test; exit 0 ;;
+  manifested-tree-rewrite) run_manifested_tree_rewrite_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -429,12 +440,7 @@ run_ready_status_test "$seed"
 run_file_identity_rewrite_test
 run_state_record_identity_test
 
-manifest_case="$TMP_DIR/manifest-removal"; mkdir -m 700 "$manifest_case" "$manifest_case/tree"; printf '%s' first >"$manifest_case/tree/key"; chmod 600 "$manifest_case/tree/key"
-bash -c 'source "$1"; pki_tree_manifest "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" >"$manifest_case/manifest"; chmod 600 "$manifest_case/manifest"
-manifest_identity=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/manifest"); manifest_digest=$(sha256sum "$manifest_case/manifest"); manifest_digest=${manifest_digest%% *}; tree_identity=$(bash -c 'source "$1"; pki_dir_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree")
-printf '%s' other >"$manifest_case/tree/key"
-if bash -c 'source "$1"; pki_remove_manifested_tree "$2" "$3" "$4" "$5" "$6" "$7"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" "$tree_identity" "$manifest_case" "$manifest_case/manifest" "$manifest_identity" "$manifest_digest"; then fail 'manifest cleanup accepted a hostile same-size replacement'; fi
-[[ $(<"$manifest_case/tree/key") == other ]] || fail 'manifest cleanup modified a hostile replacement'
+run_manifested_tree_rewrite_test
 
 journal_case="$TMP_DIR/journal-gating"; mkdir -m 700 "$journal_case" "$journal_case/state" "$journal_case/state/rollover"
 cat >"$journal_case/state/rollover/journal" <<'EOF'
