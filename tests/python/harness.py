@@ -96,11 +96,17 @@ def run_process(
     return ProcessResult(argv, shell_status(process.returncode), stdout, stderr)
 
 
-def copy_tree(source: Path, destination: Path) -> None:
+def copy_tree(source: Path, destination: Path, *, timeout: float = 30) -> None:
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(destination)
-    subprocess.run(
+    result = run_process(
         ("cp", "-a", "--", os.fspath(source), os.fspath(destination)),
-        check=True,
-        shell=False,
+        timeout=timeout,
     )
+    if result.status != 0:
+        raise subprocess.CalledProcessError(
+            result.status,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )

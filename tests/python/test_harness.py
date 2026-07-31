@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from .harness import ProcessTimeout, shell_status
+from . import harness
+from .harness import ProcessResult, ProcessTimeout, shell_status
 
 
 pytestmark = pytest.mark.infrastructure
@@ -105,3 +106,24 @@ def test_tree_copier_preserves_modes_and_symlinks(tmp_path, tree_copier) -> None
     assert stat.S_IMODE(destination.stat().st_mode) == 0o750
     assert stat.S_IMODE((destination / "payload").stat().st_mode) == 0o640
     assert os.readlink(destination / "payload-link") == "payload"
+
+
+def test_tree_copier_uses_bounded_process_runner(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    observed = {}
+
+    def fake_run_process(args, *, timeout):
+        observed["args"] = tuple(args)
+        observed["timeout"] = timeout
+        return ProcessResult(tuple(args), 0, "", "")
+
+    monkeypatch.setattr(harness, "run_process", fake_run_process)
+
+    harness.copy_tree(source, destination)
+
+    assert observed == {
+        "args": ("cp", "-a", "--", os.fspath(source), os.fspath(destination)),
+        "timeout": 30,
+    }

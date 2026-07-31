@@ -1,22 +1,92 @@
 import os
-from collections.abc import Mapping
+import re
+import stat
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
-
-@pytest.fixture
-def rollover_tool() -> Path:
-    return Path(__file__).resolve().parents[3] / "bin/platform-pki-ca-rollover"
+from ..harness import ProcessResult, copy_tree, run_process
 
 
-@pytest.fixture
-def isolated_environment(tmp_path: Path) -> Mapping[str, str]:
-    home = tmp_path / "home"
-    config = tmp_path / "config"
-    temporary = tmp_path / "tmp"
+INVENTORY = """services:
+  app:
+    common_name: app.example.internal
+    dns:
+      - app.example.internal
+  next:
+    common_name: next.example.internal
+    dns:
+      - next.example.internal
+"""
+
+TRANSACTION_ID = r"prepare-(?:root|intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+"
+BOOTSTRAP_ID = r"(?:root|intermediate)-bootstrap-[0-9]{8}-[0-9]{6}-[0-9]+"
+PUBLIC_STATE_DIRECTORIES = (
+    re.compile(r"state/generation-reservations"),
+    re.compile(r"state/rollover"),
+    re.compile(rf"state/rollover/{BOOTSTRAP_ID}"),
+    re.compile(r"state/rollovers"),
+    re.compile(rf"state/rollovers/{TRANSACTION_ID}"),
+)
+PUBLIC_STATE_FILES = (
+    re.compile(r"state/(?:active-issuer|bootstrap-root|active-rollover)"),
+    re.compile(r"state/generation-reservations/g[1-9][0-9]*(?:-i[1-9][0-9]*)?"),
+    re.compile(r"state/rollover/(?:journal|recovery-required)"),
+    re.compile(rf"state/rollover/terminal-{TRANSACTION_ID}"),
+    re.compile(
+        rf"state/rollover/{BOOTSTRAP_ID}/"
+        r"(?:bootstrap-rollback|reservation-abandoned)"
+    ),
+    re.compile(
+        rf"state/rollovers/{TRANSACTION_ID}/"
+        r"(?:manifest|tree\.manifest|candidate-root-tree\.manifest|"
+        r"candidate-intermediate-tree\.manifest|root-signing-stage-tree\.manifest)"
+    ),
+)
+REDACTED_STATE_FILES = (
+    re.compile(rf"state/rollovers/{TRANSACTION_ID}/trust-consumers\.yml"),
+)
+
+
+@dataclass(frozen=True)
+class RolloverTools:
+    init: Path
+    root: Path
+    intermediate: Path
+    issue: Path
+    backup: Path
+    rollover: Path
+
+
+@dataclass(frozen=True)
+class RolloverWorkspace:
+    root: Path
+    namespace: Path
+    pki: Path
+    private_repo: Path
+    passphrase_file: Path
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _isolated_environment(root: Path) -> Mapping[str, str]:
+    home = root / "home"
+    config = root / "config"
+    temporary = root / "tmp"
     for directory in (home, config, temporary):
-        directory.mkdir(mode=0o700)
+        directory.mkdir(mode=0o700, parents=True)
         directory.chmod(0o700)
 
     return {
@@ -27,3 +97,214 @@ def isolated_environment(tmp_path: Path) -> Mapping[str, str]:
         "TMPDIR": os.fspath(temporary),
         "XDG_CONFIG_HOME": os.fspath(config),
     }
+
+
+def _workspace(root: Path) -> RolloverWorkspace:
+    root.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    workspace = RolloverWorkspace(
+        root=root,
+        namespace=root / "ns",
+        pki=root / "ns/pki",
+        private_repo=root / "private",
+        passphrase_file=root / "passphrase",
+    )
+    workspace.private_repo.mkdir(mode=0o700)
+    (workspace.private_repo / "pki").mkdir(mode=0o700)
+    _write_private_text(
+        workspace.passphrase_file, "pytest-rollover-passphrase\n"
+    )
+    return workspace
+
+
+def _validate_case_name(name: str) -> None:
+    if (
+        not name
+        or name in {".", ".."}
+        or Path(name).is_absolute()
+        or Path(name).parts != (name,)
+    ):
+        raise ValueError("rollover fixture name must be one relative path component")
+
+
+def _checked_process(
+    tools: RolloverTools,
+    tool: Path,
+    arguments: list[str | Path],
+    environment: Mapping[str, str],
+) -> ProcessResult:
+    result = run_process(
+        [tool, *arguments],
+        env=environment,
+        timeout=120,
+    )
+    if result.status != 0:
+        name = next(
+            field
+            for field, value in tools.__dict__.items()
+            if value == tool
+        )
+        pytest.fail(
+            f"{name} fixture setup failed with status {result.status}: "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    return result
+
+
+def _public_state_snapshot(workspace: RolloverWorkspace) -> tuple[str, ...]:
+    state_root = workspace.pki / "state"
+    if not state_root.exists():
+        return ()
+
+    entries = []
+    for path in sorted(state_root.rglob("*")):
+        metadata = path.lstat()
+        relative = path.relative_to(workspace.pki).as_posix()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if stat.S_ISDIR(metadata.st_mode):
+            if not any(pattern.fullmatch(relative) for pattern in PUBLIC_STATE_DIRECTORIES):
+                raise ValueError(f"state snapshot path is not public: {relative}")
+            detail = "directory"
+        elif stat.S_ISREG(metadata.st_mode):
+            if any(pattern.fullmatch(relative) for pattern in PUBLIC_STATE_FILES):
+                detail = sha256(path.read_bytes()).hexdigest()
+            elif any(
+                pattern.fullmatch(relative) for pattern in REDACTED_STATE_FILES
+            ):
+                detail = f"redacted-size:{metadata.st_size}"
+            else:
+                raise ValueError(f"state snapshot path is not public: {relative}")
+        else:
+            raise ValueError(f"state snapshot object is not regular: {relative}")
+        entries.append(f"{relative}\t{mode:o}\t{detail}")
+    return tuple(entries)
+
+
+@pytest.fixture
+def rollover_tool(rollover_tools: RolloverTools) -> Path:
+    return rollover_tools.rollover
+
+
+@pytest.fixture
+def isolated_environment(tmp_path: Path) -> Mapping[str, str]:
+    return _isolated_environment(tmp_path / "environment")
+
+
+@pytest.fixture(scope="session")
+def rollover_tools() -> RolloverTools:
+    bin_dir = Path(__file__).resolve().parents[3] / "bin"
+    return RolloverTools(
+        init=bin_dir / "platform-pki-init",
+        root=bin_dir / "platform-pki-root-create",
+        intermediate=bin_dir / "platform-pki-intermediate-create",
+        issue=bin_dir / "platform-pki-service-issue",
+        backup=bin_dir / "platform-pki-backup",
+        rollover=bin_dir / "platform-pki-ca-rollover",
+    )
+
+
+@pytest.fixture
+def rollover_workspace_factory(
+    tmp_path: Path,
+) -> Callable[[str], RolloverWorkspace]:
+    def create(name: str) -> RolloverWorkspace:
+        _validate_case_name(name)
+        return _workspace(tmp_path / "workspaces" / name)
+
+    return create
+
+
+@pytest.fixture(scope="session")
+def _rollover_seed(
+    tmp_path_factory: pytest.TempPathFactory,
+    rollover_tools: RolloverTools,
+) -> RolloverWorkspace:
+    session_root = tmp_path_factory.mktemp("pki-rollover")
+    environment = _isolated_environment(session_root / "environment")
+    workspace = _workspace(session_root / "seed")
+
+    _checked_process(
+        rollover_tools,
+        rollover_tools.init,
+        ["--namespace", workspace.namespace],
+        environment,
+    )
+    _write_private_text(workspace.pki / "inventory/services.yml", INVENTORY)
+    _write_private_text(
+        workspace.private_repo / "pki/services.yml", INVENTORY
+    )
+    _checked_process(
+        rollover_tools,
+        rollover_tools.root,
+        [
+            "--namespace",
+            workspace.namespace,
+            "--name",
+            "Pytest Root",
+            "--org",
+            "Test",
+            "--country",
+            "PL",
+            "--root-pass-file",
+            workspace.passphrase_file,
+        ],
+        environment,
+    )
+    _checked_process(
+        rollover_tools,
+        rollover_tools.intermediate,
+        [
+            "--namespace",
+            workspace.namespace,
+            "--name",
+            "Pytest Intermediate",
+            "--org",
+            "Test",
+            "--country",
+            "PL",
+            "--root-pass-file",
+            workspace.passphrase_file,
+            "--intermediate-pass-file",
+            workspace.passphrase_file,
+        ],
+        environment,
+    )
+    _checked_process(
+        rollover_tools,
+        rollover_tools.issue,
+        [
+            "app",
+            "--namespace",
+            workspace.namespace,
+            "--intermediate-pass-file",
+            workspace.passphrase_file,
+        ],
+        environment,
+    )
+    return workspace
+
+
+@pytest.fixture
+def rollover_case_factory(
+    tmp_path: Path,
+    _rollover_seed: RolloverWorkspace,
+) -> Callable[[str], RolloverWorkspace]:
+    def create(name: str) -> RolloverWorkspace:
+        _validate_case_name(name)
+        destination = tmp_path / "cases" / name
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        copy_tree(_rollover_seed.root, destination)
+        return RolloverWorkspace(
+            root=destination,
+            namespace=destination / "ns",
+            pki=destination / "ns/pki",
+            private_repo=destination / "private",
+            passphrase_file=destination / "passphrase",
+        )
+
+    return create
+
+
+@pytest.fixture
+def public_state_snapshot() -> Callable[[RolloverWorkspace], tuple[str, ...]]:
+    return _public_state_snapshot
