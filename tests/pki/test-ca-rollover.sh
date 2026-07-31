@@ -396,6 +396,11 @@ run_file_identity_rewrite_test() {
   [[ $identity_before != "$IDENTITY_AFTER" ]] || fail 'same-size same-second rewrite retained its file identity'
 }
 
+run_state_record_identity_test() {
+  bash -c 'source "$1"; pki_atomic_write "$2" "identity=$3
+"; pki_read_state_record "$2" Identity; [[ ${PKI_RECORD[identity]} == "$3" ]]' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$IDENTITY_CASE/state" "$IDENTITY_AFTER" || fail 'state parser did not preserve a nanosecond identity'
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
@@ -413,6 +418,7 @@ case ${1:-all} in
   ca-profile-extra-key-usage) run_ca_profile_extra_key_usage_test; exit 0 ;;
   ca-self-signature-corruption) run_ca_self_signature_selector_test; exit 0 ;;
   file-identity-rewrite) run_file_identity_rewrite_test; exit 0 ;;
+  state-record-nanosecond-identity) run_file_identity_rewrite_test; run_state_record_identity_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -421,8 +427,7 @@ run_missing_service_issuer_test "$seed"
 run_ready_status_test "$seed"
 
 run_file_identity_rewrite_test
-bash -c 'source "$1"; pki_atomic_write "$2" "identity=$3
-"; pki_read_state_record "$2" Identity; [[ ${PKI_RECORD[identity]} == "$3" ]]' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$IDENTITY_CASE/state" "$IDENTITY_AFTER" || fail 'state parser did not preserve a nanosecond identity'
+run_state_record_identity_test
 
 manifest_case="$TMP_DIR/manifest-removal"; mkdir -m 700 "$manifest_case" "$manifest_case/tree"; printf '%s' first >"$manifest_case/tree/key"; chmod 600 "$manifest_case/tree/key"
 bash -c 'source "$1"; pki_tree_manifest "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$manifest_case/tree" >"$manifest_case/manifest"; chmod 600 "$manifest_case/manifest"
