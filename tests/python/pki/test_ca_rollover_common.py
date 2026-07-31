@@ -392,3 +392,103 @@ def test_ca_profile_rejects_noncritical_basic_constraints(
         "[ERROR] Test must have critical CA:TRUE Basic Constraints "
         "with pathlen:1\n"
     )
+
+
+def test_ca_profile_rejects_extra_key_usage(
+    tmp_path: Path,
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    common_library = (
+        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+    )
+    private_key = tmp_path / "usage.key"
+    certificate = tmp_path / "usage.crt"
+    generated = process_runner(
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-subj",
+            "/CN=bad-usage",
+            "-days",
+            "1",
+            "-keyout",
+            private_key,
+            "-out",
+            certificate,
+            "-addext",
+            "basicConstraints=critical,CA:true,pathlen:1",
+            "-addext",
+            "keyUsage=critical,digitalSignature,keyCertSign,cRLSign",
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert generated.status == 0
+    assert certificate.is_file() and not certificate.is_symlink()
+    assert private_key.is_file() and not private_key.is_symlink()
+
+    constraints = process_runner(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            certificate,
+            "-noout",
+            "-ext",
+            "basicConstraints",
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert constraints.status == 0
+    assert constraints.stderr == ""
+    assert constraints.stdout == (
+        "X509v3 Basic Constraints: critical\n"
+        "    CA:TRUE, pathlen:1\n"
+    )
+
+    usage = process_runner(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            certificate,
+            "-noout",
+            "-ext",
+            "keyUsage",
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert usage.status == 0
+    assert usage.stderr == ""
+    assert usage.stdout == (
+        "X509v3 Key Usage: critical\n"
+        "    Digital Signature, Certificate Sign, CRL Sign\n"
+    )
+
+    result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test',
+            "_",
+            common_library,
+            certificate,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Test must have critical Certificate Sign and CRL Sign "
+        "Key Usage only\n"
+    )
