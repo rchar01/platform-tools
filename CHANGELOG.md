@@ -30,6 +30,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed Phase 6A child operations to pre-create and durably journal sensitive destinations, capture exact partial identities after controlled child interruption, use full nanosecond identities for present staged root database sources, publish immutable write-ahead transaction manifests, and identity-check terminal journal and marker unlink against retained receipts.
 - Changed backup receipts to include a unique 24-hour migration session and metadata-only private-state digest; migration now validates complete legacy CA, database, service, export, path, and inventory state.
 - Changed inventory replacement to prefer capability-probed atomic exchange and support a documented guarded atomic-rename fallback under cooperative same-UID locks when exchange is unsupported.
+- Changed the development toolbox from Alpine to a reproducible Debian 13 snapshot for `amd64` and `arm64`, with exact package versions, a locked Bashly bundle, pytest, and checksum-verified ShellCheck and shfmt binaries.
 
 ## [1.4.0] - 2026-07-27
 

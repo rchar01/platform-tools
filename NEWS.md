@@ -14,6 +14,7 @@ This file gives a short, release-oriented view of what changed between versions.
 - Recovery now requires exact journaled identities for CA database files and their staged sources, configurations, reservations, issuer records, quarantine entries, backup sessions, active manifests, service snapshots, and digest-bound complete-tree manifests that omit private-content hashes. Phase 6A pre-journals sensitive child destinations, uses full nanosecond staged-source identities and immutable write-ahead transaction manifests, and binds final journal/marker unlink through terminal receipts. Rollover certificates require exact critical CA profiles and verified root self-signatures. Migration failures require explicit recovery, sensitive root-key staging is removed before intermediate commit, and verified bootstrap rollback permanently abandons rather than reuses its generation ID.
 - Intermediate and service certificate publication now enforces actual ASN.1 validity against the issuer with a one-day default safety margin.
 - Inventory publication prefers `RENAME_EXCHANGE` and supports a guarded rename fallback under cooperative same-UID locks, including rootless Podman filesystems.
+- The development toolbox now uses a reproducible Debian 13 snapshot on `amd64` and `arm64`, with a locked Bashly bundle, pytest, and checksum-verified ShellCheck and shfmt binaries.
 
 ## v1.4.0 - 2026-07-27
 

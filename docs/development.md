@@ -95,15 +95,19 @@ through the runtime `SHARE_DIR` as the isolated XDG data location.
 
 ## Generator Updates
 
-The development image pins the Bashly image digest and direct Alpine package
-versions. Update the base digest and package pins together, inspect upstream
-release notes, regenerate all Bashly-backed tools, and run a clean build:
+The development image uses a digest-pinned Debian 13 Ruby base, the matching
+immutable Debian snapshot, exact direct package versions, checksum-verified
+ShellCheck and shfmt binaries, and the Bashly dependency graph locked in
+`Gemfile.lock`. Its reviewed ShellCheck and shfmt asset mappings support
+`amd64` and `arm64`; builds reject other architectures. Update these inputs
+together, inspect upstream release notes, regenerate all Bashly-backed tools,
+and run a clean build:
 
 ```bash
 podman build --no-cache -f Containerfile.dev .
 make container-check
 ```
 
-Alpine package repositories remain mutable. Exact package versions make
-changes fail visibly, but old versions can eventually disappear and require a
-reviewed pin refresh.
+The dated Debian snapshot keeps reviewed package versions available. Refresh
+the base digest and snapshot timestamp together so the image does not mix a
+Ruby base with a different operating-system package snapshot.

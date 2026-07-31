@@ -1,30 +1,132 @@
-FROM docker.io/dannyben/bashly:1.4.0@sha256:96525735128a8ac9433a60b1333d85b40b5157f68e2e7eb5d0a16bb71ba94e3c
+FROM docker.io/library/ruby:4.0-slim-trixie@sha256:abd7528c4df35d151e2643d5efb845e442a26e36a4babc6459bee508619137a2 AS base
 
-# Direct packages are pinned so repository updates fail visibly instead of
-# silently changing the toolchain. Refresh them with the base digest and a
-# reviewed no-cache build because Alpine does not provide immutable snapshots.
-RUN apk add --no-cache \
-    age=1.2.1-r15 \
-    bash=5.3.3-r1 \
-    coreutils=9.8-r1 \
-    file=5.46-r2 \
-    findutils=4.10.0-r0 \
-    git=2.52.0-r0 \
-    grep=3.12-r0 \
-    gzip=1.14-r2 \
-    jq=1.8.1-r0 \
-    make=4.4.1-r3 \
-    openssh-client-default=10.2_p1-r0 \
-    openssl=3.5.7-r0 \
-    py3-yaml=6.0.3-r0 \
-    python3=3.12.13-r0 \
-    sed=4.9-r2 \
-    shellcheck=0.11.0-r0 \
-    shfmt=3.11.0-r10 \
-    tar=1.35-r4 \
-    util-linux=2.41.4-r0
+ARG DEBIAN_SNAPSHOT=20260713T000000Z
+ARG SHELLCHECK_VERSION=0.11.0
+ARG SHFMT_VERSION=3.11.0
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    TZ=UTC
+
+# The Ruby base records this matching snapshot date in its source comments.
+# Use immutable package indexes and exact direct versions so refreshes are
+# explicit and reviewable.
+RUN printf '%s\n' \
+      'Types: deb' \
+      "URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/" \
+      'Suites: trixie trixie-updates' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+      '' \
+      'Types: deb' \
+      "URIs: https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/" \
+      'Suites: trixie-security' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+      > /etc/apt/sources.list.d/debian.sources \
+  && printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
+      > /etc/apt/apt.conf.d/99snapshot
+
+FROM base AS bashly-builder
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential=12.12 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY Gemfile Gemfile.lock /opt/bashly/
+
+RUN cd /opt/bashly \
+  && bundle config set --global frozen true \
+  && bundle install --jobs 4 --retry 3 \
+  && rm -rf /usr/local/bundle/cache \
+  && test "$(bashly --version)" = '1.4.0'
+
+FROM base AS asset-builder
+
+ARG SHELLCHECK_VERSION
+ARG SHFMT_VERSION
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      curl=8.14.1-2+deb13u4 \
+  && rm -rf /var/lib/apt/lists/*
+
+# Debian's packages lag the existing lint/format toolchain. Download the same
+# reviewed releases in a disposable stage and verify their upstream checksums.
+RUN set -eu; \
+    architecture=$(dpkg --print-architecture); \
+    case "$architecture" in \
+      amd64) \
+        shellcheck_arch=x86_64; \
+        shellcheck_sha=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6; \
+        shfmt_arch=amd64; \
+        shfmt_sha=1904ec6bac715c1d05cd7f6612eec8f67a625c3749cb327e5bfb4127d09035ff \
+        ;; \
+      arm64) \
+        shellcheck_arch=aarch64; \
+        shellcheck_sha=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc; \
+        shfmt_arch=arm64; \
+        shfmt_sha=b3976121710fd4b12bf641b0a7fb2686da598fb0da9f148c641b61b54cfa3407 \
+        ;; \
+      *) \
+        printf 'Unsupported development image architecture: %s\n' "$architecture" >&2; \
+        exit 1 \
+        ;; \
+    esac; \
+    shellcheck_archive=/tmp/shellcheck.tar.gz; \
+    curl --fail --location --silent --show-error \
+      --output "$shellcheck_archive" \
+      "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.${shellcheck_arch}.tar.gz"; \
+    printf '%s  %s\n' "$shellcheck_sha" "$shellcheck_archive" | sha256sum --check -; \
+    tar -xzf "$shellcheck_archive" -C /tmp; \
+    install -m 0755 \
+      "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" \
+      /shellcheck; \
+    curl --fail --location --silent --show-error \
+      --output /shfmt \
+      "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_${shfmt_arch}"; \
+    printf '%s  %s\n' "$shfmt_sha" /shfmt | sha256sum --check -; \
+    chmod 0755 /shfmt
+
+FROM base
+
+ARG SHELLCHECK_VERSION
+ARG SHFMT_VERSION
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      age=1.2.1-1+b5 \
+      bash=5.2.37-2+b9 \
+      ca-certificates=20250419 \
+      coreutils=9.7-3 \
+      file=1:5.46-5 \
+      findutils=4.10.0-3 \
+      git=1:2.47.3-0+deb13u1 \
+      grep=3.11-4 \
+      gzip=1.13-1 \
+      jq=1.7.1-6+deb13u2 \
+      make=4.4.1-2 \
+      openssh-client=1:10.0p1-7+deb13u4 \
+      openssl=3.5.6-1~deb13u2 \
+      procps=2:4.0.4-9 \
+      python3=3.13.5-1 \
+      python3-pytest=8.3.5-2 \
+      python3-yaml=6.0.2-1+b2 \
+      sed=4.9-2+deb13u1 \
+      tar=1.35+dfsg-3.1 \
+      util-linux=2.41-5 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=bashly-builder /usr/local/bundle /usr/local/bundle
+COPY --from=asset-builder /shellcheck /usr/local/bin/shellcheck
+COPY --from=asset-builder /shfmt /usr/local/bin/shfmt
+
+RUN test "$(bashly --version)" = '1.4.0' \
+  && test "$(shellcheck --version | sed -n 's/^version: //p')" = "$SHELLCHECK_VERSION" \
+  && test "$(shfmt --version)" = "v$SHFMT_VERSION" \
+  && test "$(python3 -m pytest --version)" = 'pytest 8.3.5'
 
 WORKDIR /workspace
 
-ENTRYPOINT []
 CMD ["/bin/bash"]

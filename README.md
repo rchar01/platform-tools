@@ -107,10 +107,10 @@ Optional verification tools:
 
 ## Development Container
 
-The canonical development environment is a rootless Podman container with the
-repository mounted at `/workspace`. It includes the pinned Bashly generator and
-the tools needed by the maintained checks without mounting host SSH keys,
-private configuration, or PKI state.
+The canonical development environment is a Debian 13 rootless Podman container
+for `amd64` and `arm64`, with the repository mounted at `/workspace`. It includes
+the pinned Bashly generator, pytest, and the tools needed by the maintained
+checks without mounting host SSH keys, private configuration, or PKI state.
 
 Open an interactive development shell:
 

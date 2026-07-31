@@ -45,7 +45,7 @@
 
 ## Tooling Notes
 
-- `Containerfile.dev` pins the base digest and direct APK versions; Alpine repositories remain mutable, so refresh the base and package pins together and verify with a reviewed `podman build --no-cache -f Containerfile.dev .`.
+- `Containerfile.dev` uses a digest-pinned Debian 13 Ruby base, an immutable Debian snapshot with exact direct package versions, checksum-verified ShellCheck/shfmt binaries for `amd64` and `arm64`, and the locked Bashly bundle in `Gemfile.lock`. Refresh these inputs together and verify with a reviewed `podman build --no-cache -f Containerfile.dev .`.
 - `make install` copies scripts to `INSTALL_DIR` and PKI shared assets to `SHARE_DIR`; custom installs commonly use `make install INSTALL_DIR="$PWD/.tools/bin" SHARE_DIR="$PWD/.tools/share/platform-tools"`.
 - Installed PKI scripts find shared assets through `PLATFORM_TOOLS_LIB_DIR`, checkout-relative `../lib`, or `PLATFORM_TOOLS_SHARE_DIR`/`~/.local/share/platform-tools`; preserve this lookup behavior when editing wrappers.
 - Proxmox helpers can stream themselves over SSH; remote prerequisites are `pveum` for token bootstrap, `qm` for VM cleanup, and remote `jq` only when `platform-proxmox-token-init --write-token-file` parses JSON output.
