@@ -424,6 +424,17 @@ EOF
   assert_fails_with 'committed preparation journal gating' 'PKI recovery is required' bash -c 'source "$1"; PKI_DIR=$2; pki_require_no_unresolved_journal' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$JOURNAL_CASE"
 }
 
+run_committed_migration_journal_test() {
+  JOURNAL_CASE="$TMP_DIR/journal-gating"
+  mkdir -m 700 -p "$JOURNAL_CASE/state/rollover"
+  cat >"$JOURNAL_CASE/state/rollover/journal" <<'EOF'
+operation=legacy-migrate
+committed=true
+EOF
+  chmod 600 "$JOURNAL_CASE/state/rollover/journal"
+  bash -c 'source "$1"; PKI_DIR=$2; pki_require_no_unresolved_journal' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$JOURNAL_CASE" || fail 'committed migration journal no longer preserves Phase 5 behavior'
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
@@ -444,6 +455,7 @@ case ${1:-all} in
   state-record-nanosecond-identity) run_file_identity_rewrite_test; run_state_record_identity_test; exit 0 ;;
   manifested-tree-rewrite) run_manifested_tree_rewrite_test; exit 0 ;;
   committed-prepare-journal) run_committed_prepare_journal_test; exit 0 ;;
+  committed-migration-journal) run_committed_migration_journal_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -457,11 +469,7 @@ run_state_record_identity_test
 run_manifested_tree_rewrite_test
 
 run_committed_prepare_journal_test
-cat >"$JOURNAL_CASE/state/rollover/journal" <<'EOF'
-operation=legacy-migrate
-committed=true
-EOF
-bash -c 'source "$1"; PKI_DIR=$2; pki_require_no_unresolved_journal' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$JOURNAL_CASE" || fail 'committed migration journal no longer preserves Phase 5 behavior'
+run_committed_migration_journal_test
 
 intermediate_prepare="$TMP_DIR/intermediate-prepare"; mkdir -m 700 "$intermediate_prepare"; create_generation_fixture "$intermediate_prepare"; backup_generation "$intermediate_prepare"
 active_before=$(<"$intermediate_prepare/ns/pki/state/active-issuer")
