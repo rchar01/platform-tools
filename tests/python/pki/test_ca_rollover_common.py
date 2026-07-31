@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable, Mapping
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -113,3 +114,111 @@ def test_state_record_preserves_nanosecond_file_identity(
     assert state.read_text() == f"identity={identity}\n"
     assert state.stat().st_mode & 0o777 == 0o600
     assert not state.is_symlink()
+
+
+def test_manifested_tree_rejects_same_inode_member_rewrite(
+    tmp_path: Path,
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    common_library = (
+        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+    )
+    case = tmp_path / "manifest-removal"
+    tree = case / "tree"
+    tree.mkdir(mode=0o700, parents=True)
+    member = tree / "key"
+    member.write_bytes(b"first")
+    member.chmod(0o600)
+
+    second = member.stat().st_mtime_ns // 1_000_000_000
+    first_timestamp = second * 1_000_000_000 + 300_000_000
+    second_timestamp = second * 1_000_000_000 + 400_000_000
+    os.utime(member, ns=(first_timestamp, first_timestamp))
+
+    manifest_result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_tree_manifest "$2"',
+            "_",
+            common_library,
+            tree,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert manifest_result.status == 0
+    assert manifest_result.stderr == ""
+    manifest_lines = manifest_result.stdout.splitlines()
+    assert len(manifest_lines) == 1
+    member_type, relative, member_identity, member_digest = manifest_lines[0].split(
+        "|", 3
+    )
+    assert member_type == "regular file"
+    assert relative == "key"
+    assert member_identity
+    assert member_digest == sha256(member.read_bytes()).hexdigest()
+    manifest = case / "manifest"
+    manifest.write_text(manifest_result.stdout)
+    manifest.chmod(0o600)
+
+    identities = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_file_identity "$2"; pki_dir_identity "$3"; '
+            'pki_file_identity "$4"',
+            "_",
+            common_library,
+            manifest,
+            tree,
+            member,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert identities.status == 0
+    assert identities.stderr == ""
+    manifest_identity, tree_identity, direct_member_identity = (
+        identities.stdout.splitlines()
+    )
+    assert member_identity == direct_member_identity
+    manifest_digest = sha256(manifest.read_bytes()).hexdigest()
+    manifest_before = manifest.read_bytes()
+    member_before = member.stat()
+
+    member.write_bytes(b"other")
+    os.utime(member, ns=(second_timestamp, second_timestamp))
+    member_after = member.stat()
+    result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_remove_manifested_tree '
+            '"$2" "$3" "$4" "$5" "$6" "$7"',
+            "_",
+            common_library,
+            tree,
+            tree_identity,
+            case,
+            manifest,
+            manifest_identity,
+            manifest_digest,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == result.stderr == ""
+    assert member.read_bytes() == b"other"
+    assert manifest.read_bytes() == manifest_before
+    assert tree.is_dir() and not tree.is_symlink()
+    assert member_before.st_dev == member_after.st_dev
+    assert member_before.st_ino == member_after.st_ino
+    assert member_before.st_mode == member_after.st_mode
+    assert member_before.st_size == member_after.st_size == 5
+    assert member_before.st_mtime_ns // 1_000_000_000 == (
+        member_after.st_mtime_ns // 1_000_000_000
+    )
