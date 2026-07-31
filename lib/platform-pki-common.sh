@@ -385,8 +385,8 @@ pki_terminal_receipt() {
 pki_file_identity_or_absent() {
   local path=$1
   if [[ ! -e $path && ! -L $path ]]; then
-    printf '%s\n' absent
-    return
+    printf '%s\n' absent || return 1
+    return 0
   fi
   [[ -f $path && ! -L $path ]] || pki_die "Expected a regular file or absent path: $path"
   pki_file_object_state "$path"
@@ -394,7 +394,7 @@ pki_file_identity_or_absent() {
 
 pki_file_identity_or_absent_full() {
   local path=$1
-  if [[ ! -e $path && ! -L $path ]]; then printf '%s\n' absent; return; fi
+  if [[ ! -e $path && ! -L $path ]]; then printf '%s\n' absent || return 1; return 0; fi
   [[ -f $path && ! -L $path ]] || pki_die "Expected a regular file or absent path: $path"
   pki_file_identity "$path"
 }
@@ -417,7 +417,7 @@ pki_restore_journaled_file() {
     local current_identity
     current_identity=$(pki_file_identity "$path") || return 1
     pki_remove_identity_file "$path" "$current_identity" || return 1
-    return
+    return 0
   fi
   pki_require_file_identity "$backup" "$backup_identity" "$label rollback copy"
   pki_publish_staged_file "$backup" "$path"
@@ -427,7 +427,7 @@ pki_restore_journaled_file_exact() {
   local path=$1 pre_identity=$2 post_identity=$3 backup=$4 backup_identity=$5 label=$6
   pki_require_file_identity "$path" "$post_identity" "$label published state"
   [[ $pre_identity != "$post_identity" ]] || return 0
-  if [[ $pre_identity == absent ]]; then pki_remove_identity_file "$path" "$post_identity" || return 1; return; fi
+  if [[ $pre_identity == absent ]]; then pki_remove_identity_file "$path" "$post_identity" || return 1; return 0; fi
   pki_require_file_identity "$backup" "$backup_identity" "$label rollback copy"
   pki_publish_staged_file_exact "$backup" "$path"
 }
