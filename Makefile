@@ -10,7 +10,7 @@ LIBS := lib/platform-pki-common.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
 BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-inventory-install platform-pki-backup platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-ca-rollover platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
 
-.PHONY: help shell container-check generate verify-generated install verify test test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-python-infrastructure test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover shellcheck
 
 ## Show available commands
 help:
@@ -73,7 +73,11 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover
+test: test-python-infrastructure test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover
+
+## Run generic Python test-harness contract tests
+test-python-infrastructure:
+	python3 -m pytest tests/python
 
 ## Run the maintained cross-command CLI contract tests
 test-command-contract:

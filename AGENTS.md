@@ -28,9 +28,10 @@
 - Run `make generate` after changing Bashly source and `make verify-generated` to prove committed executables are deterministic and current. Never edit a Bashly-generated `bin/` file directly.
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
 - Run `make test` after behavior changes; it runs maintained repository tests such as bastion policy rendering checks.
+- Run `make test-python-infrastructure` after changing pytest fixtures or process helpers. Keep subprocesses argv-only with `shell=False`, bounded process-group cleanup, and shell-style signal statuses.
 - Run `make test-command-contract` after command inventory or parser changes, and `make test-installed-tools` after installation or shared-asset changes. The latter uses a disposable `.tmp` install and an isolated runtime `PATH`.
 - Run `make shellcheck` when ShellCheck is available; it lint-checks maintained shell tools and libraries.
-- There is no repo test suite or CI workflow in this tree. For behavior changes, run focused smoke commands in `/tmp/opencode` or another temporary namespace instead of the default `~/.config/platform-infrastructure/` paths.
+- There is no CI workflow in this tree. For behavior not covered by maintained tests, run focused smoke commands in `/tmp/opencode` or another temporary namespace instead of the default `~/.config/platform-infrastructure/` paths.
 - For PKI smoke tests, use `platform-pki-init --namespace <temp-dir>` and pass `--namespace <temp-dir>` to every following PKI command so real CA material is never touched.
 
 ## Security And Generated Files

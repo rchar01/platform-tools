@@ -93,6 +93,26 @@ unavailable. It smokes every installed command and initializes PKI only under
 an explicit temporary namespace; installed PKI library and templates resolve
 through the runtime `SHARE_DIR` as the isolated XDG data location.
 
+## Python Test Infrastructure
+
+Generic pytest helpers under `tests/python/` run commands as exact argument
+vectors with `shell=False` and isolated process groups. Timeouts send `TERM`,
+wait for a bounded grace period, then send `KILL`; signal exits use shell-style
+statuses such as 137 for `SIGKILL`. The tree-copy fixture uses `cp -a` to
+preserve the filesystem metadata exercised by lifecycle tests.
+
+Run the harness contracts, one marker, or one exact node with:
+
+```bash
+make test-python-infrastructure
+python3 -m pytest -m infrastructure
+python3 -m pytest tests/python/test_harness.py::test_process_runner_kills_timed_out_process_group
+```
+
+No PKI lifecycle scenario has been migrated to pytest. Existing shell tests
+remain authoritative unless a later reviewed migration explicitly replaces
+one.
+
 ## Generator Updates
 
 The development image uses a digest-pinned Debian 13 Ruby base, the matching

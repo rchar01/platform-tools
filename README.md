@@ -124,6 +124,12 @@ Run all maintained checks in a one-shot container:
 make container-check
 ```
 
+Run only the generic pytest harness contract tests:
+
+```bash
+make test-python-infrastructure
+```
+
 Generate Bashly-backed executables and verify that committed output is current:
 
 ```bash
