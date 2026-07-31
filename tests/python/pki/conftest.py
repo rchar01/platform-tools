@@ -93,22 +93,26 @@ def _isolated_environment(root: Path) -> Mapping[str, str]:
         "HOME": os.fspath(home),
         "LC_ALL": "C",
         "NO_COLOR": "1",
-        "PATH": os.environ.get("PATH", os.defpath),
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
         "TMPDIR": os.fspath(temporary),
         "XDG_CONFIG_HOME": os.fspath(config),
     }
 
 
-def _workspace(root: Path) -> RolloverWorkspace:
-    root.mkdir(mode=0o700, parents=True)
-    root.chmod(0o700)
-    workspace = RolloverWorkspace(
+def _workspace_paths(root: Path) -> RolloverWorkspace:
+    return RolloverWorkspace(
         root=root,
         namespace=root / "ns",
         pki=root / "ns/pki",
         private_repo=root / "private",
         passphrase_file=root / "passphrase",
     )
+
+
+def _workspace(root: Path) -> RolloverWorkspace:
+    root.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    workspace = _workspace_paths(root)
     workspace.private_repo.mkdir(mode=0o700)
     (workspace.private_repo / "pki").mkdir(mode=0o700)
     _write_private_text(
@@ -214,6 +218,20 @@ def rollover_workspace_factory(
     return create
 
 
+@pytest.fixture
+def rollover_control_workspace_factory(
+    tmp_path: Path,
+) -> Callable[[str], RolloverWorkspace]:
+    def create(name: str) -> RolloverWorkspace:
+        _validate_case_name(name)
+        root = tmp_path / "control-workspaces" / name
+        root.mkdir(mode=0o700, parents=True)
+        root.chmod(0o700)
+        return _workspace_paths(root)
+
+    return create
+
+
 @pytest.fixture(scope="session")
 def _rollover_seed(
     tmp_path_factory: pytest.TempPathFactory,
@@ -308,3 +326,8 @@ def rollover_case_factory(
 @pytest.fixture
 def public_state_snapshot() -> Callable[[RolloverWorkspace], tuple[str, ...]]:
     return _public_state_snapshot
+
+
+@pytest.fixture
+def private_text_writer() -> Callable[[Path, str], None]:
+    return _write_private_text

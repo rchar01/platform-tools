@@ -204,9 +204,45 @@ run_parser_tests() {
   [[ ! -e $parser_unused && ! -e $parser_unused.receipt && ! -e $parser_other && ! -e $parser_private ]] || fail 'parser tests created PKI operand paths'
 }
 
+run_invalid_terminal_marker_test() {
+  local invalid_terminal="$TMP_DIR/invalid-terminal-marker" marker status control_before control_after
+  mkdir -m 700 "$invalid_terminal" "$invalid_terminal/ns" "$invalid_terminal/ns/pki" \
+    "$invalid_terminal/ns/pki/locks" "$invalid_terminal/ns/pki/state" \
+    "$invalid_terminal/ns/pki/state/rollover" "$invalid_terminal/ns/pki/state/rollovers" \
+    "$invalid_terminal/ns/pki/state/generation-reservations"
+  for lock in lifecycle root intermediate inventory export; do
+    (umask 077; : >"$invalid_terminal/ns/pki/locks/$lock")
+  done
+  mkdir -m 700 "$invalid_terminal/environment" "$invalid_terminal/environment/home" \
+    "$invalid_terminal/environment/config" "$invalid_terminal/environment/tmp"
+  marker="$invalid_terminal/ns/pki/state/rollover/recovery-required"
+  (umask 077; : >"$marker")
+  cat >"$marker" <<'EOF'
+transaction=prepare-root-20260730-000000-1
+operation=rollover-prepare
+terminal_outcome=invalid
+EOF
+  control_before=$(find "$invalid_terminal/ns/pki" -printf '%P\t%y\t%m\t%D:%i:%n\t%s\t%T@\n' | LC_ALL=C sort)
+  set +e
+  env -i HOME="$invalid_terminal/environment/home" \
+    XDG_CONFIG_HOME="$invalid_terminal/environment/config" \
+    TMPDIR="$invalid_terminal/environment/tmp" LC_ALL=C NO_COLOR=1 \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    "$ROLLOVER" status --namespace "$invalid_terminal/ns" --format json >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  status=$?
+  set -e
+  [[ $status -eq 1 ]] || fail "invalid terminal marker status was $status instead of 1"
+  [[ ! -s $TMP_DIR/stdout ]] || fail 'invalid terminal marker status wrote stdout'
+  [[ $(<"$TMP_DIR/stderr") == '[ERROR] PKI recovery marker has invalid terminal preparation state' ]] || fail "invalid terminal marker status stderr was unexpected: $(<"$TMP_DIR/stderr")"
+  [[ $(<"$marker") == $'transaction=prepare-root-20260730-000000-1\noperation=rollover-prepare\nterminal_outcome=invalid' ]] || fail 'invalid terminal marker status changed the marker'
+  control_after=$(find "$invalid_terminal/ns/pki" -printf '%P\t%y\t%m\t%D:%i:%n\t%s\t%T@\n' | LC_ALL=C sort)
+  [[ $control_after == "$control_before" ]] || fail 'invalid terminal marker status changed the control tree'
+}
+
 case ${1:-all} in
-  all) run_parser_tests ;;
+  all) run_parser_tests; run_invalid_terminal_marker_test ;;
   parser) run_parser_tests; exit 0 ;;
+  invalid-terminal-marker) run_invalid_terminal_marker_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -520,14 +556,6 @@ unlink_pid=$!; wait_for_path "$pause_marker"; unlink_marker="$recover_unlink/ns/
 set +e; wait "$unlink_pid"; unlink_status=$?; set -e
 [[ $unlink_status -ne 0 && $(<"$unlink_marker") == hostile-marker && ! -e $recover_unlink/ns/pki/state/rollover/journal ]] || fail 'recover terminal marker unlink deleted a concurrent replacement'
 [[ $(<"$recover_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'recover terminal unlink race changed active state'
-
-invalid_terminal="$TMP_DIR/invalid-terminal-marker"; cp -a "$seed" "$invalid_terminal"; cat >"$invalid_terminal/ns/pki/state/rollover/recovery-required" <<'EOF'
-transaction=prepare-root-20260730-000000-1
-operation=rollover-prepare
-terminal_outcome=invalid
-EOF
-chmod 600 "$invalid_terminal/ns/pki/state/rollover/recovery-required"
-assert_fails_with 'invalid terminal marker status' 'invalid terminal preparation state' "$ROLLOVER" status --namespace "$invalid_terminal/ns" --format json
 
 for scenario in after-journal:rollback after-staged:resume after-root-candidate:rollback after-intermediate-candidate:resume after-consumed:rollback after-state:resume after-pointer:rollback; do
   boundary=${scenario%%:*}; action=${scenario#*:}; case_dir="$TMP_DIR/prepare-root-$boundary"; cp -a "$seed" "$case_dir"; write_trust_consumers "$case_dir/private/pki/trust-consumers.yml"; backup_generation "$case_dir"
