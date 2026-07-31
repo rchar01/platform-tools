@@ -207,6 +207,14 @@ run_parser_tests() {
 declare -a STATUS_ENV=()
 STATUS_NAMESPACE=''; STATUS_PKI=''
 
+configure_status_environment() {
+  local base=$1
+  mkdir -m 700 "$base/environment" "$base/environment/home" \
+    "$base/environment/config" "$base/environment/tmp"
+  STATUS_NAMESPACE="$base/ns"; STATUS_PKI="$base/ns/pki"
+  STATUS_ENV=(env -i HOME="$base/environment/home" XDG_CONFIG_HOME="$base/environment/config" TMPDIR="$base/environment/tmp" LC_ALL=C NO_COLOR=1 PATH=/usr/local/bin:/usr/bin:/bin)
+}
+
 create_status_control_fixture() {
   local base=$1 lock
   mkdir -m 700 "$base" "$base/ns" "$base/ns/pki" "$base/ns/pki/locks" \
@@ -215,10 +223,7 @@ create_status_control_fixture() {
   for lock in lifecycle root intermediate inventory export; do
     (umask 077; : >"$base/ns/pki/locks/$lock")
   done
-  mkdir -m 700 "$base/environment" "$base/environment/home" \
-    "$base/environment/config" "$base/environment/tmp"
-  STATUS_NAMESPACE="$base/ns"; STATUS_PKI="$base/ns/pki"
-  STATUS_ENV=(env -i HOME="$base/environment/home" XDG_CONFIG_HOME="$base/environment/config" TMPDIR="$base/environment/tmp" LC_ALL=C NO_COLOR=1 PATH=/usr/local/bin:/usr/bin:/bin)
+  configure_status_environment "$base"
 }
 
 status_control_manifest() {
@@ -282,15 +287,48 @@ EOF
   [[ $control_after == "$control_before" ]] || fail 'unresolved migration journal status changed the control tree'
 }
 
+run_missing_service_issuer_test() {
+  local source=$1 base="$TMP_DIR/missing-service-issuer" issuer status state_before state_after locks_before locks_after
+  cp -a "$source" "$base"
+  configure_status_environment "$base"
+  mkdir -m 700 "$STATUS_PKI/state/rollovers"
+  for lock in lifecycle root intermediate inventory export; do
+    [[ -e $STATUS_PKI/locks/$lock ]] || (umask 077; : >"$STATUS_PKI/locks/$lock")
+  done
+  issuer="$STATUS_PKI/services/app/issuer"; rm -f "$issuer"
+  chmod 000 "$STATUS_PKI/authorities/roots/g1/private/root-ca.key" \
+    "$STATUS_PKI/authorities/intermediates/g1-i1/private/intermediate-ca.key"
+  chmod 000 "$PASS"
+  state_before=$(status_control_manifest "$STATUS_PKI/state")
+  locks_before=$(status_control_manifest "$STATUS_PKI/locks")
+  set +e
+  "${STATUS_ENV[@]}" "$ROLLOVER" status --namespace "$STATUS_NAMESPACE" --format json >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"
+  status=$?
+  chmod 600 "$PASS"
+  set -e
+  [[ $status -eq 1 ]] || fail "missing service issuer status was $status instead of 1"
+  [[ ! -s $TMP_DIR/stdout ]] || fail 'missing service issuer status wrote stdout'
+  [[ $(<"$TMP_DIR/stderr") == '[ERROR] Service app issuer manifest is missing or unsafe' ]] || fail "missing service issuer stderr was unexpected: $(<"$TMP_DIR/stderr")"
+  [[ ! -e $issuer && ! -L $issuer ]] || fail 'missing service issuer status recreated the issuer manifest'
+  state_after=$(status_control_manifest "$STATUS_PKI/state")
+  locks_after=$(status_control_manifest "$STATUS_PKI/locks")
+  [[ $state_after == "$state_before" && $locks_after == "$locks_before" ]] || fail 'missing service issuer status changed public control state'
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
   invalid-terminal-marker) run_invalid_terminal_marker_test; exit 0 ;;
   unresolved-migration-journal) run_unresolved_migration_journal_test; exit 0 ;;
+  missing-service-issuer)
+    selector_seed="$TMP_DIR/selector-seed"; mkdir -m 700 "$selector_seed"; create_generation_fixture "$selector_seed"
+    run_missing_service_issuer_test "$selector_seed"; exit 0
+    ;;
   *) fail "unknown test group: $1" ;;
 esac
 
 seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
+run_missing_service_issuer_test "$seed"
 
 identity_case="$TMP_DIR/nanosecond-identity"; mkdir -m 700 "$identity_case"; printf '%s' first >"$identity_case/key"; chmod 600 "$identity_case/key"
 identity_before=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")
@@ -423,9 +461,6 @@ openssl x509 -in "$root_prepare/ns/pki/authorities/roots/g2/certs/root-ca.crt" -
 openssl x509 -in "$profile_dir/bad-self-signature.crt" -noout >/dev/null || fail 'corrupted self-signature fixture is not parseable'
 assert_fails 'corrupted root self-signature' openssl verify -check_ss_sig -CAfile "$profile_dir/bad-self-signature.crt" "$profile_dir/bad-self-signature.crt"
 assert_fails_with 'application root self-signature validation' 'Candidate root self-signature is invalid' bash -c 'source "$1"; pki_require_ca_self_signature "$2" "Candidate root"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/bad-self-signature.crt"
-
-missing_issuer="$TMP_DIR/missing-service-issuer"; cp -a "$seed" "$missing_issuer"; rm -f "$missing_issuer/ns/pki/services/app/issuer"
-assert_fails_with 'missing service issuer status' 'issuer manifest is missing or unsafe' "$ROLLOVER" status --namespace "$missing_issuer/ns" --format json
 
 early_case="$TMP_DIR/prepare-early-boundaries"; cp -a "$seed" "$early_case"; backup_generation "$early_case"
 for boundary in transaction-dir-pending transaction-dir-done long-stage-pending long-stage-done backup-session-pending backup-session-done reserve-intermediate-pending reserve-intermediate-done stage-dir-pending stage-dir-done sensitive-stage-pending sensitive-root-stage-pending sensitive-root-stage-done sensitive-root-private-pending sensitive-root-private-done sensitive-intermediate-stage-pending sensitive-intermediate-stage-done sensitive-intermediate-private-pending sensitive-intermediate-private-done copied-root-key-pending copied-root-key-done sensitive-stage-done intermediate-stage-config-pending intermediate-stage-config-done intermediate-key-pending intermediate-key-done intermediate-csr-pending intermediate-csr-done intermediate-signing-pending intermediate-signing-done chain-pending chain-done evidence-stage-pending evidence-stage-done; do

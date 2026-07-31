@@ -154,3 +154,58 @@ def test_status_reports_unresolved_migration_journal(
     )
     assert public_state_snapshot(workspace) == public_before
     assert control_tree_snapshot(workspace.pki) == control_before
+
+
+def test_status_rejects_missing_service_issuer(
+    rollover_tools,
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    public_state_snapshot: Callable[[RolloverWorkspace], tuple[str, ...]],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = rollover_case_factory("missing-service-issuer")
+    (workspace.pki / "state/rollovers").mkdir(mode=0o700)
+    for name in ("lifecycle", "root", "intermediate", "inventory", "export"):
+        lock = workspace.pki / "locks" / name
+        if not lock.exists():
+            private_text_writer(lock, "")
+    issuer = workspace.pki / "services/app/issuer"
+    issuer.unlink()
+    workspace.passphrase_file.chmod(0)
+    for key in (
+        workspace.pki / "authorities/roots/g1/private/root-ca.key",
+        workspace.pki
+        / "authorities/intermediates/g1-i1/private/intermediate-ca.key",
+    ):
+        key.chmod(0)
+    public_before = public_state_snapshot(workspace)
+    controls_before = (
+        control_tree_snapshot(workspace.pki / "state"),
+        control_tree_snapshot(workspace.pki / "locks"),
+    )
+
+    result = process_runner(
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+            "--format",
+            "json",
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Service app issuer manifest is missing or unsafe\n"
+    )
+    assert not issuer.exists()
+    assert public_state_snapshot(workspace) == public_before
+    assert (
+        control_tree_snapshot(workspace.pki / "state"),
+        control_tree_snapshot(workspace.pki / "locks"),
+    ) == controls_before
