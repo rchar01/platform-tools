@@ -360,6 +360,13 @@ run_ca_profile_noncritical_basic_constraints_test() {
   assert_fails_with 'noncritical CA constraints' 'critical CA:TRUE Basic Constraints' bash -c 'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/basic.crt"
 }
 
+run_ca_profile_extra_key_usage_test() {
+  local profile_dir="$TMP_DIR/certificate-profiles"
+  mkdir -m 700 -p "$profile_dir"
+  openssl req -new -x509 -newkey rsa:2048 -nodes -subj /CN=bad-usage -days 1 -keyout "$profile_dir/usage.key" -out "$profile_dir/usage.crt" -addext 'basicConstraints=critical,CA:true,pathlen:1' -addext 'keyUsage=critical,digitalSignature,keyCertSign,cRLSign' >/dev/null 2>&1
+  assert_fails_with 'extra CA key usage' 'Key Usage only' bash -c 'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/usage.crt"
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
@@ -374,6 +381,7 @@ case ${1:-all} in
     run_ready_status_test "$selector_seed"; exit 0
     ;;
   ca-profile-noncritical-basic-constraints) run_ca_profile_noncritical_basic_constraints_test; exit 0 ;;
+  ca-profile-extra-key-usage) run_ca_profile_extra_key_usage_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -504,9 +512,8 @@ for boundary in transaction-manifest-staged transaction-manifest-published; do
 done
 
 run_ca_profile_noncritical_basic_constraints_test
+run_ca_profile_extra_key_usage_test
 profile_dir="$TMP_DIR/certificate-profiles"
-openssl req -new -x509 -newkey rsa:2048 -nodes -subj /CN=bad-usage -days 1 -keyout "$profile_dir/usage.key" -out "$profile_dir/usage.crt" -addext 'basicConstraints=critical,CA:true,pathlen:1' -addext 'keyUsage=critical,digitalSignature,keyCertSign,cRLSign' >/dev/null 2>&1
-assert_fails_with 'extra CA key usage' 'Key Usage only' bash -c 'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/usage.crt"
 openssl x509 -in "$root_prepare/ns/pki/authorities/roots/g2/certs/root-ca.crt" -badsig -out "$profile_dir/bad-self-signature.crt"
 openssl x509 -in "$profile_dir/bad-self-signature.crt" -noout >/dev/null || fail 'corrupted self-signature fixture is not parseable'
 assert_fails 'corrupted root self-signature' openssl verify -check_ss_sig -CAfile "$profile_dir/bad-self-signature.crt" "$profile_dir/bad-self-signature.crt"
