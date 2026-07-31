@@ -367,6 +367,22 @@ run_ca_profile_extra_key_usage_test() {
   assert_fails_with 'extra CA key usage' 'Key Usage only' bash -c 'source "$1"; pki_require_ca_certificate_profile "$2" 1 Test' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/usage.crt"
 }
 
+run_ca_self_signature_corruption_test() {
+  local source=$1 profile_dir="$TMP_DIR/certificate-profiles"
+  mkdir -m 700 -p "$profile_dir"
+  openssl x509 -in "$source" -badsig -out "$profile_dir/bad-self-signature.crt"
+  openssl x509 -in "$profile_dir/bad-self-signature.crt" -noout >/dev/null || fail 'corrupted self-signature fixture is not parseable'
+  assert_fails 'corrupted root self-signature' openssl verify -check_ss_sig -CAfile "$profile_dir/bad-self-signature.crt" "$profile_dir/bad-self-signature.crt"
+  assert_fails_with 'application root self-signature validation' 'Candidate root self-signature is invalid' bash -c 'source "$1"; pki_require_ca_self_signature "$2" "Candidate root"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/bad-self-signature.crt"
+}
+
+run_ca_self_signature_selector_test() {
+  local profile_dir="$TMP_DIR/certificate-profiles" source="$TMP_DIR/certificate-profiles/root.crt"
+  mkdir -m 700 -p "$profile_dir"
+  openssl req -new -x509 -newkey rsa:2048 -nodes -subj /CN=valid-root -days 1 -keyout "$profile_dir/root.key" -out "$source" >/dev/null 2>&1
+  run_ca_self_signature_corruption_test "$source"
+}
+
 case ${1:-all} in
   all) run_parser_tests; run_invalid_terminal_marker_test; run_unresolved_migration_journal_test ;;
   parser) run_parser_tests; exit 0 ;;
@@ -382,6 +398,7 @@ case ${1:-all} in
     ;;
   ca-profile-noncritical-basic-constraints) run_ca_profile_noncritical_basic_constraints_test; exit 0 ;;
   ca-profile-extra-key-usage) run_ca_profile_extra_key_usage_test; exit 0 ;;
+  ca-self-signature-corruption) run_ca_self_signature_selector_test; exit 0 ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -513,11 +530,7 @@ done
 
 run_ca_profile_noncritical_basic_constraints_test
 run_ca_profile_extra_key_usage_test
-profile_dir="$TMP_DIR/certificate-profiles"
-openssl x509 -in "$root_prepare/ns/pki/authorities/roots/g2/certs/root-ca.crt" -badsig -out "$profile_dir/bad-self-signature.crt"
-openssl x509 -in "$profile_dir/bad-self-signature.crt" -noout >/dev/null || fail 'corrupted self-signature fixture is not parseable'
-assert_fails 'corrupted root self-signature' openssl verify -check_ss_sig -CAfile "$profile_dir/bad-self-signature.crt" "$profile_dir/bad-self-signature.crt"
-assert_fails_with 'application root self-signature validation' 'Candidate root self-signature is invalid' bash -c 'source "$1"; pki_require_ca_self_signature "$2" "Candidate root"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$profile_dir/bad-self-signature.crt"
+run_ca_self_signature_corruption_test "$root_prepare/ns/pki/authorities/roots/g2/certs/root-ca.crt"
 
 early_case="$TMP_DIR/prepare-early-boundaries"; cp -a "$seed" "$early_case"; backup_generation "$early_case"
 for boundary in transaction-dir-pending transaction-dir-done long-stage-pending long-stage-done backup-session-pending backup-session-done reserve-intermediate-pending reserve-intermediate-done stage-dir-pending stage-dir-done sensitive-stage-pending sensitive-root-stage-pending sensitive-root-stage-done sensitive-root-private-pending sensitive-root-private-done sensitive-intermediate-stage-pending sensitive-intermediate-stage-done sensitive-intermediate-private-pending sensitive-intermediate-private-done copied-root-key-pending copied-root-key-done sensitive-stage-done intermediate-stage-config-pending intermediate-stage-config-done intermediate-key-pending intermediate-key-done intermediate-csr-pending intermediate-csr-done intermediate-signing-pending intermediate-signing-done chain-pending chain-done evidence-stage-pending evidence-stage-done; do
