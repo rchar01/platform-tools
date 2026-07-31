@@ -222,3 +222,50 @@ def test_manifested_tree_rejects_same_inode_member_rewrite(
     assert member_before.st_mtime_ns // 1_000_000_000 == (
         member_after.st_mtime_ns // 1_000_000_000
     )
+
+
+def test_committed_prepare_journal_requires_recovery(
+    tmp_path: Path,
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    common_library = (
+        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+    )
+    pki = tmp_path / "pki"
+    rollover_state = pki / "state/rollover"
+    rollover_state.mkdir(mode=0o700, parents=True)
+    pki.chmod(0o700)
+    (pki / "state").chmod(0o700)
+    journal = rollover_state / "journal"
+    journal.write_text("operation=rollover-prepare\ncommitted=true\n")
+    journal.chmod(0o600)
+    content_before = journal.read_bytes()
+    metadata_before = journal.stat()
+
+    result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; PKI_DIR=$2; pki_require_no_unresolved_journal',
+            "_",
+            common_library,
+            pki,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] PKI recovery is required before this command can continue: "
+        f"{journal}\n"
+    )
+    metadata_after = journal.stat()
+    assert journal.read_bytes() == content_before
+    assert metadata_after.st_dev == metadata_before.st_dev
+    assert metadata_after.st_ino == metadata_before.st_ino
+    assert metadata_after.st_mode == metadata_before.st_mode
+    assert metadata_after.st_size == metadata_before.st_size
+    assert metadata_after.st_mtime_ns == metadata_before.st_mtime_ns
