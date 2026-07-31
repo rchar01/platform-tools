@@ -377,6 +377,32 @@ def test_prepare_rejects_equals_form_empty_defaulted_option(
     )
 
 
+def test_shared_helper_rejects_equals_form_empty_option(
+    rollover_tool: Path,
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    common_library = rollover_tool.parent.parent / "lib/platform-pki-common.sh"
+    result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; command_line_args=(--issuer-safety-days=); '
+            "pki_reject_explicit_empty_options --issuer-safety-days",
+            "_",
+            common_library,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Option must not be empty: --issuer-safety-days\n"
+    )
+
+
 @pytest.mark.parametrize("option", RECOVER_REQUIRED_OPTIONS, ids=option_id)
 def test_recover_rejects_empty_required_option(
     tmp_path: Path,
