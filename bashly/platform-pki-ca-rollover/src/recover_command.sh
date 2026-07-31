@@ -7,6 +7,7 @@ else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
 pki_reject_repeated_options --namespace --pki-dir --transaction --action --yes
+[[ -n ${args[--action]} ]] || pki_die 'Recovery action must not be empty'
 
 NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}; PKI_DIR=${args[--pki-dir]:-}
 TRANSACTION=${args[--transaction]}; ACTION=${args[--action]}; YES=false; [[ -v args[--yes] ]] && YES=true

@@ -130,6 +130,20 @@ Run only the generic pytest harness contract tests:
 make test-python-infrastructure
 ```
 
+Run the migrated PKI rollover pytest scenarios, which remain in parity with
+their authoritative shell cases during migration:
+
+```bash
+make test-python-pki-rollover
+```
+
+Run the authoritative rollover parser shell group without creating PKI seed
+state:
+
+```bash
+make test-pki-ca-rollover-parser
+```
+
 Generate Bashly-backed executables and verify that committed output is current:
 
 ```bash

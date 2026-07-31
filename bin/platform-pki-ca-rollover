@@ -815,6 +815,8 @@ platform_pki_ca_rollover_prepare_command() {
   # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
   source "$COMMON_PATH"
   pki_reject_repeated_options --namespace --pki-dir --type --backup-receipt --root-name --intermediate-name --org --country --root-days --intermediate-days --root-pass-file --intermediate-pass-file --issuer-safety-days --private-repo
+  [[ -n ${args[--type]} ]] || pki_die 'Candidate type must not be empty'
+  pki_reject_explicit_empty_options --issuer-safety-days
 
   require_trusted_ancestors() {
     local path=$1 label=$2 current='' component mode owner uid
@@ -1249,6 +1251,7 @@ platform_pki_ca_rollover_recover_command() {
   # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
   source "$COMMON_PATH"
   pki_reject_repeated_options --namespace --pki-dir --transaction --action --yes
+  [[ -n ${args[--action]} ]] || pki_die 'Recovery action must not be empty'
 
   NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}; PKI_DIR=${args[--pki-dir]:-}
   TRANSACTION=${args[--transaction]}; ACTION=${args[--action]}; YES=false; [[ -v args[--yes] ]] && YES=true

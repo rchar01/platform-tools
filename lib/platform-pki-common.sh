@@ -166,6 +166,19 @@ pki_reject_repeated_options() {
   done
 }
 
+pki_reject_explicit_empty_options() {
+  local option argument index
+  for option in "$@"; do
+    # shellcheck disable=SC2154  # Provided by Bashly before command dispatch.
+    for ((index = 0; index < ${#command_line_args[@]}; index++)); do
+      argument=${command_line_args[index]}
+      if [[ $argument == "$option=" || ( $argument == "$option" && -z ${command_line_args[index + 1]:-} ) ]]; then
+        pki_die "Option must not be empty: $option"
+      fi
+    done
+  done
+}
+
 pki_inventory_file() {
   printf '%s/inventory/services.yml\n' "$PKI_DIR"
 }

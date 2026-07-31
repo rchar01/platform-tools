@@ -109,9 +109,26 @@ python3 -m pytest -m infrastructure
 python3 -m pytest tests/python/test_harness.py::test_process_runner_kills_timed_out_process_group
 ```
 
-No PKI lifecycle scenario has been migrated to pytest. Existing shell tests
-remain authoritative unless a later reviewed migration explicitly replaces
-one.
+Migrated PKI rollover scenarios run separately with:
+
+```bash
+make test-python-pki-rollover
+python3 -m pytest -m pki tests/python/pki
+```
+
+Migration proceeds one scenario at a time. The equivalent case in
+`tests/pki/test-ca-rollover.sh` remains authoritative and enabled until the
+pytest replacement has demonstrated observable parity and passed independent
+review.
+
+Run the focused authoritative parser group without generating PKI seed state:
+
+```bash
+make test-pki-ca-rollover-parser
+```
+
+The no-argument `make test-pki-ca-rollover` target still runs the parser group
+and the complete lifecycle matrix.
 
 ## Generator Updates
 

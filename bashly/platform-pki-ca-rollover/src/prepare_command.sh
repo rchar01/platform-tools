@@ -7,6 +7,8 @@ else COMMON_PATH=${PLATFORM_TOOLS_SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
 pki_reject_repeated_options --namespace --pki-dir --type --backup-receipt --root-name --intermediate-name --org --country --root-days --intermediate-days --root-pass-file --intermediate-pass-file --issuer-safety-days --private-repo
+[[ -n ${args[--type]} ]] || pki_die 'Candidate type must not be empty'
+pki_reject_explicit_empty_options --issuer-safety-days
 
 require_trusted_ancestors() {
   local path=$1 label=$2 current='' component mode owner uid

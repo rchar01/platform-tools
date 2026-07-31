@@ -9,6 +9,7 @@
 # Python caches
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Local tool installs and temp output
 .tools/

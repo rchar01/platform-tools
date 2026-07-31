@@ -171,31 +171,46 @@ migrate() {
     --expected-intermediate-sha256 "$INT_FP"
 }
 
+run_parser_tests() {
+  local option spec value parser_other="$TMP_DIR/parser-other" parser_private="$TMP_DIR/parser-private" parser_unused="$TMP_DIR/parser-unused"
+  local -a prepare_cli recover_cli
+
+  "$ROLLOVER" --help >"$TMP_DIR/help"
+  grep -Fq 'candidate preparation, recovery, and status' "$TMP_DIR/help" || fail 'rollover help footer is stale'
+  grep -Fq 'activate, acknowledge, rollback, retire, and complete remain unavailable' "$TMP_DIR/help" || fail 'rollover help does not identify unavailable transitions'
+  assert_fails_with 'repeated status format' 'Option must not be repeated: --format' "$ROLLOVER" status --format text --format json
+
+  prepare_cli=(prepare --namespace "$parser_unused" --pki-dir "$parser_unused/pki" --type intermediate --backup-receipt "$parser_unused.receipt" --intermediate-name Test --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --issuer-safety-days 1)
+  for spec in "--namespace:$parser_other" "--pki-dir:$parser_other" '--type:root' "--backup-receipt:$parser_other" '--intermediate-name:Other' '--org:Other' '--country:PL' "--root-pass-file:$parser_other" "--intermediate-pass-file:$parser_other" '--issuer-safety-days:2'; do
+    option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated prepare $option" 'Option must not be repeated' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value"
+  done
+  for spec in '--root-name:Root' '--root-days:2' '--intermediate-days:2' "--private-repo:$parser_private"; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated prepare $option" 'Option must not be repeated' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value" "$option" "$value"; done
+
+  recover_cli=(recover --namespace "$parser_unused" --pki-dir "$parser_unused/pki" --transaction prepare-root-20260730-000000-1 --action rollback --yes)
+  for spec in "--namespace:$parser_other" "--pki-dir:$parser_other" '--transaction:prepare-root-20260730-000000-2' '--action:resume'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated recover $option" 'Option must not be repeated' "$ROLLOVER" "${recover_cli[@]}" "$option" "$value"; done
+  assert_fails_with 'repeated recover --yes' 'Option must not be repeated' "$ROLLOVER" "${recover_cli[@]}" --yes
+
+  for option in --namespace --pki-dir --type --backup-receipt --intermediate-name --org --country --root-pass-file --intermediate-pass-file --issuer-safety-days; do without_option "$option" "${prepare_cli[@]:1}"; assert_fails "empty prepare $option" "$ROLLOVER" prepare "${OPTION_RESULT[@]}" "$option" ''; done
+  without_option --issuer-safety-days "${prepare_cli[@]:1}"
+  assert_fails_with 'empty equals prepare --issuer-safety-days' 'invalid option: --issuer-safety-days=' "$ROLLOVER" prepare "${OPTION_RESULT[@]}" '--issuer-safety-days='
+  assert_fails_with 'empty equals shared helper' 'Option must not be empty: --issuer-safety-days' bash -c 'source "$1"; command_line_args=(--issuer-safety-days=); pki_reject_explicit_empty_options --issuer-safety-days' _ "$ROOT_DIR/lib/platform-pki-common.sh"
+  for option in --root-name --root-days --intermediate-days --private-repo; do assert_fails "empty prepare $option" "$ROLLOVER" "${prepare_cli[@]}" "$option" ''; done
+  for option in --namespace --pki-dir --transaction --action; do without_option "$option" "${recover_cli[@]:1}"; assert_fails "empty recover $option" "$ROLLOVER" recover "${OPTION_RESULT[@]}" "$option" ''; done
+  assert_fails 'prepare positional argument' "$ROLLOVER" "${prepare_cli[@]}" unexpected
+  assert_fails 'recover positional argument' "$ROLLOVER" "${recover_cli[@]}" unexpected
+  for spec in '--root-name:Root' '--root-days:2' "--private-repo:$parser_private"; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "forbidden intermediate $option" 'forbidden for intermediate preparation' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value"; done
+  for option in --backup-receipt --type --root-name --intermediate-name --org --country --root-days --intermediate-days --root-pass-file --intermediate-pass-file --issuer-safety-days --private-repo; do assert_fails "forbidden recover $option" "$ROLLOVER" "${recover_cli[@]}" "$option" value; done
+  for option in --transaction --action --yes; do assert_fails "forbidden prepare $option" "$ROLLOVER" "${prepare_cli[@]}" "$option" value; done
+  [[ ! -e $parser_unused && ! -e $parser_unused.receipt && ! -e $parser_other && ! -e $parser_private ]] || fail 'parser tests created PKI operand paths'
+}
+
+case ${1:-all} in
+  all) run_parser_tests ;;
+  parser) run_parser_tests; exit 0 ;;
+  *) fail "unknown test group: $1" ;;
+esac
+
 seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
-
-"$ROLLOVER" --help >"$TMP_DIR/help"
-grep -Fq 'candidate preparation, recovery, and status' "$TMP_DIR/help" || fail 'rollover help footer is stale'
-grep -Fq 'activate, acknowledge, rollback, retire, and complete remain unavailable' "$TMP_DIR/help" || fail 'rollover help does not identify unavailable transitions'
-assert_fails_with 'repeated status format' 'Option must not be repeated: --format' "$ROLLOVER" status --format text --format json
-
-prepare_cli=(prepare --namespace /tmp/unused --pki-dir /tmp/unused/pki --type intermediate --backup-receipt /tmp/unused.receipt --intermediate-name Test --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --issuer-safety-days 1)
-for spec in '--namespace:/tmp/other' '--pki-dir:/tmp/other' '--type:root' '--backup-receipt:/tmp/other' '--intermediate-name:Other' '--org:Other' '--country:PL' '--root-pass-file:/tmp/other' '--intermediate-pass-file:/tmp/other' '--issuer-safety-days:2'; do
-  option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated prepare $option" 'Option must not be repeated' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value"
-done
-for spec in '--root-name:Root' '--root-days:2' '--intermediate-days:2' '--private-repo:/tmp/private'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated prepare $option" 'Option must not be repeated' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value" "$option" "$value"; done
-
-recover_cli=(recover --namespace /tmp/unused --pki-dir /tmp/unused/pki --transaction prepare-root-20260730-000000-1 --action rollback --yes)
-for spec in '--namespace:/tmp/other' '--pki-dir:/tmp/other' '--transaction:prepare-root-20260730-000000-2' '--action:resume'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "repeated recover $option" 'Option must not be repeated' "$ROLLOVER" "${recover_cli[@]}" "$option" "$value"; done
-assert_fails_with 'repeated recover --yes' 'Option must not be repeated' "$ROLLOVER" "${recover_cli[@]}" --yes
-
-for option in --namespace --pki-dir --type --backup-receipt --intermediate-name --org --country --root-pass-file --intermediate-pass-file --issuer-safety-days; do without_option "$option" "${prepare_cli[@]:1}"; assert_fails "empty prepare $option" "$ROLLOVER" prepare "${OPTION_RESULT[@]}" "$option" ''; done
-for option in --root-name --root-days --intermediate-days --private-repo; do assert_fails "empty prepare $option" "$ROLLOVER" "${prepare_cli[@]}" "$option" ''; done
-for option in --namespace --pki-dir --transaction --action; do without_option "$option" "${recover_cli[@]:1}"; assert_fails "empty recover $option" "$ROLLOVER" recover "${OPTION_RESULT[@]}" "$option" ''; done
-assert_fails 'prepare positional argument' "$ROLLOVER" "${prepare_cli[@]}" unexpected
-assert_fails 'recover positional argument' "$ROLLOVER" "${recover_cli[@]}" unexpected
-for spec in '--root-name:Root' '--root-days:2' '--private-repo:/tmp/private'; do option=${spec%%:*}; value=${spec#*:}; assert_fails_with "forbidden intermediate $option" 'forbidden for intermediate preparation' "$ROLLOVER" "${prepare_cli[@]}" "$option" "$value"; done
-for option in --backup-receipt --type --root-name --intermediate-name --org --country --root-days --intermediate-days --root-pass-file --intermediate-pass-file --issuer-safety-days --private-repo; do assert_fails "forbidden recover $option" "$ROLLOVER" "${recover_cli[@]}" "$option" value; done
-for option in --transaction --action --yes; do assert_fails "forbidden prepare $option" "$ROLLOVER" "${prepare_cli[@]}" "$option" value; done
 
 identity_case="$TMP_DIR/nanosecond-identity"; mkdir -m 700 "$identity_case"; printf '%s' first >"$identity_case/key"; chmod 600 "$identity_case/key"
 identity_before=$(bash -c 'source "$1"; pki_file_identity "$2"' _ "$ROOT_DIR/lib/platform-pki-common.sh" "$identity_case/key")
