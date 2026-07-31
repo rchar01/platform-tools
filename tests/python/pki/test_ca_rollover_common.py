@@ -492,3 +492,115 @@ def test_ca_profile_rejects_extra_key_usage(
         "[ERROR] Test must have critical Certificate Sign and CRL Sign "
         "Key Usage only\n"
     )
+
+
+def test_ca_self_signature_rejects_corrupted_signature(
+    tmp_path: Path,
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    common_library = (
+        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+    )
+    private_key = tmp_path / "root.key"
+    certificate = tmp_path / "root.crt"
+    generated = process_runner(
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-subj",
+            "/CN=valid-root",
+            "-days",
+            "1",
+            "-keyout",
+            private_key,
+            "-out",
+            certificate,
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert generated.status == 0
+    assert certificate.is_file() and not certificate.is_symlink()
+    assert private_key.is_file() and not private_key.is_symlink()
+
+    valid = process_runner(
+        [
+            "openssl",
+            "verify",
+            "-check_ss_sig",
+            "-CAfile",
+            certificate,
+            certificate,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert valid.status == 0
+    assert valid.stderr == ""
+    assert valid.stdout == f"{certificate}: OK\n"
+
+    corrupted = tmp_path / "bad-self-signature.crt"
+    corruption = process_runner(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            certificate,
+            "-badsig",
+            "-out",
+            corrupted,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert corruption.status == 0
+    assert corruption.stdout == corruption.stderr == ""
+    assert corrupted.is_file() and not corrupted.is_symlink()
+
+    parseable = process_runner(
+        ["openssl", "x509", "-in", corrupted, "-noout"],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert parseable.status == 0
+    assert parseable.stdout == parseable.stderr == ""
+
+    invalid = process_runner(
+        [
+            "openssl",
+            "verify",
+            "-check_ss_sig",
+            "-CAfile",
+            corrupted,
+            corrupted,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert invalid.status != 0
+    assert "certificate signature failure" in invalid.stderr
+
+    result = process_runner(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_require_ca_self_signature "$2" "Candidate root"',
+            "_",
+            common_library,
+            corrupted,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr.endswith(
+        "[ERROR] Candidate root self-signature is invalid\n"
+    )
