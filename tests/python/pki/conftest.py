@@ -324,6 +324,79 @@ def rollover_case_factory(
 
 
 @pytest.fixture
+def legacy_rollover_case_factory(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+) -> Callable[[str], RolloverWorkspace]:
+    def create(name: str) -> RolloverWorkspace:
+        workspace = rollover_case_factory(name)
+        generation_root = workspace.pki / "authorities/roots/g1"
+        generation_intermediate = (
+            workspace.pki / "authorities/intermediates/g1-i1"
+        )
+        legacy_root = workspace.pki / "root-ca"
+        legacy_intermediate = workspace.pki / "intermediate-ca"
+        generation_root.rename(legacy_root)
+        generation_intermediate.rename(legacy_intermediate)
+
+        for config, old_path, new_path in (
+            (legacy_root / "openssl.cnf", generation_root, legacy_root),
+            (
+                legacy_intermediate / "openssl.cnf",
+                generation_intermediate,
+                legacy_intermediate,
+            ),
+        ):
+            lines = config.read_text().splitlines(keepends=True)
+            config.write_text(
+                "".join(
+                    f"dir = {new_path}\n"
+                    if line.startswith("dir = ")
+                    else line.replace(os.fspath(old_path), os.fspath(new_path))
+                    for line in lines
+                )
+            )
+
+        for path in (
+            workspace.pki / "state/active-issuer",
+            workspace.pki / "state/generation-reservations/g1",
+            workspace.pki / "state/generation-reservations/g1-i1",
+            workspace.pki / "services/app/issuer",
+        ):
+            path.unlink(missing_ok=True)
+        return workspace
+
+    return create
+
+
+@pytest.fixture
+def backup_receipt_factory(
+    rollover_tools: RolloverTools,
+    isolated_environment: Mapping[str, str],
+) -> Callable[[RolloverWorkspace], Path]:
+    def create(workspace: RolloverWorkspace) -> Path:
+        backup_directory = workspace.root / "backups"
+        backup_directory.mkdir(mode=0o700)
+        _checked_process(
+            rollover_tools,
+            rollover_tools.backup,
+            [
+                "--namespace",
+                workspace.namespace,
+                "--backup-dir",
+                backup_directory,
+                "--allow-plain-backup",
+            ],
+            isolated_environment,
+        )
+        receipts = list(backup_directory.glob("*.receipt"))
+        if len(receipts) != 1:
+            pytest.fail(f"expected one backup receipt, found {receipts!r}")
+        return receipts[0]
+
+    return create
+
+
+@pytest.fixture
 def public_state_snapshot() -> Callable[[RolloverWorkspace], tuple[str, ...]]:
     return _public_state_snapshot
 

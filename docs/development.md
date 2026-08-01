@@ -130,6 +130,17 @@ make test-pki-ca-rollover-parser
 The no-argument `make test-pki-ca-rollover` target still runs the parser group
 and the complete lifecycle matrix.
 
+For long aggregate diagnostics, enable path-free elapsed-time records for the
+active preparation, recovery, migration, hostile-state, and race scenario:
+
+```bash
+PLATFORM_PKI_TEST_PROGRESS=1 make test-pki-ca-rollover
+```
+
+Progress is written to standard error as `start` and `pass` records. It is
+disabled by default and does not replace the aggregate target's final status or
+the planned outer process-group timeout.
+
 ## Generator Updates
 
 The development image uses a digest-pinned Debian 13 Ruby base, the matching

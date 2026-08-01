@@ -1,0 +1,396 @@
+import os
+import stat
+from collections.abc import Callable, Mapping
+from hashlib import sha256
+from pathlib import Path
+
+import pytest
+
+from ..harness import ProcessResult
+from .conftest import RolloverTools, RolloverWorkspace
+
+
+pytestmark = pytest.mark.pki
+
+
+def _is_sensitive(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    return (
+        path.name == "passphrase"
+        or "private" in relative.parts
+        or "operator-private" in relative.parts
+        or "quarantine" in relative.parts
+        or path.name.endswith((".age", ".tar.gz"))
+    )
+
+
+def _workspace_snapshot(root: Path) -> tuple[str, ...]:
+    entries = []
+    for path in (root, *sorted(root.rglob("*"))):
+        metadata = path.lstat()
+        relative = path.relative_to(root).as_posix()
+        common = (
+            f"{relative}\t{metadata.st_dev}:{metadata.st_ino}"
+            f"\t{stat.S_IMODE(metadata.st_mode):o}"
+            f"\t{metadata.st_size}\t{metadata.st_mtime_ns}"
+        )
+        if stat.S_ISDIR(metadata.st_mode):
+            detail = "directory"
+        elif stat.S_ISREG(metadata.st_mode):
+            if _is_sensitive(path, root):
+                detail = "redacted"
+            else:
+                detail = sha256(path.read_bytes()).hexdigest()
+        elif stat.S_ISLNK(metadata.st_mode):
+            detail = f"symlink:{path.readlink()}"
+        else:
+            detail = "other"
+        entries.append(f"{common}\t{detail}")
+    return tuple(entries)
+
+
+def _migration_command(
+    tools: RolloverTools,
+    workspace: RolloverWorkspace,
+    receipt: Path,
+    root_fingerprint: str = "0" * 64,
+    intermediate_fingerprint: str = "0" * 64,
+) -> list[str | Path]:
+    return [
+        tools.rollover,
+        "migrate",
+        "--namespace",
+        workspace.namespace,
+        "--private-repo",
+        workspace.private_repo,
+        "--backup-receipt",
+        receipt,
+        "--yes",
+        "--expected-root-sha256",
+        root_fingerprint,
+        "--expected-intermediate-sha256",
+        intermediate_fingerprint,
+    ]
+
+
+def _advance_mtime(path: Path) -> None:
+    metadata = path.stat()
+    os.utime(
+        path,
+        ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000),
+        follow_symlinks=False,
+    )
+
+
+def _certificate_fingerprint(
+    certificate: Path,
+    environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> str:
+    result = process_runner(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            certificate,
+            "-noout",
+            "-fingerprint",
+            "-sha256",
+        ],
+        env=environment,
+        timeout=30,
+    )
+    assert result.status == 0
+    assert result.stderr == ""
+    label, separator, value = result.stdout.strip().partition("=")
+    assert label == "sha256 Fingerprint"
+    assert separator == "="
+    fingerprint = value.replace(":", "")
+    assert len(fingerprint) == 64
+    return fingerprint
+
+
+@pytest.mark.parametrize("dual_authority", ("root", "intermediate"))
+def test_migration_rejects_dual_layout_before_transaction(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    dual_authority: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(f"migration-dual-{dual_authority}")
+    receipt = backup_receipt_factory(workspace)
+    if dual_authority == "root":
+        generation_path = workspace.pki / "authorities/roots/g1"
+    else:
+        generation_path = workspace.pki / "authorities/intermediates/g1-i1"
+    generation_path.mkdir(mode=0o700)
+    before = _workspace_snapshot(workspace.root)
+
+    result = process_runner(
+        _migration_command(rollover_tools, workspace, receipt),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Legacy migration refuses incomplete or ambiguous layout: partial\n"
+    )
+    assert _workspace_snapshot(workspace.root) == before
+    assert not tuple((workspace.pki / "state/rollovers").iterdir())
+
+
+def test_migration_rejects_changed_ca_private_metadata_before_transaction(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-changed-ca-private-metadata")
+    receipt = backup_receipt_factory(workspace)
+    private_key = workspace.pki / "root-ca/private/root-ca.key"
+    _advance_mtime(private_key)
+    before = _workspace_snapshot(workspace.root)
+
+    result = process_runner(
+        _migration_command(rollover_tools, workspace, receipt),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Current private metadata differs from the backed-up state\n"
+    )
+    assert _workspace_snapshot(workspace.root) == before
+    assert not tuple((workspace.pki / "state/rollovers").iterdir())
+
+
+@pytest.mark.parametrize(
+    ("case_name", "private_relative"),
+    (
+        pytest.param(
+            "passphrase",
+            "operator-private/secret-passphrase",
+            id="passphrase",
+        ),
+        pytest.param(
+            "quarantine",
+            "quarantine/private-secret",
+            id="quarantine",
+        ),
+    ),
+)
+def test_migration_rejects_changed_additional_private_metadata_before_transaction(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    private_text_writer: Callable[[Path, str], None],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    case_name: str,
+    private_relative: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(
+        f"migration-changed-additional-private-{case_name}"
+    )
+    private_file = workspace.pki / private_relative
+    private_text_writer(private_file, "private-sentinel\n")
+    receipt = backup_receipt_factory(workspace)
+    _advance_mtime(private_file)
+    before = _workspace_snapshot(workspace.root)
+
+    result = process_runner(
+        _migration_command(rollover_tools, workspace, receipt),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Current private metadata differs from the backed-up state\n"
+    )
+    assert _workspace_snapshot(workspace.root) == before
+    assert not tuple((workspace.pki / "state/rollovers").iterdir())
+
+
+def test_migration_rejects_extra_service_directory_before_transaction(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-extra-service-directory")
+    (workspace.pki / "services/not-in-inventory").mkdir(mode=0o700)
+    receipt = backup_receipt_factory(workspace)
+    root_fingerprint = _certificate_fingerprint(
+        workspace.pki / "root-ca/certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        workspace.pki / "intermediate-ca/certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    before = _workspace_snapshot(workspace.root)
+
+    result = process_runner(
+        _migration_command(
+            rollover_tools,
+            workspace,
+            receipt,
+            root_fingerprint,
+            intermediate_fingerprint,
+        ),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Legacy service directory is absent from inventory: "
+        "not-in-inventory\n"
+    )
+    assert _workspace_snapshot(workspace.root) == before
+    assert not tuple((workspace.pki / "state/rollovers").iterdir())
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
+def test_migration_success_preserves_private_key_identities(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-success")
+    receipt = backup_receipt_factory(workspace)
+    legacy_root = workspace.pki / "root-ca"
+    legacy_intermediate = workspace.pki / "intermediate-ca"
+    root_key = legacy_root / "private/root-ca.key"
+    intermediate_key = legacy_intermediate / "private/intermediate-ca.key"
+    root_key_identity = (root_key.stat().st_dev, root_key.stat().st_ino)
+    intermediate_key_identity = (
+        intermediate_key.stat().st_dev,
+        intermediate_key.stat().st_ino,
+    )
+    root_fingerprint = _certificate_fingerprint(
+        legacy_root / "certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        legacy_intermediate / "certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+
+    result = process_runner(
+        _migration_command(
+            rollover_tools,
+            workspace,
+            receipt,
+            root_fingerprint,
+            intermediate_fingerprint,
+        ),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    generation_root = workspace.pki / "authorities/roots/g1"
+    generation_intermediate = workspace.pki / "authorities/intermediates/g1-i1"
+    migrated_root_key = generation_root / "private/root-ca.key"
+    migrated_intermediate_key = (
+        generation_intermediate / "private/intermediate-ca.key"
+    )
+    assert result.status == 0, result
+    assert result.stdout == (
+        "[OK] Migrated legacy PKI state to root g1 and intermediate g1-i1\n"
+    )
+    assert result.stderr == ""
+    assert not legacy_root.exists()
+    assert not legacy_intermediate.exists()
+    assert (migrated_root_key.stat().st_dev, migrated_root_key.stat().st_ino) == (
+        root_key_identity
+    )
+    assert (
+        migrated_intermediate_key.stat().st_dev,
+        migrated_intermediate_key.stat().st_ino,
+    ) == intermediate_key_identity
+    assert (workspace.pki / "state/active-issuer").read_text() == (
+        "root=g1\nintermediate=g1-i1\n"
+    )
+    assert (workspace.pki / "services/app/issuer").read_text() == (
+        "root=g1\nintermediate=g1-i1\n"
+    )
+    journal = (workspace.pki / "state/rollover/journal").read_text()
+    assert "operation=legacy-migrate\n" in journal
+    assert "phase=complete\n" in journal
+    assert journal.endswith("committed=true\n")
+    transaction = next(
+        line.removeprefix("transaction=")
+        for line in journal.splitlines()
+        if line.startswith("transaction=")
+    )
+    assert transaction.startswith("migrate-")
+    assert not (workspace.pki / "state/rollover/recovery-required").exists()
+    assert not (workspace.pki / "state/rollover" / transaction).exists()
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
+def test_completed_migration_is_idempotent(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-idempotence")
+    receipt = backup_receipt_factory(workspace)
+    root_fingerprint = _certificate_fingerprint(
+        workspace.pki / "root-ca/certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        workspace.pki / "intermediate-ca/certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    command = _migration_command(
+        rollover_tools,
+        workspace,
+        receipt,
+        root_fingerprint,
+        intermediate_fingerprint,
+    )
+    first_result = process_runner(
+        command,
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert first_result.status == 0, first_result
+    before = _workspace_snapshot(workspace.root)
+
+    result = process_runner(
+        command,
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 0
+    assert result.stdout == (
+        "[OK] Legacy PKI migration is already complete; no changes made\n"
+    )
+    assert result.stderr == ""
+    assert _workspace_snapshot(workspace.root) == before
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
