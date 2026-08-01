@@ -846,19 +846,30 @@ run_same_inode_root_db_rewrite_tests() {
 }
 
 run_intermediate_major_boundary_spec() {
-  local boundary=$1 action=$2 case_dir crash_status transaction key source_identity pre_identity post_identity recovery_boundary checkpoint
+  local boundary=$1 action=$2 case_dir crash_status transaction
+  case_dir="$TMP_DIR/prepare-intermediate-$boundary"; cp -a "$seed" "$case_dir"; backup_generation "$case_dir"
+  test_progress start "prepare-recover:intermediate:$boundary:$action"
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "intermediate preparation crash at $boundary returned $crash_status instead of 137"
+  transaction=$(sed -n 's/^transaction=//p' "$case_dir/ns/pki/state/rollover/journal")
+  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
+  [[ ! -e $case_dir/ns/pki/state/rollover/journal ]] || fail "intermediate recovery left a journal after $boundary"
+  if [[ $action == resume ]]; then [[ -d $case_dir/ns/pki/authorities/intermediates/g1-i2 && -f $case_dir/ns/pki/state/active-rollover ]] || fail "intermediate resume did not publish state after $boundary"; else [[ ! -e $case_dir/ns/pki/authorities/intermediates/g1-i2 && ! -e $case_dir/ns/pki/state/active-rollover ]] || fail "intermediate rollback did not restore state after $boundary"; fi
+  test_progress pass "prepare-recover:intermediate:$boundary:$action"
+}
+
+run_intermediate_resume_recovery_checkpoints_test() {
+  local boundary=after-staged action=resume case_dir crash_status transaction key source_identity pre_identity post_identity recovery_boundary checkpoint
   local -a recovery_boundaries
   case_dir="$TMP_DIR/prepare-intermediate-$boundary"; cp -a "$seed" "$case_dir"; backup_generation "$case_dir"
   test_progress start "prepare-recover:intermediate:$boundary:$action"
   set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
   [[ $crash_status -eq 137 ]] || fail "intermediate preparation crash at $boundary returned $crash_status instead of 137"
   transaction=$(sed -n 's/^transaction=//p' "$case_dir/ns/pki/state/rollover/journal")
-  if [[ $boundary == after-staged ]]; then
-    recovery_boundaries=(resume-publish-intermediate)
-    for key in index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert; do source_identity=$(sed -n "s/^root_${key}_source_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); pre_identity=$(sed -n "s/^root_${key}_pre_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); post_identity=$(sed -n "s/^root_${key}_post_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); [[ $source_identity == absent || $pre_identity == "$post_identity" ]] || recovery_boundaries+=("resume-root-db-$key"); done
-    recovery_boundaries+=(resume-consume-intermediate resume-cleanup-root-stage resume-publish-state resume-publish-pointer terminal-transaction terminal-journal)
-    for recovery_boundary in "${recovery_boundaries[@]}"; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
-  fi
+  recovery_boundaries=(resume-publish-intermediate)
+  for key in index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert; do source_identity=$(sed -n "s/^root_${key}_source_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); pre_identity=$(sed -n "s/^root_${key}_pre_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); post_identity=$(sed -n "s/^root_${key}_post_identity=//p" "$case_dir/ns/pki/state/rollover/journal"); [[ $source_identity == absent || $pre_identity == "$post_identity" ]] || recovery_boundaries+=("resume-root-db-$key"); done
+  recovery_boundaries+=(resume-consume-intermediate resume-cleanup-root-stage resume-publish-state resume-publish-pointer terminal-transaction terminal-journal)
+  for recovery_boundary in "${recovery_boundaries[@]}"; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
   "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
   [[ ! -e $case_dir/ns/pki/state/rollover/journal ]] || fail "intermediate recovery left a journal after $boundary"
   if [[ $action == resume ]]; then [[ -d $case_dir/ns/pki/authorities/intermediates/g1-i2 && -f $case_dir/ns/pki/state/active-rollover ]] || fail "intermediate resume did not publish state after $boundary"; else [[ ! -e $case_dir/ns/pki/authorities/intermediates/g1-i2 && ! -e $case_dir/ns/pki/state/active-rollover ]] || fail "intermediate rollback did not restore state after $boundary"; fi
@@ -876,11 +887,142 @@ run_intermediate_major_boundary_resume_tests() {
 }
 
 run_all_intermediate_major_boundary_tests() {
-  local scenario boundary action
-  for scenario in after-journal:rollback after-staged:resume after-intermediate-candidate:resume after-root-db:rollback after-consumed:resume cleanup-root-stage-removed:resume after-state:rollback after-pointer:resume; do
-    boundary=${scenario%%:*}; action=${scenario#*:}
-    run_intermediate_major_boundary_spec "$boundary" "$action"
+  run_intermediate_major_boundary_spec after-journal rollback
+  run_intermediate_resume_recovery_checkpoints_test
+  run_intermediate_major_boundary_spec after-intermediate-candidate resume
+  run_intermediate_major_boundary_spec after-root-db rollback
+  run_intermediate_major_boundary_spec after-consumed resume
+  run_intermediate_major_boundary_spec cleanup-root-stage-removed resume
+  run_intermediate_major_boundary_spec after-state rollback
+  run_intermediate_major_boundary_spec after-pointer resume
+}
+
+run_unexpected_candidate_tree_entry_test() {
+  local tree_case="$TMP_DIR/prepare-tree-extra" crash_status transaction
+  test_progress start unexpected-candidate-tree-entry
+  cp -a "$seed" "$tree_case"; backup_generation "$tree_case"
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=after-staged "$ROLLOVER" prepare --namespace "$tree_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail 'tree-manifest fixture did not crash'
+  transaction=$(sed -n 's/^transaction=//p' "$tree_case/ns/pki/state/rollover/journal"); printf '%s\n' hostile >"$tree_case/ns/pki/state/rollover/$transaction/stage/intermediate/unexpected"; chmod 600 "$tree_case/ns/pki/state/rollover/$transaction/stage/intermediate/unexpected"
+  assert_fails_with 'unexpected candidate tree entry' 'tree contents do not match' "$ROLLOVER" recover --namespace "$tree_case/ns" --transaction "$transaction" --action resume --yes
+  test_progress pass unexpected-candidate-tree-entry
+}
+
+run_interrupted_resume_terminal_status_test() {
+  local terminal_case="$TMP_DIR/prepare-terminal-cleanup" crash_status transaction checkpoint terminal_status
+  cp -a "$seed" "$terminal_case"; backup_generation "$terminal_case"
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=after-staged "$ROLLOVER" prepare --namespace "$terminal_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail 'terminal-cleanup fixture did not crash'
+  transaction=$(sed -n 's/^transaction=//p' "$terminal_case/ns/pki/state/rollover/journal")
+  for checkpoint in terminal-transaction-pending terminal-transaction-done terminal-journal-pending terminal-journal-done; do
+    test_progress start "terminal-status:resume:$checkpoint"
+    crash_recovery_at "$terminal_case/ns" "$transaction" resume "$checkpoint"
+    set +e; "$ROLLOVER" status --namespace "$terminal_case/ns" --format json >"$terminal_case/status.json"; terminal_status=$?; set -e
+    [[ $terminal_status -eq 2 ]] || fail "status ignored interrupted terminal cleanup at $checkpoint"
+    jq -e '.schema == 2 and .status == "recovery-required" and .terminal_outcome == "resumed" and .required_action == "resume"' "$terminal_case/status.json" >/dev/null || fail "terminal cleanup JSON was incomplete at $checkpoint"
+    set +e; "$ROLLOVER" status --namespace "$terminal_case/ns" --format text >"$terminal_case/status.txt"; terminal_status=$?; set -e
+    [[ $terminal_status -eq 2 ]] || fail "text status ignored interrupted terminal cleanup at $checkpoint"
+    grep -Fx 'status=recovery-required' "$terminal_case/status.txt" >/dev/null && grep -Fx 'terminal_outcome=resumed' "$terminal_case/status.txt" >/dev/null && grep -Fx 'required_action=resume' "$terminal_case/status.txt" >/dev/null && grep -Fx "action=run platform-pki-ca-rollover recover --transaction $transaction --action resume" "$terminal_case/status.txt" >/dev/null || fail "terminal cleanup text was incomplete at $checkpoint"
+    test_progress pass "terminal-status:resume:$checkpoint"
   done
+  "$ROLLOVER" recover --namespace "$terminal_case/ns" --transaction "$transaction" --action resume --yes >/dev/null
+  [[ ! -e $terminal_case/ns/pki/state/rollover/journal && ! -e $terminal_case/ns/pki/state/rollover/recovery-required ]] || fail 'terminal cleanup retained recovery control state'
+}
+
+run_interrupted_rollback_terminal_status_test() {
+  local rollback_terminal="$TMP_DIR/prepare-rollback-terminal-cleanup" transaction checkpoint terminal_status
+  crash_prepare_fixture "$rollback_terminal" root after-pointer; transaction=$CRASH_TRANSACTION
+  for checkpoint in terminal-transaction-pending terminal-transaction-done terminal-journal-pending terminal-journal-done; do
+    test_progress start "terminal-status:rollback:$checkpoint"
+    crash_recovery_at "$rollback_terminal/ns" "$transaction" rollback "$checkpoint"
+    set +e; "$ROLLOVER" status --namespace "$rollback_terminal/ns" --format json >"$rollback_terminal/status.json"; terminal_status=$?; set -e
+    [[ $terminal_status -eq 2 ]] || fail "status ignored interrupted rollback cleanup at $checkpoint"
+    jq -e '.schema == 2 and .status == "recovery-required" and .terminal_outcome == "rolled-back" and .required_action == "rollback"' "$rollback_terminal/status.json" >/dev/null || fail "rollback cleanup JSON was incomplete at $checkpoint"
+    set +e; "$ROLLOVER" status --namespace "$rollback_terminal/ns" --format text >"$rollback_terminal/status.txt"; terminal_status=$?; set -e
+    [[ $terminal_status -eq 2 ]] || fail "text status ignored interrupted rollback cleanup at $checkpoint"
+    grep -Fx 'terminal_outcome=rolled-back' "$rollback_terminal/status.txt" >/dev/null && grep -Fx 'required_action=rollback' "$rollback_terminal/status.txt" >/dev/null && grep -Fx "action=run platform-pki-ca-rollover recover --transaction $transaction --action rollback" "$rollback_terminal/status.txt" >/dev/null || fail "rollback cleanup text was incomplete at $checkpoint"
+    test_progress pass "terminal-status:rollback:$checkpoint"
+  done
+  "$ROLLOVER" recover --namespace "$rollback_terminal/ns" --transaction "$transaction" --action rollback --yes >/dev/null
+}
+
+run_prepare_terminal_journal_unlink_race_test() {
+  local prepare_unlink="$TMP_DIR/prepare-unlink-race" pause_marker="$TMP_DIR/prepare-unlink.pause" pause_release="$TMP_DIR/prepare-unlink.release"
+  local unlink_pid unlink_journal unlink_status
+  test_progress start prepare-terminal-journal-unlink-race
+  cp -a "$seed" "$prepare_unlink"; backup_generation "$prepare_unlink"
+  PLATFORM_PKI_UNLINK_PAUSE_AT=terminal-journal PLATFORM_PKI_UNLINK_PAUSE_MARKER="$pause_marker" PLATFORM_PKI_UNLINK_PAUSE_RELEASE="$pause_release" "$ROLLOVER" prepare --namespace "$prepare_unlink/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" &
+  unlink_pid=$!; wait_for_path "$pause_marker"; unlink_journal="$prepare_unlink/ns/pki/state/rollover/journal"; mv "$unlink_journal" "$unlink_journal.original"; printf '%s\n' hostile-journal >"$unlink_journal"; chmod 600 "$unlink_journal"; touch "$pause_release"
+  set +e; wait "$unlink_pid"; unlink_status=$?; set -e
+  [[ $unlink_status -ne 0 && $(<"$unlink_journal") == hostile-journal ]] || fail 'prepare terminal journal unlink deleted a concurrent replacement'
+  [[ $(<"$prepare_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'prepare terminal unlink race changed active state'
+  test_progress pass prepare-terminal-journal-unlink-race
+}
+
+run_recover_terminal_marker_unlink_race_test() {
+  local recover_unlink="$TMP_DIR/recover-unlink-race" pause_marker="$TMP_DIR/recover-unlink.pause" pause_release="$TMP_DIR/recover-unlink.release"
+  local unlink_pid unlink_marker unlink_status
+  test_progress start recover-terminal-marker-unlink-race
+  crash_prepare_fixture "$recover_unlink" intermediate after-staged
+  PLATFORM_PKI_UNLINK_PAUSE_AT=terminal-marker PLATFORM_PKI_UNLINK_PAUSE_MARKER="$pause_marker" PLATFORM_PKI_UNLINK_PAUSE_RELEASE="$pause_release" "$ROLLOVER" recover --namespace "$recover_unlink/ns" --transaction "$CRASH_TRANSACTION" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" &
+  unlink_pid=$!; wait_for_path "$pause_marker"; unlink_marker="$recover_unlink/ns/pki/state/rollover/recovery-required"; mv "$unlink_marker" "$unlink_marker.original"; printf '%s\n' hostile-marker >"$unlink_marker"; chmod 600 "$unlink_marker"; touch "$pause_release"
+  set +e; wait "$unlink_pid"; unlink_status=$?; set -e
+  [[ $unlink_status -ne 0 && $(<"$unlink_marker") == hostile-marker && ! -e $recover_unlink/ns/pki/state/rollover/journal ]] || fail 'recover terminal marker unlink deleted a concurrent replacement'
+  [[ $(<"$recover_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'recover terminal unlink race changed active state'
+  test_progress pass recover-terminal-marker-unlink-race
+}
+
+run_root_major_boundary_spec() {
+  local boundary=$1 action=$2 case_dir crash_status transaction recovery_boundary checkpoint
+  case_dir="$TMP_DIR/prepare-root-$boundary"; cp -a "$seed" "$case_dir"; write_trust_consumers "$case_dir/private/pki/trust-consumers.yml"; backup_generation "$case_dir"
+  test_progress start "prepare-recover:root:$boundary:$action"
+  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$case_dir/private" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "root preparation crash at $boundary returned $crash_status instead of 137"
+  transaction=$(sed -n 's/^transaction=//p' "$case_dir/ns/pki/state/rollover/journal")
+  if [[ $boundary == after-root-candidate ]]; then
+    printf '%s\n' hostile-candidate >"$case_dir/ns/pki/authorities/roots/g2/certs/root-ca.crt"
+    assert_fails_with 'replaced root candidate recovery' 'Candidate root certificate' "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes
+    [[ $(<"$case_dir/ns/pki/authorities/roots/g2/certs/root-ca.crt") == hostile-candidate ]] || fail 'recovery changed a hostile root candidate replacement'
+    test_progress pass "prepare-recover:root:$boundary:$action"
+    return
+  fi
+  if [[ $boundary == after-staged ]]; then
+    for recovery_boundary in resume-publish-root resume-publish-intermediate resume-consume-root resume-consume-intermediate resume-publish-state resume-publish-pointer terminal-transaction terminal-journal; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
+  elif [[ $boundary == after-pointer ]]; then
+    for recovery_boundary in rollback-pointer rollback-intermediate rollback-root rollback-state rollback-stage rollback-reservation-intermediate rollback-reservation-root rollback-backup-session terminal-transaction terminal-journal; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
+  fi
+  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
+  [[ ! -e $case_dir/ns/pki/state/rollover/journal ]] || fail "root recovery left a journal after $boundary"
+  if [[ $action == resume ]]; then [[ -d $case_dir/ns/pki/authorities/roots/g2 && -d $case_dir/ns/pki/authorities/intermediates/g2-i1 && -f $case_dir/ns/pki/state/active-rollover ]] || fail "root resume did not publish state after $boundary"; else [[ ! -e $case_dir/ns/pki/authorities/roots/g2 && ! -e $case_dir/ns/pki/authorities/intermediates/g2-i1 && ! -e $case_dir/ns/pki/state/active-rollover ]] || fail "root rollback did not restore state after $boundary"; fi
+  test_progress pass "prepare-recover:root:$boundary:$action"
+}
+
+run_root_major_boundary_rollback_tests() {
+  local boundary
+  for boundary in after-journal after-consumed; do run_root_major_boundary_spec "$boundary" rollback; done
+}
+
+run_root_major_boundary_resume_tests() {
+  local boundary
+  for boundary in after-intermediate-candidate after-state; do run_root_major_boundary_spec "$boundary" resume; done
+}
+
+run_replaced_published_root_candidate_test() {
+  run_root_major_boundary_spec after-root-candidate rollback
+}
+
+run_root_resume_recovery_checkpoints_test() {
+  run_root_major_boundary_spec after-staged resume
+}
+
+run_all_root_major_boundary_tests() {
+  run_root_major_boundary_spec after-journal rollback
+  run_root_resume_recovery_checkpoints_test
+  run_replaced_published_root_candidate_test
+  run_root_major_boundary_spec after-intermediate-candidate resume
+  run_root_major_boundary_spec after-consumed rollback
+  run_root_major_boundary_spec after-state resume
+  run_root_major_boundary_spec after-pointer rollback
 }
 
 case ${1:-all} in
@@ -1033,6 +1175,22 @@ case ${1:-all} in
     esac
     exit 0
     ;;
+  intermediate-resume-recovery-checkpoints|unexpected-candidate-tree-entry|interrupted-resume-terminal-status|interrupted-rollback-terminal-status|prepare-terminal-journal-unlink-race|recover-terminal-marker-unlink-race|root-major-boundary-rollback|root-major-boundary-resume|replaced-published-root-candidate|root-resume-recovery-checkpoints)
+    seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
+    case $1 in
+      intermediate-resume-recovery-checkpoints) run_intermediate_resume_recovery_checkpoints_test ;;
+      unexpected-candidate-tree-entry) run_unexpected_candidate_tree_entry_test ;;
+      interrupted-resume-terminal-status) run_interrupted_resume_terminal_status_test ;;
+      interrupted-rollback-terminal-status) run_interrupted_rollback_terminal_status_test ;;
+      prepare-terminal-journal-unlink-race) run_prepare_terminal_journal_unlink_race_test ;;
+      recover-terminal-marker-unlink-race) run_recover_terminal_marker_unlink_race_test ;;
+      root-major-boundary-rollback) run_root_major_boundary_rollback_tests ;;
+      root-major-boundary-resume) run_root_major_boundary_resume_tests ;;
+      replaced-published-root-candidate) run_replaced_published_root_candidate_test ;;
+      root-resume-recovery-checkpoints) run_root_resume_recovery_checkpoints_test ;;
+    esac
+    exit 0
+    ;;
   *) fail "unknown test group: $1" ;;
 esac
 
@@ -1085,89 +1243,12 @@ run_same_inode_root_db_rewrite_tests
 
 run_all_intermediate_major_boundary_tests
 
-test_progress start unexpected-candidate-tree-entry
-tree_case="$TMP_DIR/prepare-tree-extra"; cp -a "$seed" "$tree_case"; backup_generation "$tree_case"
-set +e; PLATFORM_PKI_PREPARE_CRASH_AT=after-staged "$ROLLOVER" prepare --namespace "$tree_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-[[ $crash_status -eq 137 ]] || fail 'tree-manifest fixture did not crash'
-transaction=$(sed -n 's/^transaction=//p' "$tree_case/ns/pki/state/rollover/journal"); printf '%s\n' hostile >"$tree_case/ns/pki/state/rollover/$transaction/stage/intermediate/unexpected"; chmod 600 "$tree_case/ns/pki/state/rollover/$transaction/stage/intermediate/unexpected"
-assert_fails_with 'unexpected candidate tree entry' 'tree contents do not match' "$ROLLOVER" recover --namespace "$tree_case/ns" --transaction "$transaction" --action resume --yes
-test_progress pass unexpected-candidate-tree-entry
-
-terminal_case="$TMP_DIR/prepare-terminal-cleanup"; cp -a "$seed" "$terminal_case"; backup_generation "$terminal_case"
-set +e; PLATFORM_PKI_PREPARE_CRASH_AT=after-staged "$ROLLOVER" prepare --namespace "$terminal_case/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-[[ $crash_status -eq 137 ]] || fail 'terminal-cleanup fixture did not crash'
-transaction=$(sed -n 's/^transaction=//p' "$terminal_case/ns/pki/state/rollover/journal")
-for checkpoint in terminal-transaction-pending terminal-transaction-done terminal-journal-pending terminal-journal-done; do
-  test_progress start "terminal-status:resume:$checkpoint"
-  crash_recovery_at "$terminal_case/ns" "$transaction" resume "$checkpoint"
-  set +e; "$ROLLOVER" status --namespace "$terminal_case/ns" --format json >"$terminal_case/status.json"; terminal_status=$?; set -e
-  [[ $terminal_status -eq 2 ]] || fail "status ignored interrupted terminal cleanup at $checkpoint"
-  jq -e '.schema == 2 and .status == "recovery-required" and .terminal_outcome == "resumed" and .required_action == "resume"' "$terminal_case/status.json" >/dev/null || fail "terminal cleanup JSON was incomplete at $checkpoint"
-  set +e; "$ROLLOVER" status --namespace "$terminal_case/ns" --format text >"$terminal_case/status.txt"; terminal_status=$?; set -e
-  [[ $terminal_status -eq 2 ]] || fail "text status ignored interrupted terminal cleanup at $checkpoint"
-  grep -Fx 'status=recovery-required' "$terminal_case/status.txt" >/dev/null && grep -Fx 'terminal_outcome=resumed' "$terminal_case/status.txt" >/dev/null && grep -Fx 'required_action=resume' "$terminal_case/status.txt" >/dev/null && grep -Fx "action=run platform-pki-ca-rollover recover --transaction $transaction --action resume" "$terminal_case/status.txt" >/dev/null || fail "terminal cleanup text was incomplete at $checkpoint"
-  test_progress pass "terminal-status:resume:$checkpoint"
-done
-"$ROLLOVER" recover --namespace "$terminal_case/ns" --transaction "$transaction" --action resume --yes >/dev/null
-[[ ! -e $terminal_case/ns/pki/state/rollover/journal && ! -e $terminal_case/ns/pki/state/rollover/recovery-required ]] || fail 'terminal cleanup retained recovery control state'
-
-rollback_terminal="$TMP_DIR/prepare-rollback-terminal-cleanup"; crash_prepare_fixture "$rollback_terminal" root after-pointer; transaction=$CRASH_TRANSACTION
-for checkpoint in terminal-transaction-pending terminal-transaction-done terminal-journal-pending terminal-journal-done; do
-  test_progress start "terminal-status:rollback:$checkpoint"
-  crash_recovery_at "$rollback_terminal/ns" "$transaction" rollback "$checkpoint"
-  set +e; "$ROLLOVER" status --namespace "$rollback_terminal/ns" --format json >"$rollback_terminal/status.json"; terminal_status=$?; set -e
-  [[ $terminal_status -eq 2 ]] || fail "status ignored interrupted rollback cleanup at $checkpoint"
-  jq -e '.schema == 2 and .status == "recovery-required" and .terminal_outcome == "rolled-back" and .required_action == "rollback"' "$rollback_terminal/status.json" >/dev/null || fail "rollback cleanup JSON was incomplete at $checkpoint"
-  set +e; "$ROLLOVER" status --namespace "$rollback_terminal/ns" --format text >"$rollback_terminal/status.txt"; terminal_status=$?; set -e
-  [[ $terminal_status -eq 2 ]] || fail "text status ignored interrupted rollback cleanup at $checkpoint"
-  grep -Fx 'terminal_outcome=rolled-back' "$rollback_terminal/status.txt" >/dev/null && grep -Fx 'required_action=rollback' "$rollback_terminal/status.txt" >/dev/null && grep -Fx "action=run platform-pki-ca-rollover recover --transaction $transaction --action rollback" "$rollback_terminal/status.txt" >/dev/null || fail "rollback cleanup text was incomplete at $checkpoint"
-  test_progress pass "terminal-status:rollback:$checkpoint"
-done
-"$ROLLOVER" recover --namespace "$rollback_terminal/ns" --transaction "$transaction" --action rollback --yes >/dev/null
-
-test_progress start prepare-terminal-journal-unlink-race
-prepare_unlink="$TMP_DIR/prepare-unlink-race"; cp -a "$seed" "$prepare_unlink"; backup_generation "$prepare_unlink"
-pause_marker="$TMP_DIR/prepare-unlink.pause"; pause_release="$TMP_DIR/prepare-unlink.release"
-PLATFORM_PKI_UNLINK_PAUSE_AT=terminal-journal PLATFORM_PKI_UNLINK_PAUSE_MARKER="$pause_marker" PLATFORM_PKI_UNLINK_PAUSE_RELEASE="$pause_release" "$ROLLOVER" prepare --namespace "$prepare_unlink/ns" --type intermediate --backup-receipt "$PREPARE_RECEIPT" --intermediate-name 'Test G1-I2 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" &
-unlink_pid=$!; wait_for_path "$pause_marker"; unlink_journal="$prepare_unlink/ns/pki/state/rollover/journal"; mv "$unlink_journal" "$unlink_journal.original"; printf '%s\n' hostile-journal >"$unlink_journal"; chmod 600 "$unlink_journal"; touch "$pause_release"
-set +e; wait "$unlink_pid"; unlink_status=$?; set -e
-[[ $unlink_status -ne 0 && $(<"$unlink_journal") == hostile-journal ]] || fail 'prepare terminal journal unlink deleted a concurrent replacement'
-[[ $(<"$prepare_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'prepare terminal unlink race changed active state'
-test_progress pass prepare-terminal-journal-unlink-race
-
-test_progress start recover-terminal-marker-unlink-race
-recover_unlink="$TMP_DIR/recover-unlink-race"; crash_prepare_fixture "$recover_unlink" intermediate after-staged
-pause_marker="$TMP_DIR/recover-unlink.pause"; pause_release="$TMP_DIR/recover-unlink.release"
-PLATFORM_PKI_UNLINK_PAUSE_AT=terminal-marker PLATFORM_PKI_UNLINK_PAUSE_MARKER="$pause_marker" PLATFORM_PKI_UNLINK_PAUSE_RELEASE="$pause_release" "$ROLLOVER" recover --namespace "$recover_unlink/ns" --transaction "$CRASH_TRANSACTION" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" &
-unlink_pid=$!; wait_for_path "$pause_marker"; unlink_marker="$recover_unlink/ns/pki/state/rollover/recovery-required"; mv "$unlink_marker" "$unlink_marker.original"; printf '%s\n' hostile-marker >"$unlink_marker"; chmod 600 "$unlink_marker"; touch "$pause_release"
-set +e; wait "$unlink_pid"; unlink_status=$?; set -e
-[[ $unlink_status -ne 0 && $(<"$unlink_marker") == hostile-marker && ! -e $recover_unlink/ns/pki/state/rollover/journal ]] || fail 'recover terminal marker unlink deleted a concurrent replacement'
-[[ $(<"$recover_unlink/ns/pki/state/active-issuer") == $'root=g1\nintermediate=g1-i1' ]] || fail 'recover terminal unlink race changed active state'
-test_progress pass recover-terminal-marker-unlink-race
-
-for scenario in after-journal:rollback after-staged:resume after-root-candidate:rollback after-intermediate-candidate:resume after-consumed:rollback after-state:resume after-pointer:rollback; do
-  boundary=${scenario%%:*}; action=${scenario#*:}; case_dir="$TMP_DIR/prepare-root-$boundary"; cp -a "$seed" "$case_dir"; write_trust_consumers "$case_dir/private/pki/trust-consumers.yml"; backup_generation "$case_dir"
-  test_progress start "prepare-recover:root:$boundary:$action"
-  set +e; PLATFORM_PKI_PREPARE_CRASH_AT=$boundary "$ROLLOVER" prepare --namespace "$case_dir/ns" --type root --backup-receipt "$PREPARE_RECEIPT" --root-name 'Test G2 Root CA' --intermediate-name 'Test G2-I1 Intermediate CA' --org Test --country US --root-pass-file "$PASS" --intermediate-pass-file "$PASS" --private-repo "$case_dir/private" >/dev/null 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-  [[ $crash_status -eq 137 ]] || fail "root preparation crash at $boundary returned $crash_status instead of 137"
-  transaction=$(sed -n 's/^transaction=//p' "$case_dir/ns/pki/state/rollover/journal")
-  if [[ $boundary == after-root-candidate ]]; then
-    printf '%s\n' hostile-candidate >"$case_dir/ns/pki/authorities/roots/g2/certs/root-ca.crt"
-    assert_fails_with 'replaced root candidate recovery' 'Candidate root certificate' "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes
-    [[ $(<"$case_dir/ns/pki/authorities/roots/g2/certs/root-ca.crt") == hostile-candidate ]] || fail 'recovery changed a hostile root candidate replacement'
-    test_progress pass "prepare-recover:root:$boundary:$action"
-    continue
-  fi
-  if [[ $boundary == after-staged ]]; then
-    for recovery_boundary in resume-publish-root resume-publish-intermediate resume-consume-root resume-consume-intermediate resume-publish-state resume-publish-pointer terminal-transaction terminal-journal; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
-  elif [[ $boundary == after-pointer ]]; then
-    for recovery_boundary in rollback-pointer rollback-intermediate rollback-root rollback-state rollback-stage rollback-reservation-intermediate rollback-reservation-root rollback-backup-session terminal-transaction terminal-journal; do for checkpoint in pending done; do crash_recovery_at "$case_dir/ns" "$transaction" "$action" "$recovery_boundary-$checkpoint"; done; done
-  fi
-  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
-  [[ ! -e $case_dir/ns/pki/state/rollover/journal ]] || fail "root recovery left a journal after $boundary"
-  if [[ $action == resume ]]; then [[ -d $case_dir/ns/pki/authorities/roots/g2 && -d $case_dir/ns/pki/authorities/intermediates/g2-i1 && -f $case_dir/ns/pki/state/active-rollover ]] || fail "root resume did not publish state after $boundary"; else [[ ! -e $case_dir/ns/pki/authorities/roots/g2 && ! -e $case_dir/ns/pki/authorities/intermediates/g2-i1 && ! -e $case_dir/ns/pki/state/active-rollover ]] || fail "root rollback did not restore state after $boundary"; fi
-  test_progress pass "prepare-recover:root:$boundary:$action"
-done
+run_unexpected_candidate_tree_entry_test
+run_interrupted_resume_terminal_status_test
+run_interrupted_rollback_terminal_status_test
+run_prepare_terminal_journal_unlink_race_test
+run_recover_terminal_marker_unlink_race_test
+run_all_root_major_boundary_tests
 
 run_migration_changed_ca_private_metadata_test
 
