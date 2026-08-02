@@ -23,11 +23,118 @@ MIGRATION_FAILURE_BOUNDARIES = (
     ("after-active", "active-published"),
 )
 
+MIGRATION_PHASES = {
+    "after-journal": "pre-mutation",
+    **dict(MIGRATION_FAILURE_BOUNDARIES),
+}
+
+MIGRATION_ROLLBACK_RECOVERY_BOUNDARIES = (
+    "rollback-active",
+    "rollback-issuer-app",
+    "rollback-quarantine-pki.env",
+    "rollback-config-root",
+    "rollback-config-intermediate",
+    "rollback-intermediate-rename",
+    "rollback-root-rename",
+    "rollback-reservation-root",
+    "rollback-reservation-intermediate",
+    "rollback-backup-session",
+    "rollback-provenance",
+)
+
+MIGRATION_RESUME_RECOVERY_BOUNDARIES = (
+    "resume-backup-session",
+    "resume-reservation-root",
+    "resume-reservation-intermediate",
+    "resume-root-rename",
+    "resume-intermediate-rename",
+    "resume-config-root",
+    "resume-config-intermediate",
+    "resume-issuer-app",
+    "resume-quarantine-pki.env",
+    "resume-consume-root",
+    "resume-consume-intermediate",
+    "resume-active",
+    "resume-provenance",
+)
+
+MIGRATION_HOSTILE_FILE_CASES = (
+    (
+        "backup-session",
+        "after-reservations",
+        "backup_session",
+        "Backup session record is not in a journaled identity state",
+    ),
+    (
+        "root-reservation",
+        "after-reservations",
+        "root_reservation",
+        "Root reservation is not in a journaled identity state",
+    ),
+    (
+        "intermediate-reservation",
+        "after-reservations",
+        "intermediate_reservation",
+        "Intermediate reservation is not in a journaled identity state",
+    ),
+    (
+        "root-config-original",
+        "after-reservations",
+        "legacy_root_config",
+        "Root OpenSSL configuration is not in a journaled identity state",
+    ),
+    (
+        "root-config-published",
+        "after-configs",
+        "generation_root_config",
+        "Root OpenSSL configuration is not in a journaled identity state",
+    ),
+    (
+        "intermediate-config-published",
+        "after-configs",
+        "generation_intermediate_config",
+        "Intermediate OpenSSL configuration is not in a journaled identity state",
+    ),
+    (
+        "issuer",
+        "after-issuers",
+        "service_issuer",
+        "Service app issuer is not in a journaled identity state",
+    ),
+    (
+        "quarantine",
+        "after-quarantine",
+        "quarantine_pki_env",
+        "Quarantine entry is ambiguous or replaced: pki.env",
+    ),
+    (
+        "active",
+        "after-active",
+        "active_issuer",
+        "Active issuer manifest is not in a journaled identity state",
+    ),
+)
+
+MIGRATION_DUAL_DIRECTORY_CASES = (
+    (
+        "root",
+        "after-root-rename",
+        "root-ca",
+        "authorities/roots/g1",
+    ),
+    (
+        "intermediate",
+        "after-intermediate-rename",
+        "intermediate-ca",
+        "authorities/intermediates/g1-i1",
+    ),
+)
+
 
 def _is_sensitive(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     return (
-        path.name == "passphrase"
+        path.name in {"passphrase", "pki.env"}
         or "private" in relative.parts
         or "operator-private" in relative.parts
         or "quarantine" in relative.parts
@@ -60,6 +167,20 @@ def _workspace_snapshot(root: Path) -> tuple[str, ...]:
     return tuple(entries)
 
 
+def _metadata_tree(root: Path) -> tuple[str, ...]:
+    entries = []
+    for path in sorted(root.rglob("*")):
+        metadata = path.lstat()
+        entries.append(
+            f"{path.relative_to(root).as_posix()}\t"
+            f"{stat.S_IFMT(metadata.st_mode):o}\t"
+            f"{metadata.st_dev}:{metadata.st_ino}\t"
+            f"{stat.S_IMODE(metadata.st_mode):o}\t"
+            f"{metadata.st_size}\t{metadata.st_mtime_ns}"
+        )
+    return tuple(entries)
+
+
 def _migration_command(
     tools: RolloverTools,
     workspace: RolloverWorkspace,
@@ -82,6 +203,139 @@ def _migration_command(
         "--expected-intermediate-sha256",
         intermediate_fingerprint,
     ]
+
+
+def _migration_inputs(
+    tools: RolloverTools,
+    workspace: RolloverWorkspace,
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> tuple[list[str | Path], str, str]:
+    receipt = backup_receipt_factory(workspace)
+    root_fingerprint = _certificate_fingerprint(
+        workspace.pki / "root-ca/certs/root-ca.crt",
+        environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        workspace.pki / "intermediate-ca/certs/intermediate-ca.crt",
+        environment,
+        process_runner,
+    )
+    return (
+        _migration_command(
+            tools,
+            workspace,
+            receipt,
+            root_fingerprint,
+            intermediate_fingerprint,
+        ),
+        root_fingerprint,
+        intermediate_fingerprint,
+    )
+
+
+def _recovery_command(
+    tools: RolloverTools,
+    workspace: RolloverWorkspace,
+    transaction: str,
+    action: str,
+) -> list[str | Path]:
+    return [
+        tools.rollover,
+        "recover",
+        "--namespace",
+        workspace.namespace,
+        "--transaction",
+        transaction,
+        "--action",
+        action,
+        "--yes",
+    ]
+
+
+def _crash_migration(
+    command: list[str | Path],
+    workspace: RolloverWorkspace,
+    boundary: str,
+    environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> dict[str, str]:
+    crash_environment = dict(environment)
+    crash_environment["PLATFORM_PKI_MIGRATE_CRASH_AT"] = boundary
+    result = process_runner(command, env=crash_environment, timeout=120)
+    assert result.status == 137
+    assert result.stdout == ""
+    assert result.stderr == ""
+    journal = _read_strict_record(workspace.pki / "state/rollover/journal")
+    assert journal["schema"] == "2"
+    assert journal["operation"] == "legacy-migrate"
+    assert journal["transaction"].startswith("migrate-")
+    assert journal["phase"] == MIGRATION_PHASES[boundary]
+    assert journal["committed"] == "false"
+    return journal
+
+
+def _crash_migration_recovery(
+    tools: RolloverTools,
+    workspace: RolloverWorkspace,
+    transaction: str,
+    action: str,
+    checkpoint: str,
+    environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> dict[str, str]:
+    crash_environment = dict(environment)
+    crash_environment["PLATFORM_PKI_RECOVER_CRASH_AT"] = checkpoint
+    result = process_runner(
+        _recovery_command(tools, workspace, transaction, action),
+        env=crash_environment,
+        timeout=120,
+    )
+    assert result.status == 137
+    assert result.stdout == ""
+    assert result.stderr == ""
+    journal = _read_strict_record(workspace.pki / "state/rollover/journal")
+    assert journal["schema"] == "2"
+    assert journal["operation"] == "legacy-migrate"
+    assert journal["transaction"] == transaction
+    assert journal["phase"] == "recovering"
+    assert journal["committed"] == "false"
+    assert journal["recovery_action"] == action
+    assert journal["recovery_step"] == checkpoint
+    return journal
+
+
+def _hostile_migration_path(
+    workspace: RolloverWorkspace,
+    journal: Mapping[str, str],
+    role: str,
+) -> Path:
+    transaction = journal["transaction"]
+    paths = {
+        "backup_session": Path(journal["backup_session"]),
+        "root_reservation": workspace.pki / "state/generation-reservations/g1",
+        "intermediate_reservation": (
+            workspace.pki / "state/generation-reservations/g1-i1"
+        ),
+        "legacy_root_config": workspace.pki / "root-ca/openssl.cnf",
+        "generation_root_config": (
+            workspace.pki / "authorities/roots/g1/openssl.cnf"
+        ),
+        "generation_intermediate_config": (
+            workspace.pki / "authorities/intermediates/g1-i1/openssl.cnf"
+        ),
+        "service_issuer": workspace.pki / "services/app/issuer",
+        "quarantine_pki_env": (
+            workspace.pki
+            / "state/rollover"
+            / transaction
+            / "quarantine/pki.env"
+        ),
+        "active_issuer": workspace.pki / "state/active-issuer",
+    }
+    return paths[role]
 
 
 def _advance_mtime(path: Path) -> None:
@@ -741,6 +995,529 @@ def test_migration_failure_boundary_resume(
         migrated_intermediate_key_metadata.st_ino,
     ) == intermediate_key_identity
     assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
+def test_migration_unresolved_recovery_state(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-unresolved-recovery")
+    command, _, _ = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    failure_environment = dict(isolated_environment)
+    failure_environment["PLATFORM_PKI_MIGRATE_FAIL_AT"] = "after-reservations"
+
+    migration = process_runner(
+        command,
+        env=failure_environment,
+        timeout=120,
+    )
+    assert migration.status == 1
+    assert migration.stdout == ""
+    assert migration.stderr == (
+        "[ERROR] Injected migration interruption at after-reservations\n"
+    )
+    journal_path = workspace.pki / "state/rollover/journal"
+    journal = _read_strict_record(journal_path)
+    transaction = journal["transaction"]
+    assert journal["phase"] == "reserved"
+    assert journal["committed"] == "false"
+    marker = workspace.pki / "state/rollover/recovery-required"
+    assert _read_strict_record(marker) == {
+        "transaction": transaction,
+        "action": "run platform-pki-ca-rollover recover",
+    }
+
+    status = process_runner(
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert status.status == 2
+    assert status.stderr == ""
+    assert status.stdout == (
+        "status=recovery-required\n"
+        "recovery_required=true\n"
+        f"transaction={transaction}\n"
+        "operation=legacy-migrate\n"
+        "phase=reserved\n"
+        "terminal_outcome=none\n"
+        "required_action=rollback\n"
+        "action=run platform-pki-ca-rollover recover --transaction "
+        f"{transaction} --action rollback\n"
+    )
+    recovery = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "rollback"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 0
+    assert recovery.stdout == (
+        f"[OK] Rolled back migration transaction: {transaction}\n"
+    )
+    assert recovery.stderr == ""
+    final_journal = _read_strict_record(journal_path)
+    assert final_journal["phase"] == "rolled-back"
+    assert final_journal["committed"] == "true"
+    assert not marker.exists() and not marker.is_symlink()
+    assert (workspace.pki / "root-ca").is_dir()
+    assert (workspace.pki / "intermediate-ca").is_dir()
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
+@pytest.mark.parametrize("category", ("manifest", "readme", "quarantine"))
+def test_migration_rejects_tampered_provenance(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+    category: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(
+        f"migration-tampered-provenance-{category}"
+    )
+    private_text_writer(workspace.pki / "pki.env", "private-sentinel\n")
+    command, _, _ = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    journal = _crash_migration(
+        command,
+        workspace,
+        "after-journal",
+        isolated_environment,
+        process_runner,
+    )
+    temporary_after_crash = _metadata_tree(Path(isolated_environment["TMPDIR"]))
+    transaction = journal["transaction"]
+    provenance = Path(journal["provenance_stage"])
+    assert provenance == workspace.pki / "legacy" / f".{transaction}.publish"
+    manifest = provenance / "provenance-manifest"
+    quarantine = provenance / "quarantine/pki.env"
+    manifest_rows = [line.split("|") for line in manifest.read_text().splitlines()]
+    quarantine_rows = [row for row in manifest_rows if row[1] == "quarantine/pki.env"]
+    assert len(quarantine_rows) == 1
+    assert quarantine_rows[0][0] == "regular file"
+    assert quarantine_rows[0][3] == "secret"
+    hostile = {
+        "manifest": manifest,
+        "readme": provenance / "README",
+        "quarantine": quarantine,
+    }[category]
+    with hostile.open("a") as stream:
+        stream.write("tampered\n")
+    before = _workspace_snapshot(workspace.root)
+
+    recovery = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "resume"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 1
+    assert recovery.stdout == ""
+    if category == "manifest":
+        assert "Migration provenance manifest identity changed" in recovery.stderr
+    else:
+        assert recovery.stderr == (
+            "[ERROR] Migration provenance contents do not match their manifest\n"
+        )
+    assert _workspace_snapshot(workspace.root) == before
+    assert _metadata_tree(Path(isolated_environment["TMPDIR"])) == temporary_after_crash
+
+
+def test_migration_rollback_recovery_checkpoints(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-rollback-checkpoints")
+    private_text_writer(workspace.pki / "pki.env", "legacy-config\n")
+    legacy_root_key = workspace.pki / "root-ca/private/root-ca.key"
+    legacy_intermediate_key = (
+        workspace.pki / "intermediate-ca/private/intermediate-ca.key"
+    )
+    root_key_identity = (
+        legacy_root_key.lstat().st_dev,
+        legacy_root_key.lstat().st_ino,
+    )
+    intermediate_key_identity = (
+        legacy_intermediate_key.lstat().st_dev,
+        legacy_intermediate_key.lstat().st_ino,
+    )
+    command, _, _ = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    journal = _crash_migration(
+        command,
+        workspace,
+        "after-active",
+        isolated_environment,
+        process_runner,
+    )
+    temporary_after_crash = _metadata_tree(Path(isolated_environment["TMPDIR"]))
+    transaction = journal["transaction"]
+    for boundary in MIGRATION_ROLLBACK_RECOVERY_BOUNDARIES:
+        for suffix in ("pending", "done"):
+            _crash_migration_recovery(
+                rollover_tools,
+                workspace,
+                transaction,
+                "rollback",
+                f"{boundary}-{suffix}",
+                isolated_environment,
+                process_runner,
+            )
+
+    recovery = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "rollback"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 0
+    assert recovery.stdout == (
+        f"[OK] Rolled back migration transaction: {transaction}\n"
+    )
+    assert recovery.stderr == ""
+    final_journal = _read_strict_record(workspace.pki / "state/rollover/journal")
+    assert final_journal["phase"] == "rolled-back"
+    assert final_journal["committed"] == "true"
+    assert final_journal["recovery_action"] == "rollback"
+    assert final_journal["recovery_step"] == "rollback-provenance-done"
+    assert (workspace.pki / "pki.env").read_text() == "legacy-config\n"
+    assert not (workspace.pki / "authorities/roots/g1").exists()
+    assert not (workspace.pki / "authorities/intermediates/g1-i1").exists()
+    assert not (workspace.pki / "legacy" / transaction).exists()
+    assert not (workspace.pki / "legacy" / f".{transaction}.publish").exists()
+    assert (
+        legacy_root_key.lstat().st_dev,
+        legacy_root_key.lstat().st_ino,
+    ) == root_key_identity
+    assert (
+        legacy_intermediate_key.lstat().st_dev,
+        legacy_intermediate_key.lstat().st_ino,
+    ) == intermediate_key_identity
+    assert not tuple((workspace.pki / "state/rollover").glob("backup-session-*"))
+    assert _metadata_tree(Path(isolated_environment["TMPDIR"])) == temporary_after_crash
+
+
+def test_migration_resume_recovery_checkpoints(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-resume-checkpoints")
+    private_text_writer(workspace.pki / "pki.env", "legacy-config\n")
+    legacy_root_key = workspace.pki / "root-ca/private/root-ca.key"
+    legacy_intermediate_key = (
+        workspace.pki / "intermediate-ca/private/intermediate-ca.key"
+    )
+    root_key_identity = (
+        legacy_root_key.lstat().st_dev,
+        legacy_root_key.lstat().st_ino,
+    )
+    intermediate_key_identity = (
+        legacy_intermediate_key.lstat().st_dev,
+        legacy_intermediate_key.lstat().st_ino,
+    )
+    command, _, _ = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    journal = _crash_migration(
+        command,
+        workspace,
+        "after-journal",
+        isolated_environment,
+        process_runner,
+    )
+    temporary_after_crash = _metadata_tree(Path(isolated_environment["TMPDIR"]))
+    transaction = journal["transaction"]
+    for boundary in MIGRATION_RESUME_RECOVERY_BOUNDARIES:
+        for suffix in ("pending", "done"):
+            _crash_migration_recovery(
+                rollover_tools,
+                workspace,
+                transaction,
+                "resume",
+                f"{boundary}-{suffix}",
+                isolated_environment,
+                process_runner,
+            )
+
+    recovery = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "resume"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 0
+    assert recovery.stdout == (
+        f"[OK] Resumed migration transaction: {transaction}\n"
+    )
+    assert recovery.stderr == ""
+    final_journal = _read_strict_record(workspace.pki / "state/rollover/journal")
+    assert final_journal["phase"] == "complete"
+    assert final_journal["committed"] == "true"
+    assert final_journal["recovery_action"] == "resume"
+    assert final_journal["recovery_step"] == "resume-provenance-done"
+    provenance = workspace.pki / "legacy" / transaction
+    assert provenance.is_dir() and not provenance.is_symlink()
+    assert (provenance / "README").is_file()
+    assert (provenance / "quarantine/pki.env").read_text() == "legacy-config\n"
+    assert not (workspace.pki / "pki.env").exists()
+    generation_root_key = workspace.pki / "authorities/roots/g1/private/root-ca.key"
+    generation_intermediate_key = (
+        workspace.pki
+        / "authorities/intermediates/g1-i1/private/intermediate-ca.key"
+    )
+    assert (
+        generation_root_key.lstat().st_dev,
+        generation_root_key.lstat().st_ino,
+    ) == root_key_identity
+    assert (
+        generation_intermediate_key.lstat().st_dev,
+        generation_intermediate_key.lstat().st_ino,
+    ) == intermediate_key_identity
+    assert (workspace.pki / "state/active-issuer").read_text() == (
+        "root=g1\nintermediate=g1-i1\n"
+    )
+    transaction_directory = workspace.pki / "state/rollover" / transaction
+    assert not transaction_directory.exists() and not transaction_directory.is_symlink()
+    assert _metadata_tree(Path(isolated_environment["TMPDIR"])) == temporary_after_crash
+
+
+@pytest.mark.parametrize(
+    ("boundary", "phase"),
+    MIGRATION_FAILURE_BOUNDARIES,
+    ids=[boundary for boundary, _ in MIGRATION_FAILURE_BOUNDARIES],
+)
+def test_migration_sigkill_rollback_retry(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    boundary: str,
+    phase: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(f"migration-sigkill-retry-{boundary}")
+    legacy_root_key = workspace.pki / "root-ca/private/root-ca.key"
+    legacy_intermediate_key = (
+        workspace.pki / "intermediate-ca/private/intermediate-ca.key"
+    )
+    root_key_identity = (
+        legacy_root_key.lstat().st_dev,
+        legacy_root_key.lstat().st_ino,
+    )
+    intermediate_key_identity = (
+        legacy_intermediate_key.lstat().st_dev,
+        legacy_intermediate_key.lstat().st_ino,
+    )
+    command, root_fingerprint, intermediate_fingerprint = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    journal = _crash_migration(
+        command,
+        workspace,
+        boundary,
+        isolated_environment,
+        process_runner,
+    )
+    temporary_after_crash = _metadata_tree(Path(isolated_environment["TMPDIR"]))
+    assert journal["phase"] == phase
+    transaction = journal["transaction"]
+    rollback = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "rollback"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert rollback.status == 0
+    assert rollback.stderr == ""
+    assert (workspace.pki / "root-ca").is_dir()
+    assert (workspace.pki / "intermediate-ca").is_dir()
+
+    retry = process_runner(command, env=isolated_environment, timeout=120)
+    assert retry.status == 0
+    assert retry.stdout == (
+        "[OK] Migrated legacy PKI state to root g1 and intermediate g1-i1\n"
+    )
+    assert retry.stderr == ""
+    final_journal = _read_strict_record(workspace.pki / "state/rollover/journal")
+    assert final_journal["transaction"] != transaction
+    assert final_journal["phase"] == "complete"
+    assert final_journal["committed"] == "true"
+    for generation, kind, fingerprint in (
+        ("g1", "root", root_fingerprint),
+        ("g1-i1", "intermediate", intermediate_fingerprint),
+    ):
+        reservation = _read_strict_record(
+            workspace.pki / "state/generation-reservations" / generation
+        )
+        assert reservation["kind"] == kind
+        assert reservation["status"] == "consumed"
+        assert reservation["fingerprint_sha256"] == fingerprint
+    migrated_root_key = workspace.pki / "authorities/roots/g1/private/root-ca.key"
+    migrated_intermediate_key = (
+        workspace.pki
+        / "authorities/intermediates/g1-i1/private/intermediate-ca.key"
+    )
+    assert (
+        migrated_root_key.lstat().st_dev,
+        migrated_root_key.lstat().st_ino,
+    ) == root_key_identity
+    assert (
+        migrated_intermediate_key.lstat().st_dev,
+        migrated_intermediate_key.lstat().st_ino,
+    ) == intermediate_key_identity
+    assert _metadata_tree(Path(isolated_environment["TMPDIR"])) == temporary_after_crash
+
+
+@pytest.mark.parametrize(
+    ("category", "boundary", "role", "diagnostic"),
+    MIGRATION_HOSTILE_FILE_CASES,
+    ids=[case[0] for case in MIGRATION_HOSTILE_FILE_CASES],
+)
+def test_migration_rejects_hostile_file_replacements(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+    category: str,
+    boundary: str,
+    role: str,
+    diagnostic: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(f"migration-hostile-{category}")
+    private_text_writer(workspace.pki / "pki.env", "legacy-config\n")
+    command, _, _ = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    journal = _crash_migration(
+        command,
+        workspace,
+        boundary,
+        isolated_environment,
+        process_runner,
+    )
+    temporary_after_crash = _metadata_tree(Path(isolated_environment["TMPDIR"]))
+    transaction = journal["transaction"]
+    hostile = _hostile_migration_path(workspace, journal, role)
+    assert hostile.is_file() and not hostile.is_symlink()
+    hostile.unlink()
+    private_text_writer(hostile, f"hostile-{category}\n")
+    before = _workspace_snapshot(workspace.root)
+
+    recovery = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "rollback"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 1
+    assert recovery.stdout == ""
+    assert recovery.stderr == f"[ERROR] {diagnostic}\n"
+    assert hostile.is_file() and not hostile.is_symlink()
+    assert stat.S_IMODE(hostile.lstat().st_mode) == 0o600
+    assert hostile.read_text() == f"hostile-{category}\n"
+    assert _workspace_snapshot(workspace.root) == before
+    assert _metadata_tree(Path(isolated_environment["TMPDIR"])) == temporary_after_crash
+
+
+@pytest.mark.parametrize(
+    ("authority", "boundary", "legacy_relative", "generation_relative"),
+    MIGRATION_DUAL_DIRECTORY_CASES,
+    ids=[case[0] for case in MIGRATION_DUAL_DIRECTORY_CASES],
+)
+def test_migration_rejects_simultaneous_dual_directories(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+    authority: str,
+    boundary: str,
+    legacy_relative: str,
+    generation_relative: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(f"migration-dual-{authority}")
+    private_text_writer(workspace.pki / "pki.env", "legacy-config\n")
+    command, _, _ = _migration_inputs(
+        rollover_tools,
+        workspace,
+        backup_receipt_factory,
+        isolated_environment,
+        process_runner,
+    )
+    journal = _crash_migration(
+        command,
+        workspace,
+        boundary,
+        isolated_environment,
+        process_runner,
+    )
+    temporary_after_crash = _metadata_tree(Path(isolated_environment["TMPDIR"]))
+    transaction = journal["transaction"]
+    legacy = workspace.pki / legacy_relative
+    generation = workspace.pki / generation_relative
+    assert generation.is_dir() and not generation.is_symlink()
+    legacy.mkdir(mode=0o700)
+    before = _workspace_snapshot(workspace.root)
+
+    recovery = process_runner(
+        _recovery_command(rollover_tools, workspace, transaction, "rollback"),
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 1
+    assert recovery.stdout == ""
+    assert recovery.stderr == (
+        f"[ERROR] {authority.title()} authority paths are simultaneously "
+        "present or absent\n"
+    )
+    assert legacy.is_dir() and not legacy.is_symlink()
+    assert generation.is_dir() and not generation.is_symlink()
+    assert _workspace_snapshot(workspace.root) == before
+    assert _metadata_tree(Path(isolated_environment["TMPDIR"])) == temporary_after_crash
 
 
 def test_migration_success_preserves_private_key_identities(

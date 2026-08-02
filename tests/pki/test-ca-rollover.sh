@@ -566,6 +566,121 @@ run_all_migration_failure_boundary_tests() {
   done
 }
 
+run_migration_unresolved_recovery_state_test() {
+  local unresolved_case="$TMP_DIR/unresolved-failure" unresolved_pki transaction
+  cp -a "$seed" "$unresolved_case"; unresolved_pki="$unresolved_case/ns/pki"; convert_to_legacy "$unresolved_case"; backup_legacy "$unresolved_case"
+  if PLATFORM_PKI_MIGRATE_FAIL_AT=after-reservations migrate "$unresolved_case" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'injected migration failure unexpectedly succeeded'; fi
+  grep -Fx 'committed=false' "$unresolved_pki/state/rollover/journal" >/dev/null || fail 'migration failure automatically closed its journal'
+  [[ -f $unresolved_pki/state/rollover/recovery-required ]] || fail 'migration failure did not publish a recovery marker'
+  if "$ROLLOVER" status --namespace "$unresolved_case/ns" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'normal status ignored an unresolved migration'; fi
+  transaction=$(sed -n 's/^transaction=//p' "$unresolved_pki/state/rollover/journal")
+  "$ROLLOVER" recover --namespace "$unresolved_case/ns" --transaction "$transaction" --action rollback --yes >/dev/null
+}
+
+run_migration_tampered_provenance_tests() {
+  local category case_dir pki crash_status journal transaction provenance
+  for category in manifest readme quarantine; do
+    test_progress start "migration-provenance:$category"
+    case_dir="$TMP_DIR/provenance-$category"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"; printf '%s\n' private-sentinel >"$pki/pki.env"; chmod 600 "$pki/pki.env"; backup_legacy "$case_dir"
+    set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=after-journal migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+    [[ $crash_status -eq 137 ]] || fail "provenance fixture crash failed for $category"
+    journal="$pki/state/rollover/journal"; transaction=$(sed -n 's/^transaction=//p' "$journal"); provenance=$(sed -n 's/^provenance_stage=//p' "$journal")
+    grep -Fq '|quarantine/pki.env|' "$provenance/provenance-manifest" || fail 'provenance manifest omitted quarantined material'
+    grep -F '|quarantine/pki.env|' "$provenance/provenance-manifest" | grep -Fq '|secret' || fail 'provenance manifest hashed potentially private quarantine content'
+    case $category in manifest) printf '%s\n' tampered >>"$provenance/provenance-manifest" ;; readme) printf '%s\n' tampered >>"$provenance/README" ;; quarantine) printf '%s\n' tampered >>"$provenance/quarantine/pki.env" ;; esac
+    if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted tampered provenance $category"; fi
+    test_progress pass "migration-provenance:$category"
+  done
+}
+
+run_migration_recovery_checkpoints_test() {
+  local action=$1 case_dir="$TMP_DIR/recovery-of-recovery-$1" pki migration_boundary crash_status transaction recovery_boundary checkpoint
+  local -a recovery_boundaries
+  test_progress start "migration-recovery-of-recovery:$action"
+  cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"; printf '%s\n' legacy-config >"$pki/pki.env"; chmod 600 "$pki/pki.env"; backup_legacy "$case_dir"
+  if [[ $action == rollback ]]; then migration_boundary=after-active; recovery_boundaries=(rollback-active rollback-issuer-app rollback-quarantine-pki.env rollback-config-root rollback-config-intermediate rollback-intermediate-rename rollback-root-rename rollback-reservation-root rollback-reservation-intermediate rollback-backup-session rollback-provenance)
+  else migration_boundary=after-journal; recovery_boundaries=(resume-backup-session resume-reservation-root resume-reservation-intermediate resume-root-rename resume-intermediate-rename resume-config-root resume-config-intermediate resume-issuer-app resume-quarantine-pki.env resume-consume-root resume-consume-intermediate resume-active resume-provenance); fi
+  set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=$migration_boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "migration recovery-of-recovery fixture failed for $action"
+  transaction=$(sed -n 's/^transaction=//p' "$pki/state/rollover/journal")
+  for recovery_boundary in "${recovery_boundaries[@]}"; do
+    for checkpoint in pending done; do
+      test_progress start "migration-recover:$action:$recovery_boundary-$checkpoint"
+      set +e; PLATFORM_PKI_RECOVER_CRASH_AT="$recovery_boundary-$checkpoint" "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+      [[ $crash_status -eq 137 ]] || fail "recovery SIGKILL status at $recovery_boundary-$checkpoint/$action was $crash_status: $(<"$TMP_DIR/stderr")"
+      test_progress pass "migration-recover:$action:$recovery_boundary-$checkpoint"
+    done
+  done
+  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
+  grep -Fx 'committed=true' "$pki/state/rollover/journal" >/dev/null || fail "recovery-of-recovery did not commit for $action"
+  if [[ $action == resume ]]; then [[ -f $pki/legacy/$transaction/README && $(<"$pki/legacy/$transaction/quarantine/pki.env") == legacy-config ]] || fail 'resume did not publish complete migration provenance'
+  else [[ ! -e $pki/legacy/$transaction && ! -e $pki/legacy/.$transaction.publish ]] || fail 'rollback retained uncommitted migration provenance'; fi
+  test_progress pass "migration-recovery-of-recovery:$action"
+}
+
+run_migration_sigkill_rollback_retry_tests() {
+  local boundary case_dir pki crash_status transaction
+  for boundary in "${MIGRATION_FAILURE_BOUNDARIES[@]}"; do
+    test_progress start "migration-sigkill-retry:$boundary"
+    case_dir="$TMP_DIR/crash-$boundary"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"; backup_legacy "$case_dir"
+    set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=$boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+    [[ $crash_status -eq 137 ]] || fail "migration SIGKILL status at $boundary was $crash_status"
+    transaction=$(sed -n 's/^transaction=//p' "$pki/state/rollover/journal")
+    "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action rollback --yes >/dev/null
+    [[ -d $pki/root-ca && -d $pki/intermediate-ca ]] || fail "SIGKILL rollback did not restore legacy state after $boundary"
+    migrate "$case_dir" >/dev/null || fail "migration retry failed after SIGKILL rollback at $boundary"
+    test_progress pass "migration-sigkill-retry:$boundary"
+  done
+}
+
+run_migration_hostile_case() {
+  local category=$1 case_dir="$TMP_DIR/hostile-$1" pki boundary crash_status journal transaction hostile_path
+  test_progress start "migration-hostile:$category"
+  cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"
+  printf '%s\n' legacy-config >"$pki/pki.env"; chmod 600 "$pki/pki.env"; backup_legacy "$case_dir"
+  case $category in
+    backup-session|root-reservation|intermediate-reservation|root-config-original) boundary=after-reservations ;;
+    root-config-published|intermediate-config-published) boundary=after-configs ;;
+    issuer) boundary=after-issuers ;;
+    quarantine) boundary=after-quarantine ;;
+    active) boundary=after-active ;;
+    dual-root) boundary=after-root-rename ;;
+    dual-intermediate) boundary=after-intermediate-rename ;;
+  esac
+  set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=$boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
+  [[ $crash_status -eq 137 ]] || fail "hostile fixture crash failed for $category"
+  journal="$pki/state/rollover/journal"; transaction=$(sed -n 's/^transaction=//p' "$journal")
+  case $category in
+    backup-session) hostile_path=$(sed -n 's/^backup_session=//p' "$journal") ;;
+    root-reservation) hostile_path="$pki/state/generation-reservations/g1" ;;
+    intermediate-reservation) hostile_path="$pki/state/generation-reservations/g1-i1" ;;
+    root-config-original) hostile_path="$pki/root-ca/openssl.cnf" ;;
+    root-config-published) hostile_path="$pki/authorities/roots/g1/openssl.cnf" ;;
+    intermediate-config-published) hostile_path="$pki/authorities/intermediates/g1-i1/openssl.cnf" ;;
+    issuer) hostile_path="$pki/services/app/issuer" ;;
+    quarantine) hostile_path="$pki/state/rollover/$transaction/quarantine/pki.env" ;;
+    active) hostile_path="$pki/state/active-issuer" ;;
+    dual-root) mkdir -m 700 "$pki/root-ca"; hostile_path="$pki/root-ca" ;;
+    dual-intermediate) mkdir -m 700 "$pki/intermediate-ca"; hostile_path="$pki/intermediate-ca" ;;
+  esac
+  if [[ $category != dual-root && $category != dual-intermediate ]]; then rm -f -- "$hostile_path"; printf '%s\n' "hostile-$category" >"$hostile_path"; chmod 600 "$hostile_path"; fi
+  if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action rollback --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted hostile $category replacement"; fi
+  if [[ $category == dual-root ]]; then [[ -d $pki/root-ca && -d $pki/authorities/roots/g1 ]] || fail 'dual root paths were nested or removed'
+  elif [[ $category == dual-intermediate ]]; then [[ -d $pki/intermediate-ca && -d $pki/authorities/intermediates/g1-i1 ]] || fail 'dual intermediate paths were nested or removed'
+  else [[ $(<"$hostile_path") == "hostile-$category" ]] || fail "recovery changed hostile $category replacement"; fi
+  test_progress pass "migration-hostile:$category"
+}
+
+run_migration_hostile_file_replacement_tests() {
+  local category
+  for category in backup-session root-reservation intermediate-reservation root-config-original root-config-published intermediate-config-published issuer quarantine active; do run_migration_hostile_case "$category"; done
+}
+
+run_migration_simultaneous_dual_directory_tests() {
+  local category
+  for category in dual-root dual-intermediate; do run_migration_hostile_case "$category"; done
+}
+
 run_migration_success_preserves_key_inodes_test() {
   local pki root_key_inode int_key_inode
   primary="$TMP_DIR/primary"
@@ -1148,6 +1263,19 @@ case ${1:-all} in
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_failure_boundary_resume_tests; exit 0
     ;;
+  migration-unresolved-recovery-state|migration-tampered-provenance|migration-rollback-recovery-checkpoints|migration-resume-recovery-checkpoints|migration-sigkill-rollback-retry|migration-hostile-file-replacements|migration-simultaneous-dual-directories)
+    seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
+    case $1 in
+      migration-unresolved-recovery-state) run_migration_unresolved_recovery_state_test ;;
+      migration-tampered-provenance) run_migration_tampered_provenance_tests ;;
+      migration-rollback-recovery-checkpoints) run_migration_recovery_checkpoints_test rollback ;;
+      migration-resume-recovery-checkpoints) run_migration_recovery_checkpoints_test resume ;;
+      migration-sigkill-rollback-retry) run_migration_sigkill_rollback_retry_tests ;;
+      migration-hostile-file-replacements) run_migration_hostile_file_replacement_tests ;;
+      migration-simultaneous-dual-directories) run_migration_simultaneous_dual_directory_tests ;;
+    esac
+    exit 0
+    ;;
   migration-success-preserves-key-inodes)
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_success_preserves_key_inodes_test
@@ -1324,99 +1452,13 @@ run_migration_extra_service_directory_test
 run_migration_replaced_transaction_evidence_test
 
 run_all_migration_failure_boundary_tests
-
-unresolved_case="$TMP_DIR/unresolved-failure"; cp -a "$seed" "$unresolved_case"; unresolved_pki="$unresolved_case/ns/pki"; convert_to_legacy "$unresolved_case"; backup_legacy "$unresolved_case"
-if PLATFORM_PKI_MIGRATE_FAIL_AT=after-reservations migrate "$unresolved_case" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'injected migration failure unexpectedly succeeded'; fi
-grep -Fx 'committed=false' "$unresolved_pki/state/rollover/journal" >/dev/null || fail 'migration failure automatically closed its journal'
-[[ -f $unresolved_pki/state/rollover/recovery-required ]] || fail 'migration failure did not publish a recovery marker'
-if "$ROLLOVER" status --namespace "$unresolved_case/ns" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'normal status ignored an unresolved migration'; fi
-transaction=$(sed -n 's/^transaction=//p' "$unresolved_pki/state/rollover/journal")
-"$ROLLOVER" recover --namespace "$unresolved_case/ns" --transaction "$transaction" --action rollback --yes >/dev/null
-
-for category in manifest readme quarantine; do
-  test_progress start "migration-provenance:$category"
-  case_dir="$TMP_DIR/provenance-$category"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"; printf '%s\n' private-sentinel >"$pki/pki.env"; chmod 600 "$pki/pki.env"; backup_legacy "$case_dir"
-  set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=after-journal migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-  [[ $crash_status -eq 137 ]] || fail "provenance fixture crash failed for $category"
-  journal="$pki/state/rollover/journal"; transaction=$(sed -n 's/^transaction=//p' "$journal"); provenance=$(sed -n 's/^provenance_stage=//p' "$journal")
-  grep -Fq '|quarantine/pki.env|' "$provenance/provenance-manifest" || fail 'provenance manifest omitted quarantined material'
-  grep -F '|quarantine/pki.env|' "$provenance/provenance-manifest" | grep -Fq '|secret' || fail 'provenance manifest hashed potentially private quarantine content'
-  case $category in manifest) printf '%s\n' tampered >>"$provenance/provenance-manifest" ;; readme) printf '%s\n' tampered >>"$provenance/README" ;; quarantine) printf '%s\n' tampered >>"$provenance/quarantine/pki.env" ;; esac
-  if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action resume --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted tampered provenance $category"; fi
-  test_progress pass "migration-provenance:$category"
-done
-
-for action in rollback resume; do
-  test_progress start "migration-recovery-of-recovery:$action"
-  case_dir="$TMP_DIR/recovery-of-recovery-$action"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"; printf '%s\n' legacy-config >"$pki/pki.env"; chmod 600 "$pki/pki.env"; backup_legacy "$case_dir"
-  if [[ $action == rollback ]]; then migration_boundary=after-active; recovery_boundaries=(rollback-active rollback-issuer-app rollback-quarantine-pki.env rollback-config-root rollback-config-intermediate rollback-intermediate-rename rollback-root-rename rollback-reservation-root rollback-reservation-intermediate rollback-backup-session rollback-provenance)
-  else migration_boundary=after-journal; recovery_boundaries=(resume-backup-session resume-reservation-root resume-reservation-intermediate resume-root-rename resume-intermediate-rename resume-config-root resume-config-intermediate resume-issuer-app resume-quarantine-pki.env resume-consume-root resume-consume-intermediate resume-active resume-provenance); fi
-  set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=$migration_boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-  [[ $crash_status -eq 137 ]] || fail "migration recovery-of-recovery fixture failed for $action"
-  transaction=$(sed -n 's/^transaction=//p' "$pki/state/rollover/journal")
-  for recovery_boundary in "${recovery_boundaries[@]}"; do
-    for checkpoint in pending done; do
-      test_progress start "migration-recover:$action:$recovery_boundary-$checkpoint"
-      set +e; PLATFORM_PKI_RECOVER_CRASH_AT="$recovery_boundary-$checkpoint" "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-      [[ $crash_status -eq 137 ]] || fail "recovery SIGKILL status at $recovery_boundary-$checkpoint/$action was $crash_status: $(<"$TMP_DIR/stderr")"
-      test_progress pass "migration-recover:$action:$recovery_boundary-$checkpoint"
-    done
-  done
-  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
-  grep -Fx 'committed=true' "$pki/state/rollover/journal" >/dev/null || fail "recovery-of-recovery did not commit for $action"
-  if [[ $action == resume ]]; then [[ -f $pki/legacy/$transaction/README && $(<"$pki/legacy/$transaction/quarantine/pki.env") == legacy-config ]] || fail 'resume did not publish complete migration provenance'
-  else [[ ! -e $pki/legacy/$transaction && ! -e $pki/legacy/.$transaction.publish ]] || fail 'rollback retained uncommitted migration provenance'; fi
-  test_progress pass "migration-recovery-of-recovery:$action"
-done
-
-for boundary in after-reservations after-root-rename after-intermediate-rename after-configs after-issuers after-quarantine after-active; do
-  test_progress start "migration-sigkill-retry:$boundary"
-  case_dir="$TMP_DIR/crash-$boundary"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"; backup_legacy "$case_dir"
-  set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=$boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-  [[ $crash_status -eq 137 ]] || fail "migration SIGKILL status at $boundary was $crash_status"
-  transaction=$(sed -n 's/^transaction=//p' "$pki/state/rollover/journal")
-  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action rollback --yes >/dev/null
-  [[ -d $pki/root-ca && -d $pki/intermediate-ca ]] || fail "SIGKILL rollback did not restore legacy state after $boundary"
-  migrate "$case_dir" >/dev/null || fail "migration retry failed after SIGKILL rollback at $boundary"
-  test_progress pass "migration-sigkill-retry:$boundary"
-done
-
-for category in backup-session root-reservation intermediate-reservation root-config-original root-config-published intermediate-config-published issuer quarantine active dual-root dual-intermediate; do
-  test_progress start "migration-hostile:$category"
-  case_dir="$TMP_DIR/hostile-$category"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"; convert_to_legacy "$case_dir"
-  printf '%s\n' legacy-config >"$pki/pki.env"; chmod 600 "$pki/pki.env"; backup_legacy "$case_dir"
-  case $category in
-    backup-session|root-reservation|intermediate-reservation|root-config-original) boundary=after-reservations ;;
-    root-config-published|intermediate-config-published) boundary=after-configs ;;
-    issuer) boundary=after-issuers ;;
-    quarantine) boundary=after-quarantine ;;
-    active) boundary=after-active ;;
-    dual-root) boundary=after-root-rename ;;
-    dual-intermediate) boundary=after-intermediate-rename ;;
-  esac
-  set +e; PLATFORM_PKI_MIGRATE_CRASH_AT=$boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; crash_status=$?; set -e
-  [[ $crash_status -eq 137 ]] || fail "hostile fixture crash failed for $category"
-  journal="$pki/state/rollover/journal"; transaction=$(sed -n 's/^transaction=//p' "$journal")
-  case $category in
-    backup-session) hostile_path=$(sed -n 's/^backup_session=//p' "$journal") ;;
-    root-reservation) hostile_path="$pki/state/generation-reservations/g1" ;;
-    intermediate-reservation) hostile_path="$pki/state/generation-reservations/g1-i1" ;;
-    root-config-original) hostile_path="$pki/root-ca/openssl.cnf" ;;
-    root-config-published) hostile_path="$pki/authorities/roots/g1/openssl.cnf" ;;
-    intermediate-config-published) hostile_path="$pki/authorities/intermediates/g1-i1/openssl.cnf" ;;
-    issuer) hostile_path="$pki/services/app/issuer" ;;
-    quarantine) hostile_path="$pki/state/rollover/$transaction/quarantine/pki.env" ;;
-    active) hostile_path="$pki/state/active-issuer" ;;
-    dual-root) mkdir -m 700 "$pki/root-ca"; hostile_path="$pki/root-ca" ;;
-    dual-intermediate) mkdir -m 700 "$pki/intermediate-ca"; hostile_path="$pki/intermediate-ca" ;;
-  esac
-  if [[ $category != dual-root && $category != dual-intermediate ]]; then rm -f -- "$hostile_path"; printf '%s\n' "hostile-$category" >"$hostile_path"; chmod 600 "$hostile_path"; fi
-  if "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action rollback --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "recovery accepted hostile $category replacement"; fi
-  if [[ $category == dual-root ]]; then [[ -d $pki/root-ca && -d $pki/authorities/roots/g1 ]] || fail 'dual root paths were nested or removed'
-  elif [[ $category == dual-intermediate ]]; then [[ -d $pki/intermediate-ca && -d $pki/authorities/intermediates/g1-i1 ]] || fail 'dual intermediate paths were nested or removed'
-  else [[ $(<"$hostile_path") == "hostile-$category" ]] || fail "recovery changed hostile $category replacement"; fi
-  test_progress pass "migration-hostile:$category"
-done
+run_migration_unresolved_recovery_state_test
+run_migration_tampered_provenance_tests
+run_migration_recovery_checkpoints_test rollback
+run_migration_recovery_checkpoints_test resume
+run_migration_sigkill_rollback_retry_tests
+run_migration_hostile_file_replacement_tests
+run_migration_simultaneous_dual_directory_tests
 
 run_migration_dual_layout_preflight_test
 
