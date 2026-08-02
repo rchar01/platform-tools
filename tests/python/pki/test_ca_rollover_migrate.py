@@ -265,6 +265,86 @@ def test_migration_rejects_extra_service_directory_before_transaction(
     assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
 
 
+def test_migration_rejects_replaced_transaction_evidence(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory(
+        "migration-replaced-transaction-evidence"
+    )
+    receipt = backup_receipt_factory(workspace)
+    root_fingerprint = _certificate_fingerprint(
+        workspace.pki / "root-ca/certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        workspace.pki / "intermediate-ca/certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    failure_environment = dict(isolated_environment)
+    failure_environment["PLATFORM_PKI_MIGRATE_FAIL_AT"] = "after-reservations"
+
+    migration = process_runner(
+        _migration_command(
+            rollover_tools,
+            workspace,
+            receipt,
+            root_fingerprint,
+            intermediate_fingerprint,
+        ),
+        env=failure_environment,
+        timeout=120,
+    )
+    assert migration.status == 1
+    assert migration.stdout == ""
+    assert migration.stderr == (
+        "[ERROR] Injected migration interruption at after-reservations\n"
+    )
+
+    journal = (workspace.pki / "state/rollover/journal").read_text()
+    transactions = [
+        line.removeprefix("transaction=")
+        for line in journal.splitlines()
+        if line.startswith("transaction=")
+    ]
+    assert len(transactions) == 1
+    transaction = transactions[0]
+    assert transaction.startswith("migrate-")
+    services = workspace.pki / "state/rollover" / transaction / "services"
+    assert services.read_text() == "app\n"
+    with services.open("a", encoding="ascii") as stream:
+        stream.write("foreign\n")
+    before = _workspace_snapshot(workspace.root)
+
+    result = process_runner(
+        [
+            rollover_tools.rollover,
+            "recover",
+            "--namespace",
+            workspace.namespace,
+            "--transaction",
+            transaction,
+            "--action",
+            "rollback",
+            "--yes",
+        ],
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == "[ERROR] Recovery service set changed\n"
+    assert services.read_text() == "app\nforeign\n"
+    assert _workspace_snapshot(workspace.root) == before
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
 def test_migration_success_preserves_private_key_identities(
     rollover_tools: RolloverTools,
     legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],

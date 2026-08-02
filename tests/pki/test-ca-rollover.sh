@@ -518,6 +518,15 @@ run_migration_extra_service_directory_test() {
   grep -Fq 'absent from inventory' "$TMP_DIR/stderr" || fail 'extra service mismatch was not reported'
 }
 
+run_migration_replaced_transaction_evidence_test() {
+  local foreign_case="$TMP_DIR/foreign-recovery" foreign_pki foreign_transaction
+  cp -a "$seed" "$foreign_case"; convert_to_legacy "$foreign_case"; backup_legacy "$foreign_case"
+  PLATFORM_PKI_MIGRATE_FAIL_AT=after-reservations migrate "$foreign_case" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" || true
+  foreign_pki="$foreign_case/ns/pki"; foreign_transaction=$(sed -n 's/^transaction=//p' "$foreign_pki/state/rollover/journal"); printf '%s\n' foreign >>"$foreign_pki/state/rollover/$foreign_transaction/services"
+  if "$ROLLOVER" recover --namespace "$foreign_case/ns" --transaction "$foreign_transaction" --action rollback --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'recovery accepted replaced transaction evidence'; fi
+  grep -Fq 'service set changed' "$TMP_DIR/stderr" || fail 'foreign recovery evidence was not rejected'
+}
+
 run_migration_success_preserves_key_inodes_test() {
   local pki root_key_inode int_key_inode
   primary="$TMP_DIR/primary"
@@ -1088,6 +1097,10 @@ case ${1:-all} in
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_extra_service_directory_test; exit 0
     ;;
+  migration-replaced-transaction-evidence)
+    seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
+    run_migration_replaced_transaction_evidence_test; exit 0
+    ;;
   migration-success-preserves-key-inodes)
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_success_preserves_key_inodes_test
@@ -1261,11 +1274,7 @@ run_migration_changed_additional_private_metadata_test
 
 run_migration_extra_service_directory_test
 
-foreign_case="$TMP_DIR/foreign-recovery"; cp -a "$seed" "$foreign_case"; convert_to_legacy "$foreign_case"; backup_legacy "$foreign_case"
-PLATFORM_PKI_MIGRATE_FAIL_AT=after-reservations migrate "$foreign_case" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr" || true
-foreign_pki="$foreign_case/ns/pki"; foreign_transaction=$(sed -n 's/^transaction=//p' "$foreign_pki/state/rollover/journal"); printf '%s\n' foreign >>"$foreign_pki/state/rollover/$foreign_transaction/services"
-if "$ROLLOVER" recover --namespace "$foreign_case/ns" --transaction "$foreign_transaction" --action rollback --yes >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'recovery accepted replaced transaction evidence'; fi
-grep -Fq 'service set changed' "$TMP_DIR/stderr" || fail 'foreign recovery evidence was not rejected'
+run_migration_replaced_transaction_evidence_test
 
 for boundary in after-reservations after-root-rename after-intermediate-rename after-configs after-issuers after-quarantine after-active; do
   for action in rollback resume; do
