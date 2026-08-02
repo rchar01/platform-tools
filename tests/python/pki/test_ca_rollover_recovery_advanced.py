@@ -54,6 +54,18 @@ ROOT_RESUME_RECOVERY_BOUNDARIES = (
     "terminal-transaction",
     "terminal-journal",
 )
+ROOT_ROLLBACK_RECOVERY_BOUNDARIES = (
+    "rollback-pointer",
+    "rollback-intermediate",
+    "rollback-root",
+    "rollback-state",
+    "rollback-stage",
+    "rollback-reservation-intermediate",
+    "rollback-reservation-root",
+    "rollback-backup-session",
+    "terminal-transaction",
+    "terminal-journal",
+)
 ROOT_MAJOR_ROLLBACK_STEPS = {
     "after-journal": "none",
     "after-consumed": "consume-intermediate-done",
@@ -84,6 +96,8 @@ def _crash_recovery(
         process_runner,
     )
     assert result.status == 137, result
+    assert result.stdout == ""
+    assert result.stderr == ""
 
     journal_path = workspace.pki / "state/rollover/journal"
     marker_path = workspace.pki / "state/rollover/recovery-required"
@@ -743,3 +757,80 @@ def test_root_resume_recovery_checkpoints(
     )
     assert (active.read_text(), _metadata(active)) == active_before
     _assert_resumed(workspace, journal["transaction"], "g2", "g2-i1")
+
+
+def test_root_rollback_recovery_checkpoints(
+    rollover_tools: RolloverTools,
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = rollover_case_factory("root-rollback-recovery-checkpoints")
+    private_text_writer(
+        workspace.private_repo / "pki/trust-consumers.yml",
+        VALID_TRUST_CONSUMERS,
+    )
+    receipt = backup_receipt_factory(workspace)
+    active = workspace.pki / "state/active-issuer"
+    active_before = (active.read_text(), _metadata(active))
+    journal = _root_crash_fixture(
+        rollover_tools,
+        workspace,
+        receipt,
+        "after-pointer",
+        "publish-pointer-done",
+        isolated_environment,
+        process_runner,
+    )
+    for boundary in ROOT_ROLLBACK_RECOVERY_BOUNDARIES:
+        for suffix in ("pending", "done"):
+            _crash_recovery(
+                rollover_tools,
+                workspace,
+                journal["transaction"],
+                "rollback",
+                f"{boundary}-{suffix}",
+                isolated_environment,
+                process_runner,
+            )
+            if boundary.startswith("terminal-"):
+                _assert_terminal_status(
+                    rollover_tools,
+                    workspace,
+                    journal["transaction"],
+                    "rolled-back",
+                    "rollback",
+                    isolated_environment,
+                    process_runner,
+                )
+
+    result = _recover(
+        rollover_tools,
+        workspace,
+        journal["transaction"],
+        "rollback",
+        isolated_environment,
+        process_runner,
+    )
+    assert result.status == 0
+    assert result.stderr == ""
+    assert result.stdout == (
+        f"[OK] Completed terminal cleanup for {journal['transaction']}\n"
+    )
+    assert (active.read_text(), _metadata(active)) == active_before
+    _assert_rolled_back(workspace, journal["transaction"], "g2", "g2-i1")
+    rollover_state = workspace.pki / "state/rollovers" / journal["transaction"]
+    assert not rollover_state.exists() and not rollover_state.is_symlink()
+    assert not tuple((workspace.pki / "state/rollover").glob("backup-session-*"))
+    for generation, kind in (("g2", "root"), ("g2-i1", "intermediate")):
+        reservation = _read_strict_record(
+            workspace.pki / "state/generation-reservations" / generation
+        )
+        assert reservation == {
+            "generation": generation,
+            "kind": kind,
+            "status": "abandoned",
+            "transaction": journal["transaction"],
+        }

@@ -1015,6 +1015,10 @@ run_root_resume_recovery_checkpoints_test() {
   run_root_major_boundary_spec after-staged resume
 }
 
+run_root_rollback_recovery_checkpoints_test() {
+  run_root_major_boundary_spec after-pointer rollback
+}
+
 run_all_root_major_boundary_tests() {
   run_root_major_boundary_spec after-journal rollback
   run_root_resume_recovery_checkpoints_test
@@ -1022,7 +1026,7 @@ run_all_root_major_boundary_tests() {
   run_root_major_boundary_spec after-intermediate-candidate resume
   run_root_major_boundary_spec after-consumed rollback
   run_root_major_boundary_spec after-state resume
-  run_root_major_boundary_spec after-pointer rollback
+  run_root_rollback_recovery_checkpoints_test
 }
 
 case ${1:-all} in
@@ -1175,7 +1179,7 @@ case ${1:-all} in
     esac
     exit 0
     ;;
-  intermediate-resume-recovery-checkpoints|unexpected-candidate-tree-entry|interrupted-resume-terminal-status|interrupted-rollback-terminal-status|prepare-terminal-journal-unlink-race|recover-terminal-marker-unlink-race|root-major-boundary-rollback|root-major-boundary-resume|replaced-published-root-candidate|root-resume-recovery-checkpoints)
+  intermediate-resume-recovery-checkpoints|unexpected-candidate-tree-entry|interrupted-resume-terminal-status|interrupted-rollback-terminal-status|prepare-terminal-journal-unlink-race|recover-terminal-marker-unlink-race|root-major-boundary-rollback|root-major-boundary-resume|replaced-published-root-candidate|root-resume-recovery-checkpoints|root-rollback-recovery-checkpoints)
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     case $1 in
       intermediate-resume-recovery-checkpoints) run_intermediate_resume_recovery_checkpoints_test ;;
@@ -1188,6 +1192,7 @@ case ${1:-all} in
       root-major-boundary-resume) run_root_major_boundary_resume_tests ;;
       replaced-published-root-candidate) run_replaced_published_root_candidate_test ;;
       root-resume-recovery-checkpoints) run_root_resume_recovery_checkpoints_test ;;
+      root-rollback-recovery-checkpoints) run_root_rollback_recovery_checkpoints_test ;;
     esac
     exit 0
     ;;
