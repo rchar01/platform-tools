@@ -8,9 +8,20 @@ import pytest
 
 from ..harness import ProcessResult
 from .conftest import RolloverTools, RolloverWorkspace
+from .test_ca_rollover_prepare_recovery import _read_strict_record
 
 
 pytestmark = pytest.mark.pki
+
+MIGRATION_FAILURE_BOUNDARIES = (
+    ("after-reservations", "reserved"),
+    ("after-root-rename", "root-renamed"),
+    ("after-intermediate-rename", "intermediate-renamed"),
+    ("after-configs", "configs-published"),
+    ("after-issuers", "issuers-published"),
+    ("after-quarantine", "quarantined"),
+    ("after-active", "active-published"),
+)
 
 
 def _is_sensitive(path: Path, root: Path) -> bool:
@@ -342,6 +353,176 @@ def test_migration_rejects_replaced_transaction_evidence(
     assert result.stderr == "[ERROR] Recovery service set changed\n"
     assert services.read_text() == "app\nforeign\n"
     assert _workspace_snapshot(workspace.root) == before
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
+@pytest.mark.parametrize(
+    ("boundary", "phase"),
+    MIGRATION_FAILURE_BOUNDARIES,
+    ids=[boundary for boundary, _ in MIGRATION_FAILURE_BOUNDARIES],
+)
+def test_migration_failure_boundary_rollback(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    boundary: str,
+    phase: str,
+) -> None:
+    workspace = legacy_rollover_case_factory(
+        f"migration-failure-boundary-rollback-{boundary}"
+    )
+    receipt = backup_receipt_factory(workspace)
+    legacy_root = workspace.pki / "root-ca"
+    legacy_intermediate = workspace.pki / "intermediate-ca"
+    root_source_identity = (
+        f"{legacy_root.stat().st_dev}:{legacy_root.stat().st_ino}"
+    )
+    intermediate_source_identity = (
+        f"{legacy_intermediate.stat().st_dev}:"
+        f"{legacy_intermediate.stat().st_ino}"
+    )
+    root_key = legacy_root / "private/root-ca.key"
+    intermediate_key = legacy_intermediate / "private/intermediate-ca.key"
+    root_key_identity = (root_key.stat().st_dev, root_key.stat().st_ino)
+    intermediate_key_identity = (
+        intermediate_key.stat().st_dev,
+        intermediate_key.stat().st_ino,
+    )
+    backup_before = _workspace_snapshot(workspace.root / "backups")
+    root_fingerprint = _certificate_fingerprint(
+        legacy_root / "certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        legacy_intermediate / "certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    failure_environment = dict(isolated_environment)
+    failure_environment["PLATFORM_PKI_MIGRATE_FAIL_AT"] = boundary
+
+    migration = process_runner(
+        _migration_command(
+            rollover_tools,
+            workspace,
+            receipt,
+            root_fingerprint,
+            intermediate_fingerprint,
+        ),
+        env=failure_environment,
+        timeout=120,
+    )
+    assert migration.status == 1
+    assert migration.stdout == ""
+    assert migration.stderr == (
+        f"[ERROR] Injected migration interruption at {boundary}\n"
+    )
+
+    journal_path = workspace.pki / "state/rollover/journal"
+    journal = _read_strict_record(journal_path)
+    transaction = journal["transaction"]
+    assert transaction.startswith("migrate-")
+    assert journal["schema"] == "2"
+    assert journal["operation"] == "legacy-migrate"
+    assert journal["phase"] == phase
+    assert journal["committed"] == "false"
+
+    status = process_runner(
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert status.status == 2
+    assert status.stderr == ""
+    assert status.stdout == (
+        "status=recovery-required\n"
+        "recovery_required=true\n"
+        f"transaction={transaction}\n"
+        "operation=legacy-migrate\n"
+        f"phase={phase}\n"
+        "terminal_outcome=none\n"
+        "required_action=rollback\n"
+        "action=run platform-pki-ca-rollover recover --transaction "
+        f"{transaction} --action rollback\n"
+    )
+
+    recovery = process_runner(
+        [
+            rollover_tools.rollover,
+            "recover",
+            "--namespace",
+            workspace.namespace,
+            "--transaction",
+            transaction,
+            "--action",
+            "rollback",
+            "--yes",
+        ],
+        env=isolated_environment,
+        timeout=120,
+    )
+    assert recovery.status == 0
+    assert recovery.stdout == (
+        f"[OK] Rolled back migration transaction: {transaction}\n"
+    )
+    assert recovery.stderr == ""
+
+    final_journal = _read_strict_record(journal_path)
+    assert final_journal["operation"] == "legacy-migrate"
+    assert final_journal["transaction"] == transaction
+    assert final_journal["phase"] == "rolled-back"
+    assert final_journal["committed"] == "true"
+    assert final_journal["recovery_action"] == "rollback"
+    assert final_journal["recovery_step"] == "rollback-provenance-done"
+    assert legacy_root.is_dir() and not legacy_root.is_symlink()
+    assert legacy_intermediate.is_dir() and not legacy_intermediate.is_symlink()
+    assert not (workspace.pki / "authorities/roots/g1").exists()
+    assert not (workspace.pki / "authorities/intermediates/g1-i1").exists()
+    assert not (workspace.pki / "state/active-issuer").exists()
+    assert not (workspace.pki / "services/app/issuer").exists()
+    assert not (workspace.pki / "state/rollover/recovery-required").exists()
+
+    root_reservation = _read_strict_record(
+        workspace.pki / "state/generation-reservations/g1"
+    )
+    assert root_reservation == {
+        "generation": "g1",
+        "kind": "root",
+        "status": "abandoned",
+        "fingerprint_sha256": root_fingerprint,
+        "source_identity": root_source_identity,
+    }
+    intermediate_reservation = _read_strict_record(
+        workspace.pki / "state/generation-reservations/g1-i1"
+    )
+    assert intermediate_reservation == {
+        "generation": "g1-i1",
+        "kind": "intermediate",
+        "status": "abandoned",
+        "fingerprint_sha256": intermediate_fingerprint,
+        "source_identity": intermediate_source_identity,
+    }
+    assert not tuple((workspace.pki / "state/rollover").glob("backup-session-*"))
+    assert _workspace_snapshot(workspace.root / "backups") == backup_before
+    provenance_stage = workspace.pki / "legacy" / f".{transaction}.publish"
+    provenance = workspace.pki / "legacy" / transaction
+    assert not provenance_stage.exists() and not provenance_stage.is_symlink()
+    assert not provenance.exists() and not provenance.is_symlink()
+    transaction_directory = workspace.pki / "state/rollover" / transaction
+    assert transaction_directory.is_dir() and not transaction_directory.is_symlink()
+    assert (root_key.stat().st_dev, root_key.stat().st_ino) == root_key_identity
+    assert (
+        intermediate_key.stat().st_dev,
+        intermediate_key.stat().st_ino,
+    ) == intermediate_key_identity
     assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
 
 

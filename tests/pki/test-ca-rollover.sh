@@ -527,6 +527,40 @@ run_migration_replaced_transaction_evidence_test() {
   grep -Fq 'service set changed' "$TMP_DIR/stderr" || fail 'foreign recovery evidence was not rejected'
 }
 
+MIGRATION_FAILURE_BOUNDARIES=(after-reservations after-root-rename after-intermediate-rename after-configs after-issuers after-quarantine after-active)
+
+run_migration_failure_boundary_spec() {
+  local boundary=$1 action=$2 case_dir pki transaction status
+  test_progress start "migrate-recover:$boundary:$action"
+  case_dir="$TMP_DIR/${boundary}-${action}"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"
+  convert_to_legacy "$case_dir"; backup_legacy "$case_dir"
+  if PLATFORM_PKI_MIGRATE_FAIL_AT=$boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "fault injection unexpectedly succeeded at $boundary"; fi
+  transaction=$(sed -n 's/^transaction=//p' "$pki/state/rollover/journal")
+  [[ -n $transaction ]] || fail "missing transaction after $boundary"
+  set +e; "$ROLLOVER" status --namespace "$case_dir/ns" >"$TMP_DIR/recovery-status"; status=$?; set -e
+  [[ $status -eq 2 ]] || fail "status did not require recovery after $boundary"
+  "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
+  if [[ $action == rollback ]]; then
+    [[ -d $pki/root-ca && -d $pki/intermediate-ca && ! -e $pki/state/active-issuer && ! -e $pki/services/app/issuer ]] || fail "rollback did not restore legacy state after $boundary"
+  else
+    [[ -d $pki/authorities/roots/g1 && -d $pki/authorities/intermediates/g1-i1 && -f $pki/state/active-issuer && -f $pki/services/app/issuer ]] || fail "resume did not complete generation state after $boundary"
+  fi
+  grep -Fx 'committed=true' "$pki/state/rollover/journal" >/dev/null || fail "recovery did not commit after $boundary/$action"
+  test_progress pass "migrate-recover:$boundary:$action"
+}
+
+run_migration_failure_boundary_rollback_tests() {
+  local boundary
+  for boundary in "${MIGRATION_FAILURE_BOUNDARIES[@]}"; do run_migration_failure_boundary_spec "$boundary" rollback; done
+}
+
+run_all_migration_failure_boundary_tests() {
+  local boundary action
+  for boundary in "${MIGRATION_FAILURE_BOUNDARIES[@]}"; do
+    for action in rollback resume; do run_migration_failure_boundary_spec "$boundary" "$action"; done
+  done
+}
+
 run_migration_success_preserves_key_inodes_test() {
   local pki root_key_inode int_key_inode
   primary="$TMP_DIR/primary"
@@ -1101,6 +1135,10 @@ case ${1:-all} in
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_replaced_transaction_evidence_test; exit 0
     ;;
+  migration-failure-boundary-rollback)
+    seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
+    run_migration_failure_boundary_rollback_tests; exit 0
+    ;;
   migration-success-preserves-key-inodes)
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_success_preserves_key_inodes_test
@@ -1276,26 +1314,7 @@ run_migration_extra_service_directory_test
 
 run_migration_replaced_transaction_evidence_test
 
-for boundary in after-reservations after-root-rename after-intermediate-rename after-configs after-issuers after-quarantine after-active; do
-  for action in rollback resume; do
-    test_progress start "migrate-recover:$boundary:$action"
-    case_dir="$TMP_DIR/${boundary}-${action}"; cp -a "$seed" "$case_dir"; pki="$case_dir/ns/pki"
-    convert_to_legacy "$case_dir"; backup_legacy "$case_dir"
-    if PLATFORM_PKI_MIGRATE_FAIL_AT=$boundary migrate "$case_dir" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail "fault injection unexpectedly succeeded at $boundary"; fi
-    transaction=$(sed -n 's/^transaction=//p' "$pki/state/rollover/journal")
-    [[ -n $transaction ]] || fail "missing transaction after $boundary"
-    set +e; "$ROLLOVER" status --namespace "$case_dir/ns" >"$TMP_DIR/recovery-status"; status=$?; set -e
-    [[ $status -eq 2 ]] || fail "status did not require recovery after $boundary"
-    "$ROLLOVER" recover --namespace "$case_dir/ns" --transaction "$transaction" --action "$action" --yes >/dev/null
-    if [[ $action == rollback ]]; then
-      [[ -d $pki/root-ca && -d $pki/intermediate-ca && ! -e $pki/state/active-issuer && ! -e $pki/services/app/issuer ]] || fail "rollback did not restore legacy state after $boundary"
-    else
-      [[ -d $pki/authorities/roots/g1 && -d $pki/authorities/intermediates/g1-i1 && -f $pki/state/active-issuer && -f $pki/services/app/issuer ]] || fail "resume did not complete generation state after $boundary"
-    fi
-    grep -Fx 'committed=true' "$pki/state/rollover/journal" >/dev/null || fail "recovery did not commit after $boundary/$action"
-    test_progress pass "migrate-recover:$boundary:$action"
-  done
-done
+run_all_migration_failure_boundary_tests
 
 unresolved_case="$TMP_DIR/unresolved-failure"; cp -a "$seed" "$unresolved_case"; unresolved_pki="$unresolved_case/ns/pki"; convert_to_legacy "$unresolved_case"; backup_legacy "$unresolved_case"
 if PLATFORM_PKI_MIGRATE_FAIL_AT=after-reservations migrate "$unresolved_case" >"$TMP_DIR/stdout" 2>"$TMP_DIR/stderr"; then fail 'injected migration failure unexpectedly succeeded'; fi
