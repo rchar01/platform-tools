@@ -554,6 +554,11 @@ run_migration_failure_boundary_rollback_tests() {
   for boundary in "${MIGRATION_FAILURE_BOUNDARIES[@]}"; do run_migration_failure_boundary_spec "$boundary" rollback; done
 }
 
+run_migration_failure_boundary_resume_tests() {
+  local boundary
+  for boundary in "${MIGRATION_FAILURE_BOUNDARIES[@]}"; do run_migration_failure_boundary_spec "$boundary" resume; done
+}
+
 run_all_migration_failure_boundary_tests() {
   local boundary action
   for boundary in "${MIGRATION_FAILURE_BOUNDARIES[@]}"; do
@@ -1138,6 +1143,10 @@ case ${1:-all} in
   migration-failure-boundary-rollback)
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
     run_migration_failure_boundary_rollback_tests; exit 0
+    ;;
+  migration-failure-boundary-resume)
+    seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
+    run_migration_failure_boundary_resume_tests; exit 0
     ;;
   migration-success-preserves-key-inodes)
     seed="$TMP_DIR/seed"; mkdir -m 700 "$seed"; create_generation_fixture "$seed"
