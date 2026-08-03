@@ -137,6 +137,15 @@ their authoritative shell cases during migration:
 make test-python-pki-rollover
 ```
 
+Run the same pytest scenarios with four isolated workers as an opt-in performance
+check; set `PKI_PYTEST_WORKERS` from 1 through 4 to benchmark another bounded
+worker count:
+
+```bash
+make test-python-pki-rollover-parallel
+make test-python-pki-rollover-parallel PKI_PYTEST_WORKERS=4
+```
+
 Run the authoritative rollover parser shell group without creating PKI seed
 state:
 

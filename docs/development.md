@@ -116,10 +116,84 @@ make test-python-pki-rollover
 python3 -m pytest -m pki tests/python/pki
 ```
 
-Migration proceeds one scenario at a time. The equivalent case in
-`tests/pki/test-ca-rollover.sh` remains authoritative and enabled until the
-pytest replacement has demonstrated observable parity and passed independent
-review.
+The serial target remains the Python parity reference. The development container
+also pins `pytest-xdist` and provides an opt-in four-worker run for faster local
+feedback:
+
+```bash
+make test-python-pki-rollover-parallel
+make test-python-pki-rollover-parallel PKI_PYTEST_WORKERS=4
+```
+
+Each worker uses isolated pytest temporary storage and its own PKI seed. The
+worker count is restricted to 1 through 4 because rollover tests perform real
+filesystem durability operations. Three four-worker runs completed all 221
+tests without failures or skips in 560.24, 548.54, and 548.57 seconds, compared
+with the 2501.68-second serial baseline. The final run preserved the noexec-safe
+executable-wrapper layout and left no wrapper directories. Keep the serial suite
+available for final authority and compatibility checks.
+
+All 79 inventoried shell scenario groups have pytest parity mappings. The shell
+aggregate remains authoritative until the final dual-run gates, authority-switch
+review, and separate shell-retirement change are complete.
+
+The aggregate-composition review found that parser ordering and ordering across
+independent workspaces are shell harness details, not product invariants. Python
+directly preserves producer-to-consumer file identities, successful preparation
+followed by overlap rejection, cumulative crashes on one recovery transaction,
+both migration recovery actions, and successful migration followed by an
+idempotent rerun. The root publication test also derives a parseable bad-signature
+certificate from the actual prepared G2 root and requires both OpenSSL and the
+application validator to reject it. These same-test data and state dependencies,
+rather than global test order, must remain covered after shell retirement.
+
+### Completing the PKI Rollover Test Migration
+
+Complete these gates before declaring Python authoritative or deleting
+`tests/pki/test-ca-rollover.sh`:
+
+1. Reconcile every migration-ledger row with its implementation commit, focused
+   parity evidence, and independent review; no final row may retain a `pending`
+   commit or `dual-run-retained` disposition after retirement.
+2. Keep the aggregate-composition review current when either suite changes.
+   Preserve the direct prepared-root corruption check, same-transaction recovery
+   matrices, both rollback and resume outcomes, and migration idempotence without
+   depending on global pytest execution order.
+3. From the final dual-run revision, run the serial Python suite and the retained
+   no-argument shell aggregate under bounded process-group supervision, then run
+   `make test` and `make container-check` with both implementations enabled.
+4. Run the final container verification on `amd64` and record architecture and
+   tool versions with the observed results. The migration acceptance scope is
+   `amd64` only by operator decision; preserve arm64 image support but describe
+   it as unverified rather than blocking this migration.
+5. Obtain an independent correctness and security review covering scenario
+   parity, metadata-only secret handling, crash cleanup, aggregate composition,
+   and readiness to retire the shell authority.
+6. Make the authority switch as a separate change while retaining the shell
+   aggregate under an explicit compatibility target. Route
+   `test-pki-ca-rollover` to the Python suite exactly once from `make test`, route
+   `test-pki-ca-rollover-parser` to the Python parser module, and avoid aliases
+   that execute the full suite twice.
+7. Update `README.md`, this guide, `AGENTS.md`, and `pytest.ini` to identify
+   Python as authoritative while documenting the temporary shell compatibility
+   target.
+8. From the authority-switch revision, run the focused parser target, the full
+   Python rollover target, the retained shell compatibility target, `make test`,
+   and `make container-check`; then obtain an independent correctness and
+   security review of the authority switch.
+9. Retire the shell implementation only in a subsequent separate change. Remove
+   or replace the shell progress contracts in `test_ca_rollover_fixtures.py`,
+   and delete the shell aggregate only if the authority-switch review found no
+   residual shell-specific invariant; otherwise retain the smallest focused
+   shell contract.
+10. From the shell-retirement revision, rerun the focused parser target, the
+    full rollover target, `make test`, and `make container-check`, then obtain a
+    final independent review proving that no stale shell path or scenario was
+    lost.
+11. Update the migration plan and ledger with the authority-switch and retirement
+    evidence. Identify Python as authoritative, preserve historical shell
+    locators, replace `dual-run-retained` with a retired disposition, and close
+    only the migration-specific gates that were actually verified.
 
 Run the focused authoritative parser group without generating PKI seed state:
 

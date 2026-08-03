@@ -530,6 +530,7 @@ def test_root_prepare_publication(
     intermediate = workspace.pki / "authorities/intermediates/g2-i1"
     assert root.is_dir() and not root.is_symlink()
     assert intermediate.is_dir() and not intermediate.is_symlink()
+    candidate_root = root / "certs/root-ca.crt"
     transaction, state = _transaction(workspace)
     _assert_manifest_complete_and_redacted(
         root, state / "candidate-root-tree.manifest"
@@ -547,7 +548,7 @@ def test_root_prepare_publication(
             "openssl",
             "verify",
             "-CAfile",
-            root / "certs/root-ca.crt",
+            candidate_root,
             intermediate / "certs/intermediate-ca.crt",
         ],
         isolated_environment,
@@ -557,6 +558,89 @@ def test_root_prepare_publication(
     assert verify.status == 0
     assert verify.stdout == f"{intermediate / 'certs/intermediate-ca.crt'}: OK\n"
     assert verify.stderr == ""
+
+    valid_signature = _run(
+        [
+            "openssl",
+            "verify",
+            "-check_ss_sig",
+            "-CAfile",
+            candidate_root,
+            candidate_root,
+        ],
+        isolated_environment,
+        process_runner,
+        timeout=10,
+    )
+    assert valid_signature.status == 0
+    assert valid_signature.stdout == f"{candidate_root}: OK\n"
+    assert valid_signature.stderr == ""
+
+    corrupted_root = workspace.root / "bad-g2-self-signature.crt"
+    corruption = _run(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            candidate_root,
+            "-badsig",
+            "-out",
+            corrupted_root,
+        ],
+        isolated_environment,
+        process_runner,
+        timeout=10,
+    )
+    assert corruption.status == 0
+    assert corruption.stdout == corruption.stderr == ""
+    assert corrupted_root.is_file() and not corrupted_root.is_symlink()
+
+    parseable = _run(
+        ["openssl", "x509", "-in", corrupted_root, "-noout"],
+        isolated_environment,
+        process_runner,
+        timeout=10,
+    )
+    assert parseable.status == 0
+    assert parseable.stdout == parseable.stderr == ""
+
+    invalid_signature = _run(
+        [
+            "openssl",
+            "verify",
+            "-check_ss_sig",
+            "-CAfile",
+            corrupted_root,
+            corrupted_root,
+        ],
+        isolated_environment,
+        process_runner,
+        timeout=10,
+    )
+    assert invalid_signature.status != 0
+    assert "certificate signature failure" in invalid_signature.stderr
+
+    common_library = (
+        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+    )
+    application_validation = _run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; pki_require_ca_self_signature "$2" "Candidate root"',
+            "_",
+            common_library,
+            corrupted_root,
+        ],
+        isolated_environment,
+        process_runner,
+        timeout=10,
+    )
+    assert application_validation.status == 1
+    assert application_validation.stdout == ""
+    assert application_validation.stderr.endswith(
+        "[ERROR] Candidate root self-signature is invalid\n"
+    )
 
     status = _run(
         [
@@ -584,7 +668,7 @@ def test_root_prepare_publication(
         active_intermediate, isolated_environment, process_runner
     )
     candidate_root_observables = _certificate_observables(
-        root / "certs/root-ca.crt", isolated_environment, process_runner
+        candidate_root, isolated_environment, process_runner
     )
     candidate_intermediate_observables = _certificate_observables(
         intermediate / "certs/intermediate-ca.crt",
@@ -592,7 +676,7 @@ def test_root_prepare_publication(
         process_runner,
     )
     trust_bundle_sha256 = sha256(
-        active_root.read_bytes() + (root / "certs/root-ca.crt").read_bytes()
+        active_root.read_bytes() + candidate_root.read_bytes()
     ).hexdigest()
     assert json.loads(status.stdout) == {
         "schema": 1,

@@ -112,6 +112,7 @@ RUN apt-get update \
       procps=2:4.0.4-9 \
       python3=3.13.5-1 \
       python3-pytest=8.3.5-2 \
+      python3-pytest-xdist=3.6.1-1 \
       python3-yaml=6.0.2-1+b2 \
       sed=4.9-2+deb13u1 \
       tar=1.35+dfsg-3.1 \
@@ -125,7 +126,8 @@ COPY --from=asset-builder /shfmt /usr/local/bin/shfmt
 RUN test "$(bashly --version)" = '1.4.0' \
   && test "$(shellcheck --version | sed -n 's/^version: //p')" = "$SHELLCHECK_VERSION" \
   && test "$(shfmt --version)" = "v$SHFMT_VERSION" \
-  && test "$(python3 -m pytest --version)" = 'pytest 8.3.5'
+  && test "$(python3 -m pytest --version)" = 'pytest 8.3.5' \
+  && test "$(python3 -c 'from importlib.metadata import version; print(version("pytest-xdist"))')" = '3.6.1'
 
 WORKDIR /workspace
 
