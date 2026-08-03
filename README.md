@@ -367,7 +367,9 @@ outputs, records full nanosecond identities for staged CA database sources, and
 uses immutable write-ahead transaction manifests. It verifies strict critical
 CA certificate profiles and retains recovery-required state until
 crash-resumable terminal cleanup completes. Terminal receipts bind the exact
-journal and marker identities before either control file is removed.
+journal and marker identities before either control file is removed. Superseded
+and final transaction-tree manifests are identity-unlinked in journaled order;
+missing prior unlinks resume safely, while replacement objects fail closed.
 Recovery-required JSON uses schema 2 and reports the validated terminal outcome
 and exact `resume` or `rollback` action; every retained preparation journal
 blocks normal PKI commands even after its mutation outcome is committed.

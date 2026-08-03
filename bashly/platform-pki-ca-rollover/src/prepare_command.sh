@@ -97,8 +97,13 @@ write_prepare_journal_raw() {
 "; done < <(printf '%s\n' "${!PREP[@]}" | LC_ALL=C sort)
   pki_write_journal "$JOURNAL" "$content"
 }
+prepare_remove_transaction_manifest() {
+  local path=$1 identity=$2
+  [[ $path != none ]] || pki_die 'Preparation transaction manifest is missing from the journal'
+  pki_remove_identity_file "$path" "$identity" transaction-tree-manifest || pki_die 'Preparation transaction manifest changed before cleanup'
+}
 refresh_transaction_manifest() {
-  local sequence staging final value
+  local sequence staging final value old_manifest old_identity old_sequence
   [[ ${PREP[transaction_identity]:-none} != none && -d ${TXN_DIR:-} ]] || return 0
   sequence=$((10#${PREP[transaction_tree_manifest_sequence]} + 1))
   staging="$(dirname -- "$TXN_DIR")/.$TXN_ID.transaction-tree.$sequence"
@@ -112,7 +117,15 @@ refresh_transaction_manifest() {
   write_prepare_journal_raw "${PREP[phase]}" "${PREP[committed]}"
   prepare_fault transaction-manifest-staged
   [[ $(pki_file_identity "$final") == "${PREP[transaction_tree_manifest_pending_identity]}" ]] || pki_die 'Preparation transaction manifest identity changed before publication'
+  value=$(sha256sum "$final"); [[ ${value%% *} == "${PREP[transaction_tree_manifest_pending_sha256]}" ]] || pki_die 'Preparation transaction manifest digest changed before publication'
   prepare_fault transaction-manifest-published
+  old_manifest=${PREP[transaction_tree_manifest]}; old_identity=${PREP[transaction_tree_manifest_identity]}
+  if [[ $old_manifest != none ]]; then
+    old_sequence=${old_manifest##*.}
+    [[ $old_sequence =~ ^[1-9][0-9]*$ && $old_manifest == "$(dirname -- "$TXN_DIR")/.$TXN_ID.transaction-tree.$old_sequence" ]] || pki_die 'Preparation transaction manifest path is outside the transaction contract'
+    prepare_remove_transaction_manifest "$old_manifest" "$old_identity"
+    prepare_fault transaction-manifest-superseded
+  fi
   PREP[transaction_tree_manifest]=$final
   PREP[transaction_tree_manifest_identity]=${PREP[transaction_tree_manifest_pending_identity]}
   PREP[transaction_tree_manifest_sha256]=${PREP[transaction_tree_manifest_pending_sha256]}
@@ -157,6 +170,7 @@ terminal_outcome=resumed
 "
   prepare_fault terminal-transaction-pending
   pki_remove_manifested_tree "$TXN_DIR" "${PREP[transaction_identity]}" "$(dirname -- "$TXN_DIR")" "${PREP[transaction_tree_manifest]}" "${PREP[transaction_tree_manifest_identity]}" "${PREP[transaction_tree_manifest_sha256]}" || pki_die 'Cannot remove committed preparation staging'
+  prepare_remove_transaction_manifest "${PREP[transaction_tree_manifest]}" "${PREP[transaction_tree_manifest_identity]}"
   PREP[recovery_step]=terminal-transaction-done; write_prepare_journal terminal-cleanup true; prepare_fault terminal-transaction-done
   PREP[recovery_step]=terminal-journal-pending; write_prepare_journal terminal-cleanup true; prepare_fault terminal-journal-pending
   journal_identity=$(pki_file_identity "$JOURNAL"); marker_identity=$(pki_file_identity "$MARKER"); receipt=$(pki_terminal_receipt "$TXN_ID")

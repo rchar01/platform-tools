@@ -103,6 +103,11 @@ def _crash_recovery(
     marker_path = workspace.pki / "state/rollover/recovery-required"
     if checkpoint == "terminal-journal-done":
         assert not journal_path.exists() and not journal_path.is_symlink()
+        assert not tuple(
+            (workspace.pki / "state/rollover").glob(
+                f".{transaction}.transaction-tree.*"
+            )
+        )
         marker = _read_strict_record(marker_path)
         assert marker["transaction"] == transaction
         assert marker["operation"] == "rollover-prepare"
@@ -113,10 +118,22 @@ def _crash_recovery(
         journal_path,
         expected_committed="true" if terminal else "false",
     )
+    full_journal = _read_strict_record(journal_path)
     assert journal["transaction"] == transaction
     assert journal["recovery_step"] == checkpoint
     if terminal:
         assert journal["phase"] == "terminal-cleanup"
+        manifests = tuple(
+            (workspace.pki / "state/rollover").glob(
+                f".{transaction}.transaction-tree.*"
+            )
+        )
+        if checkpoint == "terminal-transaction-pending":
+            assert manifests == (
+                Path(full_journal["transaction_tree_manifest"]),
+            )
+        else:
+            assert not manifests
         marker = _read_strict_record(marker_path)
         assert marker["transaction"] == transaction
         assert marker["operation"] == "rollover-prepare"
@@ -133,6 +150,11 @@ def _assert_resumed(
     assert not (workspace.pki / "state/rollover/journal").exists()
     assert not (workspace.pki / "state/rollover/recovery-required").exists()
     assert not (workspace.pki / "state/rollover" / transaction).exists()
+    assert not tuple(
+        (workspace.pki / "state/rollover").glob(
+            f".{transaction}.transaction-tree.*"
+        )
+    )
     root = workspace.pki / "authorities/roots" / candidate_root
     intermediate = workspace.pki / "authorities/intermediates" / candidate_intermediate
     assert root.is_dir() and not root.is_symlink()
@@ -345,6 +367,47 @@ def test_unexpected_candidate_tree_entry(
     assert _read_strict_public_file(unexpected) == unexpected_before
     _assert_failed_control_state(workspace, journal, expected_marker=False)
     assert (active.read_text(), _metadata(active)) == active_before
+
+
+def test_transaction_manifest_replacement_blocks_terminal_cleanup(
+    rollover_tools: RolloverTools,
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = rollover_case_factory("transaction-manifest-replacement")
+    receipt = backup_receipt_factory(workspace)
+    journal, record, _ = _crash_after_staged(
+        rollover_tools,
+        workspace,
+        receipt,
+        isolated_environment,
+        process_runner,
+    )
+    manifest = Path(record["transaction_tree_manifest"])
+    original = workspace.root / "original-transaction-manifest"
+    manifest.rename(original)
+    manifest.write_text("hostile transaction manifest\n")
+    manifest.chmod(0o600)
+    hostile_before = _read_strict_public_file(manifest)
+
+    result = _recover(
+        rollover_tools,
+        workspace,
+        journal["transaction"],
+        "resume",
+        isolated_environment,
+        process_runner,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert "PKI cleanup tree manifest identity changed" in result.stderr
+    assert _read_strict_public_file(manifest) == hostile_before
+    assert original.is_file() and not original.is_symlink()
+    assert (workspace.pki / "state/rollover/journal").is_file()
+    assert (workspace.pki / "state/rollover/recovery-required").is_file()
 
 
 def test_interrupted_resume_terminal_status(

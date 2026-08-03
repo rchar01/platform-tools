@@ -394,9 +394,25 @@ def _crash_prepare(
         timeout=120,
     )
     assert result.status == 137, result
-    journal = _read_public_journal(workspace.pki / "state/rollover/journal")
+    journal_path = workspace.pki / "state/rollover/journal"
+    journal = _read_public_journal(journal_path)
+    full_journal = _read_strict_record(journal_path)
     assert journal["type"] == rollover_type
     assert journal["recovery_step"] == (expected_recovery_step or checkpoint)
+    expected_manifests = {
+        Path(full_journal[field])
+        for field in (
+            "transaction_tree_manifest",
+            "transaction_tree_manifest_pending",
+        )
+        if full_journal[field] != "none"
+    }
+    actual_manifests = set(
+        (workspace.pki / "state/rollover").glob(
+            f".{journal['transaction']}.transaction-tree.*"
+        )
+    )
+    assert actual_manifests == expected_manifests
     return journal
 
 
@@ -518,6 +534,11 @@ def _assert_rolled_back(
     ).exists()
     if candidate_root != "g1":
         assert not (workspace.pki / "authorities/roots" / candidate_root).exists()
+    assert not tuple(
+        (workspace.pki / "state/rollover").glob(
+            f".{transaction}.transaction-tree.*"
+        )
+    )
 
 
 def test_intermediate_early_checkpoint_rollback(

@@ -646,8 +646,11 @@ will not delete.
 Terminal cleanup records an explicit resumed or rolled-back outcome and keeps a
 recovery marker until transaction staging and the journal have both been
 removed. Immutable write-ahead transaction manifests keep pending publication
-recoverable, and a retained terminal receipt binds the exact journal and marker
-identities used for their final checked unlink.
+recoverable. Each replacement identity-unlinks only its journaled predecessor,
+and terminal cleanup removes the final external manifest only after transaction
+staging. Missing prior unlinks resume safely, identity mismatches fail closed,
+and a retained terminal receipt binds the exact journal and marker identities
+used for their final checked unlink.
 
 ## List Expiry
 

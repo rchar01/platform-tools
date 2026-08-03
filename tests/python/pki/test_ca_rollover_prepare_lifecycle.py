@@ -242,6 +242,13 @@ def test_intermediate_prepare_publication(
     )
     receipt = backup_receipt_factory(workspace)
     active_before = (workspace.pki / "state/active-issuer").read_text()
+    historical_manifest = (
+        workspace.pki
+        / "state/rollover/.prepare-intermediate-20000101-000000-1.transaction-tree.1"
+    )
+    historical_manifest.write_text("reviewed historical residue\n")
+    historical_manifest.chmod(0o600)
+    historical_metadata = historical_manifest.stat()
 
     result = _run(
         [
@@ -285,6 +292,28 @@ def test_intermediate_prepare_publication(
     candidate = workspace.pki / "authorities/intermediates/g1-i2"
     assert candidate.is_dir() and not candidate.is_symlink()
     transaction, state = _transaction(workspace)
+    assert not tuple(
+        (workspace.pki / "state/rollover").glob(
+            f".{transaction}.transaction-tree.*"
+        )
+    )
+    assert historical_manifest.read_text() == "reviewed historical residue\n"
+    current_historical_metadata = historical_manifest.stat()
+    assert (
+        current_historical_metadata.st_dev,
+        current_historical_metadata.st_ino,
+        stat.S_IMODE(current_historical_metadata.st_mode),
+        current_historical_metadata.st_nlink,
+        current_historical_metadata.st_size,
+        current_historical_metadata.st_mtime_ns,
+    ) == (
+        historical_metadata.st_dev,
+        historical_metadata.st_ino,
+        stat.S_IMODE(historical_metadata.st_mode),
+        historical_metadata.st_nlink,
+        historical_metadata.st_size,
+        historical_metadata.st_mtime_ns,
+    )
     _assert_manifest_complete_and_redacted(
         candidate,
         state / "candidate-intermediate-tree.manifest",
@@ -532,6 +561,11 @@ def test_root_prepare_publication(
     assert intermediate.is_dir() and not intermediate.is_symlink()
     candidate_root = root / "certs/root-ca.crt"
     transaction, state = _transaction(workspace)
+    assert not tuple(
+        (workspace.pki / "state/rollover").glob(
+            f".{transaction}.transaction-tree.*"
+        )
+    )
     _assert_manifest_complete_and_redacted(
         root, state / "candidate-root-tree.manifest"
     )

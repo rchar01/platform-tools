@@ -112,6 +112,11 @@ def _assert_rolled_back(
     assert not (workspace.pki / "authorities/roots/g2").exists()
     assert not (workspace.pki / "authorities/intermediates/g1-i2").exists()
     assert not (workspace.pki / "authorities/intermediates/g2-i1").exists()
+    assert not tuple(
+        (workspace.pki / "state/rollover").glob(
+            f".{transaction}.transaction-tree.*"
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -267,6 +272,10 @@ subcommand=${1:-}
             "transaction-manifest-published",
             id="transaction-manifest-published",
         ),
+        pytest.param(
+            "transaction-manifest-superseded",
+            id="transaction-manifest-superseded",
+        ),
     ),
 )
 def test_transaction_manifest_publication_crash_rolls_back(
@@ -318,3 +327,89 @@ def test_transaction_manifest_publication_crash_rolls_back(
     assert rollback.stderr == ""
     assert "Rolled back incomplete preparation transaction" in rollback.stdout
     _assert_rolled_back(workspace, transaction, active_issuer)
+
+
+def test_superseded_manifest_replacement_blocks_pending_promotion(
+    rollover_tools: RolloverTools,
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = rollover_case_factory("superseded-manifest-replacement")
+    receipt = backup_receipt_factory(workspace)
+    environment = dict(isolated_environment)
+    environment["PLATFORM_PKI_PREPARE_CRASH_AT"] = (
+        "transaction-manifest-superseded"
+    )
+    crashed = process_runner(
+        _prepare_command(rollover_tools, workspace, receipt, "intermediate"),
+        env=environment,
+        timeout=120,
+    )
+
+    assert crashed.status == 137
+    journal = workspace.pki / "state/rollover/journal"
+    record = _read_record(journal)
+    current = Path(record["transaction_tree_manifest"])
+    pending = Path(record["transaction_tree_manifest_pending"])
+    assert not current.exists() and not current.is_symlink()
+    assert pending.is_file() and not pending.is_symlink()
+    pending_metadata = pending.stat()
+    pending_content = pending.read_bytes()
+    current.write_text("hostile superseded manifest\n")
+    current.chmod(0o600)
+    hostile_metadata = current.stat()
+
+    rollback = process_runner(
+        _recovery_command(
+            rollover_tools,
+            workspace,
+            record["transaction"],
+            "rollback",
+        ),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert rollback.status == 1
+    assert rollback.stdout == ""
+    assert (
+        "Preparation transaction manifest changed before cleanup"
+        in rollback.stderr
+    )
+    assert current.read_text() == "hostile superseded manifest\n"
+    current_metadata = current.stat()
+    assert (
+        current_metadata.st_dev,
+        current_metadata.st_ino,
+        stat.S_IMODE(current_metadata.st_mode),
+        current_metadata.st_nlink,
+        current_metadata.st_size,
+        current_metadata.st_mtime_ns,
+    ) == (
+        hostile_metadata.st_dev,
+        hostile_metadata.st_ino,
+        stat.S_IMODE(hostile_metadata.st_mode),
+        hostile_metadata.st_nlink,
+        hostile_metadata.st_size,
+        hostile_metadata.st_mtime_ns,
+    )
+    assert pending.read_bytes() == pending_content
+    current_pending_metadata = pending.stat()
+    assert (
+        current_pending_metadata.st_dev,
+        current_pending_metadata.st_ino,
+        stat.S_IMODE(current_pending_metadata.st_mode),
+        current_pending_metadata.st_nlink,
+        current_pending_metadata.st_size,
+        current_pending_metadata.st_mtime_ns,
+    ) == (
+        pending_metadata.st_dev,
+        pending_metadata.st_ino,
+        stat.S_IMODE(pending_metadata.st_mode),
+        pending_metadata.st_nlink,
+        pending_metadata.st_size,
+        pending_metadata.st_mtime_ns,
+    )
+    assert journal.is_file()

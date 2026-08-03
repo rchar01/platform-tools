@@ -50,6 +50,13 @@ write_loaded_journal() {
   pki_write_journal "$JOURNAL" "$content"
 }
 checkpoint_recovery() { PKI_RECORD[recovery_step]=$1; write_loaded_journal recovering; recover_fault "$1"; }
+recover_remove_transaction_manifest() {
+  local path=$1 identity=$2 state
+  [[ $path != none ]] || return 0
+  state=$(pki_file_identity_or_absent_full "$path")
+  [[ $state != absent ]] || return 0
+  pki_remove_identity_file "$path" "$identity" transaction-tree-manifest || pki_die 'Preparation transaction manifest changed before cleanup'
+}
 finish_recovered_preparation() {
   local outcome=$1 expected_action journal_identity marker_identity receipt
   if [[ $outcome == resumed ]]; then expected_action=resume; else expected_action=rollback; fi
@@ -67,6 +74,7 @@ terminal_outcome=$outcome
     [[ ${PKI_RECORD[transaction_identity]} == none || -z $(find "$TXN_DIR" -mindepth 1 -print -quit) ]] || pki_die 'Incomplete preparation transaction has no exact cleanup manifest'
     rmdir -- "$TXN_DIR" || pki_die 'Cannot remove empty incomplete preparation transaction staging'; pki_fsync "$(dirname -- "$TXN_DIR")"
   elif [[ -e $TXN_DIR || -L $TXN_DIR ]]; then pki_die 'Preparation transaction staging has an unsafe replacement'; fi
+  recover_remove_transaction_manifest "${PKI_RECORD[transaction_tree_manifest]:-none}" "${PKI_RECORD[transaction_tree_manifest_identity]:-none}"
   PKI_RECORD[recovery_step]=terminal-transaction-done; write_loaded_journal terminal-cleanup true; recover_fault terminal-transaction-done
   PKI_RECORD[recovery_step]=terminal-journal-pending; write_loaded_journal terminal-cleanup true; recover_fault terminal-journal-pending
   journal_identity=$(pki_file_identity "$JOURNAL"); marker_identity=$(pki_file_identity "$MARKER"); receipt=$(pki_terminal_receipt "$TRANSACTION")
@@ -100,7 +108,9 @@ if [[ ${PKI_RECORD[operation]:-} == rollover-prepare ]]; then
     pending=${PKI_RECORD[transaction_tree_manifest_pending]}; pending_destination=${PKI_RECORD[transaction_tree_manifest_pending_destination]}
     pending_sequence=${pending_destination##*.}
     [[ $pending_sequence =~ ^[1-9][0-9]*$ && $pending == "$(dirname -- "$TXN_DIR")/.$TRANSACTION.transaction-tree.$pending_sequence" && $pending_destination == "$pending" ]] || pki_die 'Pending transaction manifest paths are outside the journal contract'
-    pki_require_file_identity "$pending" "${PKI_RECORD[transaction_tree_manifest_pending_identity]}" 'Pending transaction manifest'
+    [[ ${PKI_RECORD[transaction_tree_manifest_pending_sha256]} =~ ^[0-9a-f]{64}$ ]] || pki_die 'Pending transaction manifest digest is invalid'
+    verify_bound_file "$pending" "${PKI_RECORD[transaction_tree_manifest_pending_identity]}" "${PKI_RECORD[transaction_tree_manifest_pending_sha256]}" 'Pending transaction manifest'
+    recover_remove_transaction_manifest "${PKI_RECORD[transaction_tree_manifest]}" "${PKI_RECORD[transaction_tree_manifest_identity]}"
     PKI_RECORD[transaction_tree_manifest]=$pending_destination; PKI_RECORD[transaction_tree_manifest_identity]=${PKI_RECORD[transaction_tree_manifest_pending_identity]}; PKI_RECORD[transaction_tree_manifest_sha256]=${PKI_RECORD[transaction_tree_manifest_pending_sha256]}; PKI_RECORD[transaction_tree_manifest_sequence]=${pending_destination##*.}; PKI_RECORD[transaction_tree_manifest_pending]=none; PKI_RECORD[transaction_tree_manifest_pending_destination]=none; PKI_RECORD[transaction_tree_manifest_pending_identity]=none; PKI_RECORD[transaction_tree_manifest_pending_sha256]=none
     write_loaded_journal "${PKI_RECORD[phase]}" "${PKI_RECORD[committed]}"
   fi
