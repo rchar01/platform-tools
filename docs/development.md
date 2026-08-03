@@ -16,13 +16,13 @@ The repository is mounted at `/workspace`. The container uses a temporary home
 directory and does not mount host SSH keys, private platform configuration, PKI
 state, or the Podman socket.
 
-Run the maintained checks inside the shell:
+Run focused checks inside the shell while developing:
 
 ```bash
 make verify-generated
 make verify
-make test
 make shellcheck
+make test-command-contract
 ```
 
 Use the one-shot equivalent from the host when an interactive shell is not
@@ -31,6 +31,12 @@ needed:
 ```bash
 make container-check
 ```
+
+`make container-check` is the canonical final acceptance command. It builds the
+pinned image, runs static and generated checks, executes the Python-only
+`make test` aggregate once, runs the container-only archive smoke, and runs
+ShellCheck. Do not run a separate full `make test` immediately beforehand unless
+an intentional host-versus-container comparison is required.
 
 ## Generated Bash Tools
 
@@ -95,11 +101,15 @@ through the runtime `SHARE_DIR` as the isolated XDG data location.
 
 ## Python Test Infrastructure
 
-Generic pytest helpers under `tests/python/` run commands as exact argument
-vectors with `shell=False` and isolated process groups. Timeouts send `TERM`,
-wait for a bounded grace period, then send `KILL`; signal exits use shell-style
-statuses such as 137 for `SIGKILL`. The tree-copy fixture uses `cp -a` to
-preserve the filesystem metadata exercised by lifecycle tests.
+All maintained test orchestration lives under `tests/python/`. The shared
+helpers run exact argument vectors with `shell=False`, isolated process groups,
+tracked Linux-procfs descendants, pidfd-bound escaped-descendant signals, and
+bounded reader and process cleanup.
+Timeouts send `TERM`, wait for a bounded grace period, then send `KILL`; signal
+exits use shell-style statuses such as 137 for `SIGKILL`. Controlled stdin,
+no-echo PTYs, optional controlling terminals, explicit inherited descriptors,
+streamed input, paused processes, and concurrent consumers preserve protocol
+boundaries. The tree-copy fixture uses `cp -a` for lifecycle metadata.
 
 Run the harness contracts, one marker, or one exact node with:
 
@@ -114,30 +124,32 @@ Authoritative PKI rollover scenarios run with:
 ```bash
 make test-pki-ca-rollover
 make test-python-pki-rollover
-python3 -m pytest -m pki tests/python/pki
+python3 -m pytest -m pki tests/python/pki/test_ca_rollover_*.py
 ```
 
-The first target routes to the direct Python target, so `make test` executes the
-suite exactly once. The development container also pins `pytest-xdist` and
-provides an opt-in four-worker run for faster local feedback:
+The first target routes to the bounded parallel target, so `make test` executes
+the suite exactly once with four workers by default. The development container
+pins `pytest-xdist`; use the direct serial target for ordering diagnostics or
+override the bounded worker count from 1 through 4:
 
 ```bash
+make test-pki-ca-rollover PKI_PYTEST_WORKERS=2
 make test-python-pki-rollover-parallel
 make test-python-pki-rollover-parallel PKI_PYTEST_WORKERS=4
 ```
 
 Each worker uses isolated pytest temporary storage and its own PKI seed. The
 worker count is restricted to 1 through 4 because rollover tests perform real
-filesystem durability operations. Three four-worker runs completed all 221
-tests without failures or skips in 560.24, 548.54, and 548.57 seconds, compared
-with the 2501.68-second serial baseline. The final run preserved the noexec-safe
-executable-wrapper layout and left no wrapper directories. Keep the serial suite
-available for compatibility and diagnostic checks.
+filesystem durability operations. Before shell retirement, three four-worker
+runs completed the then-221-test suite without failures or skips in 560.24,
+548.54, and 548.57 seconds, compared with the 2501.68-second serial baseline.
+Two shell-harness-only progress tests were removed with the retired shell suite,
+so the authoritative suite now collects 219 tests. Keep the serial target
+available for ordering and diagnostic checks.
 
-All 79 inventoried shell scenario groups have pytest parity mappings. Python is
-authoritative; the shell aggregate remains available under
-`make test-pki-ca-rollover-shell` until the separate shell-retirement change is
-complete.
+All 79 inventoried shell scenario groups have authoritative pytest mappings.
+The retired shell paths and selectors remain historical evidence in the
+migration ledger, pinned to the final retained-shell revision `1ecbca5`.
 
 The aggregate-composition review found that parser ordering and ordering across
 independent workspaces are shell harness details, not product invariants. Python
@@ -149,49 +161,20 @@ certificate from the actual prepared G2 root and requires both OpenSSL and the
 application validator to reject it. These same-test data and state dependencies,
 rather than global test order, must remain covered after shell retirement.
 
-### Completing the PKI Rollover Test Migration
+### PKI Rollover Shell Retirement
 
-Complete these gates before deleting `tests/pki/test-ca-rollover.sh`:
+The final retained-shell revision is `1ecbca5`. Independent review found no
+residual shell-specific product, process, signal, race, hostile-state, parser, or
+same-transaction invariant. The retired shell suite's progress records,
+selectors, and final `ok` line were test-harness diagnostics rather than product
+contracts.
 
-1. Reconcile every migration-ledger row with its implementation commit, focused
-   parity evidence, and independent review; no final row may retain a `pending`
-   commit or `dual-run-retained` disposition after retirement.
-2. Keep the aggregate-composition review current when either suite changes.
-   Preserve the direct prepared-root corruption check, same-transaction recovery
-   matrices, both rollback and resume outcomes, and migration idempotence without
-   depending on global pytest execution order.
-3. From the final dual-run revision, run the serial Python suite and the retained
-   no-argument shell aggregate under bounded process-group supervision, then run
-   `make test` and `make container-check` with both implementations enabled.
-4. Run the final container verification on `amd64` and record architecture and
-   tool versions with the observed results. The migration acceptance scope is
-   `amd64` only by operator decision; preserve arm64 image support but describe
-   it as unverified rather than blocking this migration.
-5. Obtain an independent correctness and security review covering scenario
-   parity, metadata-only secret handling, crash cleanup, aggregate composition,
-   and readiness to retire the shell authority.
-6. Keep `test-pki-ca-rollover` routed to the Python suite exactly once from
-   `make test`, keep `test-pki-ca-rollover-parser` routed to the seed-free Python
-   parser module, and retain explicit shell compatibility targets until review.
-7. Keep `README.md`, this guide, `AGENTS.md`, and `pytest.ini` aligned with Python
-   authority and the temporary shell compatibility targets.
-8. From the authority-switch revision, run the focused parser target, the full
-   Python rollover target, the retained shell compatibility target, `make test`,
-   and `make container-check`; then obtain an independent correctness and
-   security review of the authority switch.
-9. Retire the shell implementation only in a subsequent separate change. Remove
-   or replace the shell progress contracts in `test_ca_rollover_fixtures.py`,
-   and delete the shell aggregate only if the authority-switch review found no
-   residual shell-specific invariant; otherwise retain the smallest focused
-   shell contract.
-10. From the shell-retirement revision, rerun the focused parser target, the
-    full rollover target, `make test`, and `make container-check`, then obtain a
-    final independent review proving that no stale shell path or scenario was
-    lost.
-11. Update the migration plan and ledger with the authority-switch and retirement
-    evidence. Identify Python as authoritative, preserve historical shell
-    locators, replace `dual-run-retained` with a retired disposition, and close
-    only the migration-specific gates that were actually verified.
+Focused retirement verification covers the parser target, rollover fixture
+module, infrastructure tests, and dry-run target ownership. The single final
+`make container-check` acceptance run on `amd64` remains deferred pending final
+patch review and explicit phase 9 authorization. Arm64 image support remains
+available but its runtime behavior is outside the accepted migration scope and
+unverified.
 
 Run the focused authoritative Python parser group without generating PKI seed
 state:
@@ -201,19 +184,7 @@ make test-pki-ca-rollover-parser
 ```
 
 The no-argument `make test-pki-ca-rollover` target runs the complete Python
-suite. Use `make test-pki-ca-rollover-parser-shell` or
-`make test-pki-ca-rollover-shell` for retained shell compatibility.
-
-For long aggregate diagnostics, enable path-free elapsed-time records for the
-active preparation, recovery, migration, hostile-state, and race scenario:
-
-```bash
-PLATFORM_PKI_TEST_PROGRESS=1 make test-pki-ca-rollover-shell
-```
-
-Progress is written to standard error as `start` and `pass` records. It is
-disabled by default and does not replace the aggregate target's final status or
-the planned outer process-group timeout.
+suite.
 
 ## Generator Updates
 

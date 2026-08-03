@@ -27,10 +27,11 @@
 - Use `make shell` for interactive development in the rootless Podman container, or `make container-check` to run all maintained checks in a one-shot container. Do not mount host SSH keys, private config, PKI state, or the Podman socket into routine development containers.
 - Run `make generate` after changing Bashly source and `make verify-generated` to prove committed executables are deterministic and current. Never edit a Bashly-generated `bin/` file directly.
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
-- Run `make test` after behavior changes; it runs maintained repository tests such as bastion policy rendering checks.
-- Run `make test-python-infrastructure` after changing pytest fixtures or process helpers. Keep subprocesses argv-only with `shell=False`, bounded process-group cleanup, and shell-style signal statuses.
-- Run `make test-pki-ca-rollover` after changing authoritative rollover scenarios; `make test-python-pki-rollover` is the equivalent direct Python target. Keep the retained `make test-pki-ca-rollover-shell` compatibility suite until the separate shell-retirement gate passes.
-- Run `make test-pki-ca-rollover-parser` for the authoritative Python parser contract and `make test-pki-ca-rollover-parser-shell` for retained shell compatibility.
+- All maintained tests are pytest-orchestrated. They must preserve real generated commands, external tools, executable fakes, PTYs, inherited descriptors, and SSH transport as subprocess boundaries rather than replacing them with in-process mocks.
+- Run focused Make targets or pytest modules while developing. Reserve `make container-check`, which owns one complete `make test` execution in the pinned image, for final acceptance; do not run a separate full `make test` immediately before it.
+- Run `make test-python-infrastructure` after changing pytest fixtures or process helpers. Keep subprocesses argv-only with `shell=False`, isolated process groups, bounded descendant cleanup, and shell-style signal statuses. PTY and escaped-descendant supervision requires Linux procfs and pidfds.
+- Run `make test-pki-ca-rollover` after changing authoritative rollover scenarios; it uses four bounded pytest workers by default. Use `make test-python-pki-rollover` for explicit serial diagnostics.
+- Run `make test-pki-ca-rollover-parser` for the authoritative Python parser contract.
 - Run `make test-command-contract` after command inventory or parser changes, and `make test-installed-tools` after installation or shared-asset changes. The latter uses a disposable `.tmp` install and an isolated runtime `PATH`.
 - Run `make shellcheck` when ShellCheck is available; it lint-checks maintained shell tools and libraries.
 - There is no CI workflow in this tree. For behavior not covered by maintained tests, run focused smoke commands in `/tmp/opencode` or another temporary namespace instead of the default `~/.config/platform-infrastructure/` paths.

@@ -4,6 +4,7 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- All maintained behavior and integration tests now use pytest orchestration while preserving real Bash commands, external tools, PTYs, inherited descriptors, archive operations, and SSH subprocess boundaries. The canonical container check runs the full aggregate once.
 - Added `platform-pki-inventory-install` for strict, atomic mode-600 installation from `../platform-private/pki/services.yml`, with `--private-repo` override and guarded source/destination handling.
 - PKI inventory now has one strict whole-file schema and one-snapshot consumption across issuance, renewal, verification, expiry listing, certificate printing, and Ansible export.
 - `platform-pki-init` now writes only `services.yml.example`, preserves active inventory even with `--force`, and no longer installs unused PKI environment or OpenSSL template files.

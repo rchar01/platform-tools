@@ -1,12 +1,9 @@
-import re
 import stat
-from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from ..harness import ProcessResult
 from .conftest import RolloverWorkspace
 
 
@@ -82,80 +79,3 @@ def test_public_state_snapshot_rejects_unlisted_file_without_reading_it(
 
     with pytest.raises(ValueError, match="state snapshot path is not public"):
         public_state_snapshot(case)
-
-
-def test_rollover_shell_progress_is_opt_in(
-    rollover_tool: Path,
-    isolated_environment: Mapping[str, str],
-    process_runner: Callable[..., ProcessResult],
-) -> None:
-    script = rollover_tool.parents[1] / "tests/pki/test-ca-rollover.sh"
-    disabled = process_runner(
-        [script, "progress-probe"], env=isolated_environment, timeout=10
-    )
-
-    assert disabled.status == 0
-    assert disabled.stdout == ""
-    assert disabled.stderr == ""
-
-    enabled_environment = dict(isolated_environment)
-    enabled_environment["PLATFORM_PKI_TEST_PROGRESS"] = "1"
-    enabled = process_runner(
-        [script, "progress-probe"], env=enabled_environment, timeout=10
-    )
-
-    assert enabled.status == 0
-    assert enabled.stdout == ""
-    assert re.fullmatch(
-        r"test-ca-rollover\.sh: progress elapsed=\d+s status=start "
-        r"scenario=progress-probe\n"
-        r"test-ca-rollover\.sh: progress elapsed=\d+s status=pass "
-        r"scenario=progress-probe\n",
-        enabled.stderr,
-    )
-
-
-def test_rollover_shell_progress_call_sites_are_paired(
-    rollover_tool: Path,
-) -> None:
-    script = rollover_tool.parents[1] / "tests/pki/test-ca-rollover.sh"
-    source = script.read_text()
-    required_scenarios = {
-        '"prepare:$type:$boundary"',
-        '"recover:$action:$checkpoint"',
-        '"hostile-recovery:$type:$boundary:$object_type"',
-        '"child-kill:$child"',
-        '"transaction-manifest-recovery:$boundary"',
-        '"prepare:intermediate:$boundary"',
-        '"prepare:root:$boundary"',
-        '"staged-rewrite:$rewrite_type:$rewrite_boundary"',
-        "root-db-source-identities",
-        '"root-db-hostile:$key"',
-        '"root-db-rewrite:$key"',
-        '"prepare-recover:intermediate:$boundary:$action"',
-        "unexpected-candidate-tree-entry",
-        '"terminal-status:resume:$checkpoint"',
-        '"terminal-status:rollback:$checkpoint"',
-        "prepare-terminal-journal-unlink-race",
-        "recover-terminal-marker-unlink-race",
-        '"prepare-recover:root:$boundary:$action"',
-        '"migrate-recover:$boundary:$action"',
-        '"migration-recover:$action:$recovery_boundary-$checkpoint"',
-        '"migration-provenance:$category"',
-        '"migration-recovery-of-recovery:$action"',
-        '"migration-sigkill-retry:$boundary"',
-        '"migration-hostile:$category"',
-    }
-    calls = re.findall(
-        r"^\s*test_progress (start|pass) (.+)$", source, flags=re.MULTILINE
-    )
-    starts = Counter(scenario for status, scenario in calls if status == "start")
-    passes = Counter(scenario for status, scenario in calls if status == "pass")
-
-    assert required_scenarios <= starts.keys()
-    assert starts.keys() == passes.keys()
-    assert {
-        scenario: (starts[scenario], passes[scenario])
-        for scenario in starts.keys()
-        if starts[scenario] != passes[scenario]
-    } == {'"prepare-recover:root:$boundary:$action"': (1, 2)}

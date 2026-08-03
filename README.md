@@ -124,6 +124,10 @@ Run all maintained checks in a one-shot container:
 make container-check
 ```
 
+This is the canonical final acceptance command and runs the complete pytest
+aggregate once. Do not run `make test` immediately before it unless a separate
+host-environment comparison is intentional.
+
 Run only the generic pytest harness contract tests:
 
 ```bash
@@ -136,29 +140,28 @@ Run the authoritative PKI rollover pytest scenarios:
 make test-pki-ca-rollover
 ```
 
-`make test-python-pki-rollover` remains an equivalent direct Python target.
-
-Run the same pytest scenarios with four isolated workers as an opt-in performance
-check; set `PKI_PYTEST_WORKERS` from 1 through 4 to benchmark another bounded
-worker count:
+The authoritative target uses four workers by default. Run the serial diagnostic
+target directly when comparing ordering or timing. The pinned development image
+includes pytest-xdist; host-only runs must provide it separately:
 
 ```bash
+make test-python-pki-rollover
+```
+
+Set `PKI_PYTEST_WORKERS` from 1 through 4 to override the authoritative target's
+bounded default or benchmark the parallel target directly:
+
+```bash
+make test-pki-ca-rollover PKI_PYTEST_WORKERS=2
 make test-python-pki-rollover-parallel
 make test-python-pki-rollover-parallel PKI_PYTEST_WORKERS=4
 ```
 
 Run the authoritative Python rollover parser group without creating PKI seed
-state, or run the retained shell parser compatibility group:
+state:
 
 ```bash
 make test-pki-ca-rollover-parser
-make test-pki-ca-rollover-parser-shell
-```
-
-Run the complete retained shell compatibility suite explicitly:
-
-```bash
-make test-pki-ca-rollover-shell
 ```
 
 Generate Bashly-backed executables and verify that committed output is current:
@@ -205,9 +208,12 @@ Run maintained behavior tests:
 make test
 ```
 
-The maintained tests include the cross-command CLI contract and a disposable
-installation smoke test for every command, including installed PKI shared-asset
-lookup without Ruby, Bashly, or checkout source paths at runtime.
+All maintained test orchestration uses pytest. The tests still execute the real
+generated Bash commands, external tools, PTYs, inherited file descriptors,
+self-streamed SSH, and executable fakes as subprocesses. Coverage includes the
+cross-command CLI contract and a disposable installation smoke test for every
+command, including installed PKI shared-asset lookup without Ruby, Bashly, or
+checkout source paths at runtime.
 
 Run only the isolated SSH identity helper tests:
 

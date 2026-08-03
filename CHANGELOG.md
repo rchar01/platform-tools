@@ -18,6 +18,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Migrated all maintained test orchestration from shell drivers to independently selectable pytest cases while preserving real command, external-tool, PTY, inherited-FD, archive, concurrency, and self-streamed SSH boundaries. `make container-check` remains the single canonical full-suite acceptance path.
 - Replaced permissive per-field inventory reads with one strict whole-file restricted-YAML parser. All six semantic consumers now lock and consume one canonical private snapshot, rejecting duplicate or unknown structure, malformed grammar, invalid values, missing SANs, and unsupported `deploy` data before operational work.
 - Changed `platform-pki-init` to create and refresh only `inventory/services.yml.example`; active inventory is never initialized or force-replaced. Removed unused installed `pki.env` and `openssl-*.cnf.tpl` assets while leaving existing local copies untouched.
 - Changed fresh root and intermediate creation to begin with immutable `g1` and `g1-i1` generations through bootstrap and active issuer manifests. Failed or interrupted reservations remain permanently abandoned and retries allocate monotonically increasing IDs. Existing completed or descendant-bearing CA state can no longer be replaced with `--force`.
