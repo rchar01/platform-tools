@@ -109,16 +109,17 @@ python3 -m pytest -m infrastructure
 python3 -m pytest tests/python/test_harness.py::test_process_runner_kills_timed_out_process_group
 ```
 
-Migrated PKI rollover scenarios run separately with:
+Authoritative PKI rollover scenarios run with:
 
 ```bash
+make test-pki-ca-rollover
 make test-python-pki-rollover
 python3 -m pytest -m pki tests/python/pki
 ```
 
-The serial target remains the Python parity reference. The development container
-also pins `pytest-xdist` and provides an opt-in four-worker run for faster local
-feedback:
+The first target routes to the direct Python target, so `make test` executes the
+suite exactly once. The development container also pins `pytest-xdist` and
+provides an opt-in four-worker run for faster local feedback:
 
 ```bash
 make test-python-pki-rollover-parallel
@@ -131,11 +132,12 @@ filesystem durability operations. Three four-worker runs completed all 221
 tests without failures or skips in 560.24, 548.54, and 548.57 seconds, compared
 with the 2501.68-second serial baseline. The final run preserved the noexec-safe
 executable-wrapper layout and left no wrapper directories. Keep the serial suite
-available for final authority and compatibility checks.
+available for compatibility and diagnostic checks.
 
-All 79 inventoried shell scenario groups have pytest parity mappings. The shell
-aggregate remains authoritative until the final dual-run gates, authority-switch
-review, and separate shell-retirement change are complete.
+All 79 inventoried shell scenario groups have pytest parity mappings. Python is
+authoritative; the shell aggregate remains available under
+`make test-pki-ca-rollover-shell` until the separate shell-retirement change is
+complete.
 
 The aggregate-composition review found that parser ordering and ordering across
 independent workspaces are shell harness details, not product invariants. Python
@@ -149,8 +151,7 @@ rather than global test order, must remain covered after shell retirement.
 
 ### Completing the PKI Rollover Test Migration
 
-Complete these gates before declaring Python authoritative or deleting
-`tests/pki/test-ca-rollover.sh`:
+Complete these gates before deleting `tests/pki/test-ca-rollover.sh`:
 
 1. Reconcile every migration-ledger row with its implementation commit, focused
    parity evidence, and independent review; no final row may retain a `pending`
@@ -169,14 +170,11 @@ Complete these gates before declaring Python authoritative or deleting
 5. Obtain an independent correctness and security review covering scenario
    parity, metadata-only secret handling, crash cleanup, aggregate composition,
    and readiness to retire the shell authority.
-6. Make the authority switch as a separate change while retaining the shell
-   aggregate under an explicit compatibility target. Route
-   `test-pki-ca-rollover` to the Python suite exactly once from `make test`, route
-   `test-pki-ca-rollover-parser` to the Python parser module, and avoid aliases
-   that execute the full suite twice.
-7. Update `README.md`, this guide, `AGENTS.md`, and `pytest.ini` to identify
-   Python as authoritative while documenting the temporary shell compatibility
-   target.
+6. Keep `test-pki-ca-rollover` routed to the Python suite exactly once from
+   `make test`, keep `test-pki-ca-rollover-parser` routed to the seed-free Python
+   parser module, and retain explicit shell compatibility targets until review.
+7. Keep `README.md`, this guide, `AGENTS.md`, and `pytest.ini` aligned with Python
+   authority and the temporary shell compatibility targets.
 8. From the authority-switch revision, run the focused parser target, the full
    Python rollover target, the retained shell compatibility target, `make test`,
    and `make container-check`; then obtain an independent correctness and
@@ -195,20 +193,22 @@ Complete these gates before declaring Python authoritative or deleting
     locators, replace `dual-run-retained` with a retired disposition, and close
     only the migration-specific gates that were actually verified.
 
-Run the focused authoritative parser group without generating PKI seed state:
+Run the focused authoritative Python parser group without generating PKI seed
+state:
 
 ```bash
 make test-pki-ca-rollover-parser
 ```
 
-The no-argument `make test-pki-ca-rollover` target still runs the parser group
-and the complete lifecycle matrix.
+The no-argument `make test-pki-ca-rollover` target runs the complete Python
+suite. Use `make test-pki-ca-rollover-parser-shell` or
+`make test-pki-ca-rollover-shell` for retained shell compatibility.
 
 For long aggregate diagnostics, enable path-free elapsed-time records for the
 active preparation, recovery, migration, hostile-state, and race scenario:
 
 ```bash
-PLATFORM_PKI_TEST_PROGRESS=1 make test-pki-ca-rollover
+PLATFORM_PKI_TEST_PROGRESS=1 make test-pki-ca-rollover-shell
 ```
 
 Progress is written to standard error as `start` and `pass` records. It is

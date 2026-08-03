@@ -10,7 +10,7 @@ LIBS := lib/platform-pki-common.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
 BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-inventory-install platform-pki-backup platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-ca-rollover platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
 
-.PHONY: help shell container-check generate verify-generated install verify test test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover test-pki-ca-rollover-parser shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover test-pki-ca-rollover-shell test-pki-ca-rollover-parser test-pki-ca-rollover-parser-shell shellcheck
 
 ## Show available commands
 help:
@@ -73,17 +73,17 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-python-infrastructure test-python-pki-rollover test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover
+test: test-python-infrastructure test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-backup test-pki-export test-pki-inventory test-pki-inventory-install test-pki-ca-rollover
 
 ## Run generic Python test-harness contract tests
 test-python-infrastructure:
 	python3 -m pytest -m infrastructure tests/python/test_harness.py
 
-## Run migrated PKI rollover pytest scenarios
+## Run authoritative PKI rollover pytest scenarios directly
 test-python-pki-rollover:
 	python3 -m pytest -m pki tests/python/pki
 
-## Run migrated PKI rollover pytest scenarios with bounded parallel workers
+## Run authoritative PKI rollover pytest scenarios with bounded parallel workers
 test-python-pki-rollover-parallel:
 	@workers=$${PKI_PYTEST_WORKERS:-4}; \
 	case "$$workers" in \
@@ -186,12 +186,19 @@ test-pki-inventory:
 test-pki-inventory-install:
 	./tests/pki/test-inventory-install.sh
 
-## Run generation-aware CA migration and recovery-gate tests
-test-pki-ca-rollover:
+## Run authoritative generation-aware CA rollover tests
+test-pki-ca-rollover: test-python-pki-rollover
+
+## Run the retained CA rollover shell compatibility suite
+test-pki-ca-rollover-shell:
 	./tests/pki/test-ca-rollover.sh
 
-## Run rollover command parser contract tests
+## Run authoritative rollover parser contract tests
 test-pki-ca-rollover-parser:
+	python3 -m pytest -m pki tests/python/pki/test_ca_rollover_parser.py
+
+## Run the retained rollover parser shell compatibility tests
+test-pki-ca-rollover-parser-shell:
 	./tests/pki/test-ca-rollover.sh parser
 
 ## Run ShellCheck for maintained tool scripts
