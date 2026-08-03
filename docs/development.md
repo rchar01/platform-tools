@@ -170,11 +170,11 @@ selectors, and final `ok` line were test-harness diagnostics rather than product
 contracts.
 
 Focused retirement verification covers the parser target, rollover fixture
-module, infrastructure tests, and dry-run target ownership. The single final
-`make container-check` acceptance run passed on `amd64` on 2026-08-03: 1,242
-aggregate tests and 10 separate container-only archive tests passed, for 1,252
-tests total, followed by ShellCheck. Arm64 image support remains available but
-its runtime behavior is outside the accepted migration scope and unverified.
+module, infrastructure tests, and dry-run target ownership. The accepted
+revision's final `make container-check` run passed on `amd64` on 2026-08-03:
+1,245 aggregate tests and 10 separate container-only archive tests passed, for
+1,255 tests total, followed by ShellCheck. Arm64 image support remains available
+but its runtime behavior is outside the accepted migration scope and unverified.
 
 Run the focused authoritative Python parser group without generating PKI seed
 state:
