@@ -36,7 +36,7 @@ class CreateWorkspace:
 
 
 def tools() -> CreateTools:
-    repository = Path(__file__).resolve().parents[3]
+    repository = Path(__file__).resolve().parents[2]
     binaries = repository / "bin"
     return CreateTools(
         init=binaries / "platform-pki-init",
@@ -79,7 +79,7 @@ def private_text(path: Path, content: str) -> None:
 
 
 def executable(path: Path, content: str) -> Path:
-    repository_temporary = Path(__file__).resolve().parents[3] / ".tmp"
+    repository_temporary = Path(__file__).resolve().parents[2] / ".tmp"
     repository_temporary.mkdir(mode=0o700, exist_ok=True)
     directory = Path(
         tempfile.mkdtemp(prefix="pytest-pki-create-", dir=repository_temporary)

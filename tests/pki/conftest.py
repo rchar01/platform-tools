@@ -196,7 +196,7 @@ def isolated_environment(tmp_path: Path) -> Mapping[str, str]:
 
 @pytest.fixture(scope="session")
 def rollover_tools() -> RolloverTools:
-    bin_dir = Path(__file__).resolve().parents[3] / "bin"
+    bin_dir = Path(__file__).resolve().parents[2] / "bin"
     return RolloverTools(
         init=bin_dir / "platform-pki-init",
         root=bin_dir / "platform-pki-root-create",

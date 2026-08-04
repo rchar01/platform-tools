@@ -8,7 +8,7 @@ import pytest
 from .harness import ProcessResult
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[1]
 TOOL = ROOT_DIR / "bin/platform-vm-env-collect"
 SOURCE = ROOT_DIR / "bashly/platform-vm-env-collect/src/root_command.sh"
 

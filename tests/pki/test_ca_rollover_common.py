@@ -17,7 +17,7 @@ def test_file_identity_detects_same_size_same_second_rewrite(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     rewritten = tmp_path / "key"
     rewritten.write_bytes(b"first")
@@ -63,7 +63,7 @@ def test_state_record_preserves_nanosecond_file_identity(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     source = tmp_path / "key"
     source.write_bytes(b"state-identity")
@@ -122,7 +122,7 @@ def test_manifested_tree_rejects_same_inode_member_rewrite(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     case = tmp_path / "manifest-removal"
     tree = case / "tree"
@@ -230,7 +230,7 @@ def test_committed_prepare_journal_requires_recovery(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     pki = tmp_path / "pki"
     rollover_state = pki / "state/rollover"
@@ -277,7 +277,7 @@ def test_committed_migration_journal_remains_operational(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     pki = tmp_path / "pki"
     rollover_state = pki / "state/rollover"
@@ -320,7 +320,7 @@ def test_ca_profile_rejects_noncritical_basic_constraints(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     private_key = tmp_path / "basic.key"
     certificate = tmp_path / "basic.crt"
@@ -400,7 +400,7 @@ def test_ca_profile_rejects_extra_key_usage(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     private_key = tmp_path / "usage.key"
     certificate = tmp_path / "usage.crt"
@@ -500,7 +500,7 @@ def test_ca_self_signature_rejects_corrupted_signature(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     common_library = (
-        Path(__file__).resolve().parents[3] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
     )
     private_key = tmp_path / "root.key"
     certificate = tmp_path / "root.crt"

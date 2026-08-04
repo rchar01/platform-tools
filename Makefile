@@ -77,11 +77,11 @@ test: test-python-infrastructure test-command-contract test-installed-tools test
 
 ## Run generic Python test-harness contract tests
 test-python-infrastructure:
-	python3 -m pytest -m infrastructure tests/python/test_harness.py
+	python3 -m pytest -m infrastructure tests/test_harness.py
 
 ## Run authoritative PKI rollover pytest scenarios directly
 test-python-pki-rollover:
-	python3 -m pytest -m pki tests/python/pki/test_ca_rollover_*.py
+	python3 -m pytest -m pki tests/pki/test_ca_rollover_*.py
 
 ## Run authoritative PKI rollover pytest scenarios with bounded parallel workers
 test-python-pki-rollover-parallel:
@@ -94,106 +94,106 @@ test-python-pki-rollover-parallel:
 		1|2|3|4) ;; \
 		*) printf '%s\n' 'PKI_PYTEST_WORKERS must be an integer from 1 through 4' >&2; exit 2 ;; \
 	esac; \
-	python3 -m pytest -n "$$workers" -m pki tests/python/pki/test_ca_rollover_*.py
+	python3 -m pytest -n "$$workers" -m pki tests/pki/test_ca_rollover_*.py
 
 ## Run the maintained cross-command CLI contract tests
 test-command-contract:
-	python3 -m pytest tests/python/test_command_contract.py
+	python3 -m pytest tests/test_command_contract.py
 
 ## Smoke test all commands and PKI assets from a disposable install
 test-installed-tools:
-	python3 -m pytest tests/python/test_installed_tools.py
+	python3 -m pytest tests/test_installed_tools.py
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:
-	python3 -m pytest tests/python/test_platform_config_init.py
+	python3 -m pytest tests/test_platform_config_init.py
 
 ## Run SSH identity initializer behavior tests
 test-platform-ssh-init:
-	python3 -m pytest tests/python/test_platform_ssh_init.py
+	python3 -m pytest tests/test_platform_ssh_init.py
 
 ## Run VM environment collector CLI tests
 test-vm-env-collect-cli:
-	python3 -m pytest tests/python/test_vm_env_collect_cli.py
+	python3 -m pytest tests/test_vm_env_collect_cli.py
 
 ## Run VM collector archive smoke tests in the dev container
 test-vm-env-collect-archive:
-	python3 -m pytest tests/python/test_vm_env_collect_archive.py
+	python3 -m pytest tests/test_vm_env_collect_archive.py
 
 ## Run bastion policy render tests
 test-bastion-policy:
-	python3 -m pytest tests/python/test_bastion_policy_render.py
+	python3 -m pytest tests/test_bastion_policy_render.py
 
 ## Run Proxmox token initializer behavior tests
 test-proxmox-token-init:
-	python3 -m pytest tests/python/test_proxmox_token_init.py
+	python3 -m pytest tests/test_proxmox_token_init.py
 
 ## Run Proxmox VM cleanup behavior tests
 test-proxmox-vm-cleanup:
-	python3 -m pytest tests/python/test_proxmox_vm_cleanup.py
+	python3 -m pytest tests/test_proxmox_vm_cleanup.py
 
 ## Run Proxmox VM snapshot behavior tests
 test-proxmox-vm-snapshot:
-	python3 -m pytest tests/python/test_proxmox_vm_snapshot.py
+	python3 -m pytest tests/test_proxmox_vm_snapshot.py
 
 ## Run PKI namespace initialization behavior tests
 test-pki-init:
-	python3 -m pytest tests/python/pki/test_init.py
+	python3 -m pytest tests/pki/test_init.py
 
 ## Run PKI root CA creation behavior tests
 test-pki-root-create:
-	python3 -m pytest tests/python/pki/test_root_create.py
+	python3 -m pytest tests/pki/test_root_create.py
 
 ## Run PKI intermediate CA creation behavior tests
 test-pki-intermediate-create:
-	python3 -m pytest tests/python/pki/test_intermediate_create.py
+	python3 -m pytest tests/pki/test_intermediate_create.py
 
 ## Run PKI service certificate issuance behavior tests
 test-pki-service-issue:
-	python3 -m pytest tests/python/pki/test_service_issue.py
+	python3 -m pytest tests/pki/test_service_issue.py
 
 ## Run PKI service certificate renewal behavior tests
 test-pki-service-renew:
-	python3 -m pytest tests/python/pki/test_service_renew.py
+	python3 -m pytest tests/pki/test_service_renew.py
 
 ## Run PKI certificate printing behavior tests
 test-pki-print-cert:
-	python3 -m pytest tests/python/pki/test_print_cert.py
+	python3 -m pytest tests/pki/test_print_cert.py
 
 ## Run PKI certificate expiry behavior tests
 test-pki-list-expiry:
-	python3 -m pytest tests/python/pki/test_list_expiry.py
+	python3 -m pytest tests/pki/test_list_expiry.py
 
 ## Run PKI service certificate verification tests
 test-pki-service-verify:
-	python3 -m pytest tests/python/pki/test_service_verify.py
+	python3 -m pytest tests/pki/test_service_verify.py
 
 ## Run PKI passphrase file validation tests
 test-pki-pass-file:
-	python3 -m pytest tests/python/pki/test_pass_file_validation.py
+	python3 -m pytest tests/pki/test_pass_file_validation.py
 
 ## Run PKI backup archive exclusion tests
 test-pki-backup:
-	python3 -m pytest tests/python/pki/test_backup_excludes_backups.py tests/python/pki/test_backup_cli.py
+	python3 -m pytest tests/pki/test_backup_excludes_backups.py tests/pki/test_backup_cli.py
 
 ## Run PKI Ansible export path safety tests
 test-pki-export:
-	python3 -m pytest tests/python/pki/test_export_ansible_safe_paths.py
+	python3 -m pytest tests/pki/test_export_ansible_safe_paths.py
 
 ## Run PKI inventory value validation tests
 test-pki-inventory:
-	python3 -m pytest tests/python/pki/test_inventory_value_validation.py tests/python/pki/test_inventory_contract.py
+	python3 -m pytest tests/pki/test_inventory_value_validation.py tests/pki/test_inventory_contract.py
 
 ## Run PKI inventory installation tests
 test-pki-inventory-install:
-	python3 -m pytest tests/python/pki/test_inventory_install.py
+	python3 -m pytest tests/pki/test_inventory_install.py
 
 ## Run authoritative generation-aware CA rollover tests
 test-pki-ca-rollover: test-python-pki-rollover-parallel
 
 ## Run authoritative rollover parser contract tests
 test-pki-ca-rollover-parser:
-	python3 -m pytest -m pki tests/python/pki/test_ca_rollover_parser.py
+	python3 -m pytest -m pki tests/pki/test_ca_rollover_parser.py
 
 ## Run ShellCheck for maintained tool scripts
 shellcheck:

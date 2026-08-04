@@ -11,7 +11,7 @@ import pytest
 from ..harness import ProcessResult
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "bin/platform-pki-service-verify"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 INVENTORY = """services:

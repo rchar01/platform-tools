@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).parents[1]
 TOOL = ROOT / "bin/platform-proxmox-vm-snapshot"
 FAKES = ROOT / "tests/proxmox-vm-snapshot/fake-bin"
 FIXTURES = ROOT / "tests/proxmox-vm-snapshot/fixtures"

@@ -13,7 +13,7 @@ import pytest
 from .harness import ProcessTimeout, run_process
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[1]
 TOOL = ROOT_DIR / "bin/platform-vm-env-collect"
 SYNTHETIC_SECRET = "collector-secret-value"
 

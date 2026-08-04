@@ -11,7 +11,7 @@ import pytest
 from ..harness import ProcessResult, run_process
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "bin/platform-pki-list-expiry"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 HEADER = f"{'SERVICE':24} {'EXPIRES':22} {'DAYS_LEFT':10} STATUS\n"

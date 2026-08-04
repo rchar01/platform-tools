@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 COMMON = ROOT / "lib/platform-pki-common.sh"
 INVENTORY_VALIDATOR = (
     'source "$1"; '

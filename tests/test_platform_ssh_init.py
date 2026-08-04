@@ -12,7 +12,7 @@ import pytest
 from .harness import ProcessResult
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "bin/platform-ssh-init"
 VERSION = (ROOT / "VERSION").read_text().strip()
 SYSTEM_PATH = os.environ["PATH"]

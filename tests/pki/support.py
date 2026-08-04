@@ -13,7 +13,7 @@ import pytest
 from ..harness import ProcessResult
 
 
-REPOSITORY = Path(__file__).resolve().parents[3]
+REPOSITORY = Path(__file__).resolve().parents[2]
 BIN = REPOSITORY / "bin"
 
 

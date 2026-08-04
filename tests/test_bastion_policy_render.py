@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "bin/platform-bastion-policy"
 FIXTURES = ROOT / "tests/bastion-policy/fixtures"
 VALID_POLICY = FIXTURES / "access-policy.valid.yaml"

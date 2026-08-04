@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "bin/platform-config-init"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 

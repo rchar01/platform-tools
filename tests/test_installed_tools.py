@@ -12,7 +12,7 @@ import pytest
 from .harness import ProcessResult, run_process
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text().strip()
 
 

@@ -101,7 +101,7 @@ through the runtime `SHARE_DIR` as the isolated XDG data location.
 
 ## Python Test Infrastructure
 
-All maintained test orchestration lives under `tests/python/`. The shared
+All maintained test orchestration lives under `tests/`. The shared
 helpers run exact argument vectors with `shell=False`, isolated process groups,
 tracked Linux-procfs descendants, pidfd-bound escaped-descendant signals, and
 bounded reader and process cleanup.
@@ -116,7 +116,7 @@ Run the harness contracts, one marker, or one exact node with:
 ```bash
 make test-python-infrastructure
 python3 -m pytest -m infrastructure
-python3 -m pytest tests/python/test_harness.py::test_process_runner_kills_timed_out_process_group
+python3 -m pytest tests/test_harness.py::test_process_runner_kills_timed_out_process_group
 ```
 
 Authoritative PKI rollover scenarios run with:
@@ -124,7 +124,7 @@ Authoritative PKI rollover scenarios run with:
 ```bash
 make test-pki-ca-rollover
 make test-python-pki-rollover
-python3 -m pytest -m pki tests/python/pki/test_ca_rollover_*.py
+python3 -m pytest -m pki tests/pki/test_ca_rollover_*.py
 ```
 
 The first target routes to the bounded parallel target, so `make test` executes

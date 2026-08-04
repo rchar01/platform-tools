@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).parents[1]
 TOOL = ROOT / "bin/platform-proxmox-vm-cleanup"
 FAKES = ROOT / "tests/proxmox-vm-cleanup/fake-bin"
 NONCE_RE = re.compile(r"^[a-f0-9]{64}$")

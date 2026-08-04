@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).parents[1]
 TOOL = ROOT / "bin/platform-proxmox-token-init"
 FAKES = ROOT / "tests/proxmox-token-init/fake-bin"
 SECRET = "12345678-1234-1234-1234-123456789abc"
