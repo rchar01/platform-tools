@@ -179,6 +179,18 @@ action=run platform-pki-ca-rollover recover
   exit "$status"
 }
 
+prepare_generation_destination_parents() {
+  local dir parent
+  for dir in "$PKI_DIR/authorities" "$PKI_DIR/authorities/roots" "$PKI_DIR/authorities/intermediates"; do
+    parent=$(dirname -- "$dir")
+    if [[ ! -e $dir && ! -L $dir ]]; then
+      mkdir -m 700 -- "$dir" 2>/dev/null || [[ -d $dir && ! -L $dir ]] || pki_die "Cannot create generation authority directory: $dir"
+      pki_fsync "$parent"
+    fi
+    pki_require_private_dir "$dir" 'Generation authority directory'
+  done
+}
+
 NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}; PKI_DIR=${args[--pki-dir]:-}
 BACKUP_RECEIPT=$(pki_expand_path "${args[--backup-receipt]}"); PRIVATE_REPO=$(pki_expand_path "${args[--private-repo]}")
 YES=false; [[ -v args[--yes] ]] && YES=true
@@ -207,6 +219,8 @@ if [[ $LAYOUT == generation ]]; then
   exit 0
 fi
 [[ $LAYOUT == legacy ]] || pki_die "Legacy migration refuses incomplete or ambiguous layout: $LAYOUT"
+prepare_generation_destination_parents
+[[ $(pki_detect_layout) == legacy ]] || pki_die 'Legacy migration destination preparation found incomplete or ambiguous state'
 [[ $(pki_public_state_digest legacy) == "${RECEIPT[state_manifest_sha256]}" ]] || pki_die 'Current public PKI state differs from the backed-up state manifest'
 [[ $(pki_private_metadata_digest) == "${RECEIPT[private_metadata_sha256]}" ]] || pki_die 'Current private metadata differs from the backed-up state'
 

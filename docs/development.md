@@ -144,7 +144,7 @@ filesystem durability operations. Before shell retirement, three four-worker
 runs completed the then-221-test suite without failures or skips in 560.24,
 548.54, and 548.57 seconds, compared with the 2501.68-second serial baseline.
 Two shell-harness-only progress tests were removed with the retired shell suite.
-The authoritative suite now collects 222 tests. Keep the serial target available
+The authoritative suite now collects 224 tests. Keep the serial target available
 for ordering and diagnostic checks.
 
 All 79 inventoried shell scenario groups have authoritative pytest mappings.
@@ -171,9 +171,9 @@ contracts.
 
 Focused retirement verification covers the parser target, rollover fixture
 module, infrastructure tests, and dry-run target ownership. The accepted
-revision's final `make container-check` run passed on `amd64` on 2026-08-03:
-1,266 aggregate tests and 10 separate container-only archive tests passed, for
-1,276 tests total, followed by ShellCheck.
+revision's final `make container-check` run passed on `amd64` on 2026-08-04:
+1,268 aggregate tests and 10 separate container-only archive tests passed, for
+1,278 tests total, followed by ShellCheck.
 
 Run the focused authoritative Python parser group without generating PKI seed
 state:

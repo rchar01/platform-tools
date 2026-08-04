@@ -1602,6 +1602,162 @@ def test_migration_success_preserves_private_key_identities(
     assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
 
 
+def test_migration_prepares_missing_generation_destination_parents(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-missing-destinations")
+    (workspace.pki / "authorities/roots").rmdir()
+    (workspace.pki / "authorities/intermediates").rmdir()
+    (workspace.pki / "authorities").rmdir()
+    receipt = backup_receipt_factory(workspace)
+    root_fingerprint = _certificate_fingerprint(
+        workspace.pki / "root-ca/certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        workspace.pki / "intermediate-ca/certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+
+    result = process_runner(
+        _migration_command(
+            rollover_tools,
+            workspace,
+            receipt,
+            root_fingerprint,
+            intermediate_fingerprint,
+        ),
+        env=isolated_environment,
+        timeout=120,
+    )
+
+    assert result.status == 0, result
+    assert result.stdout == (
+        "[OK] Migrated legacy PKI state to root g1 and intermediate g1-i1\n"
+    )
+    assert result.stderr == ""
+    for directory in (
+        workspace.pki / "authorities",
+        workspace.pki / "authorities/roots",
+        workspace.pki / "authorities/intermediates",
+    ):
+        assert directory.is_dir() and not directory.is_symlink()
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert (workspace.pki / "state/active-issuer").read_text() == (
+        "root=g1\nintermediate=g1-i1\n"
+    )
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
+def test_missing_generation_destination_preparation_is_safely_retryable(
+    rollover_tools: RolloverTools,
+    legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],
+    backup_receipt_factory: Callable[[RolloverWorkspace], Path],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = legacy_rollover_case_factory("migration-destination-retry")
+    (workspace.pki / "authorities/roots").rmdir()
+    (workspace.pki / "authorities/intermediates").rmdir()
+    (workspace.pki / "authorities").rmdir()
+    journal = workspace.pki / "state/rollover/journal"
+    journal_content = journal.read_text()
+    journal_identity = (
+        journal.stat().st_dev,
+        journal.stat().st_ino,
+        journal.stat().st_mtime_ns,
+    )
+    receipt = backup_receipt_factory(workspace)
+    receipt_content = receipt.read_text()
+    receipt.write_text(
+        receipt_content.replace(
+            next(
+                line
+                for line in receipt_content.splitlines(keepends=True)
+                if line.startswith("state_manifest_sha256=")
+            ),
+            f"state_manifest_sha256={'0' * 64}\n",
+        )
+    )
+    receipt.chmod(0o600)
+    root_fingerprint = _certificate_fingerprint(
+        workspace.pki / "root-ca/certs/root-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    intermediate_fingerprint = _certificate_fingerprint(
+        workspace.pki / "intermediate-ca/certs/intermediate-ca.crt",
+        isolated_environment,
+        process_runner,
+    )
+    command = _migration_command(
+        rollover_tools,
+        workspace,
+        receipt,
+        root_fingerprint,
+        intermediate_fingerprint,
+    )
+
+    failed = process_runner(command, env=isolated_environment, timeout=120)
+
+    assert failed.status == 1
+    assert failed.stdout == ""
+    assert failed.stderr == (
+        "[ERROR] Current public PKI state differs from the backed-up state manifest\n"
+    )
+    for directory in (
+        workspace.pki / "authorities",
+        workspace.pki / "authorities/roots",
+        workspace.pki / "authorities/intermediates",
+    ):
+        assert directory.is_dir() and not directory.is_symlink()
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert journal.read_text() == journal_content
+    assert (
+        journal.stat().st_dev,
+        journal.stat().st_ino,
+        journal.stat().st_mtime_ns,
+    ) == journal_identity
+    assert not (workspace.pki / "state/rollover/recovery-required").exists()
+    status = process_runner(
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert status.status == 1
+    assert status.stdout == (
+        "status=legacy\n"
+        "recovery_required=false\n"
+        "action=run platform-pki-backup, then platform-pki-ca-rollover migrate\n"
+    )
+    assert status.stderr == ""
+
+    receipt.write_text(receipt_content)
+    receipt.chmod(0o600)
+    retry = process_runner(command, env=isolated_environment, timeout=120)
+
+    assert retry.status == 0, retry
+    assert retry.stdout == (
+        "[OK] Migrated legacy PKI state to root g1 and intermediate g1-i1\n"
+    )
+    assert retry.stderr == ""
+    assert (workspace.pki / "state/active-issuer").read_text() == (
+        "root=g1\nintermediate=g1-i1\n"
+    )
+    assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
+
+
 def test_completed_migration_is_idempotent(
     rollover_tools: RolloverTools,
     legacy_rollover_case_factory: Callable[[str], RolloverWorkspace],

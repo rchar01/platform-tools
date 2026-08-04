@@ -562,10 +562,14 @@ SHA-256 fingerprints. Non-interactive migration additionally requires `--yes`,
 
 Migration verifies the backup receipt and archive identity, public certificate
 chain, current public-state digest, and semantic equality between installed
-inventory and `<private-repo>/pki/services.yml`. It records a recovery journal,
-reserves `g1` and `g1-i1`, and moves legacy CA directories on the same
-filesystem. It regenerates managed OpenSSL paths, publishes service issuer
-records, quarantines legacy scaffolding with provenance, and publishes
+inventory and `<private-repo>/pki/services.yml`. Under the full migration lock
+matrix it safely creates missing private `authorities/roots` and
+`authorities/intermediates` destination parents used by legacy installations
+that predate generation-aware initialization, then revalidates the legacy
+layout. It records a recovery journal, reserves `g1` and `g1-i1`, and moves
+legacy CA directories on the same filesystem. It regenerates managed OpenSSL
+paths, publishes service issuer records, quarantines legacy scaffolding with
+provenance, and publishes
 `state/active-issuer` last. It durably publishes the identity-bound migration
 provenance directory before marking the transaction journal committed. Existing
 keys are not copied, hashed, parsed, or regenerated. Provenance includes a
