@@ -52,5 +52,6 @@ footer: |-
   Root keys are encrypted unless --allow-unencrypted-root-key is used.
   Root generation IDs are allocated monotonically. A failed or interrupted
   bootstrap permanently abandons its reserved ID; a retry uses the next ID.
+  Legacy singleton CA state must be migrated before this command can run.
   Passphrase files must be mode 600 or stricter and have a first line of at
   least 16 characters containing non-whitespace content.

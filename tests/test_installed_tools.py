@@ -37,7 +37,11 @@ def make_tools() -> tuple[str, ...]:
 
 
 TOOLS = make_tools()
-DEPENDENCIES = ("bash", "python3", "dirname", "mkdir", "chmod", "id", "stat", "find", "mktemp", "cp", "mv", "rm", "pwd")
+DEPENDENCIES = ("bash", "python3", "dirname", "mkdir", "chmod", "id", "stat", "find", "mktemp", "cp", "mv", "rm", "pwd", "flock", "openssl")
+LEGACY_MIGRATION_ERROR = (
+    "[ERROR] Legacy PKI state requires migration; create a fresh backup and "
+    "follow platform-pki-ca-rollover status/migrate\n"
+)
 
 
 def require_outside_checkout(path: Path, label: str, *, strict: bool = False) -> Path:
@@ -248,3 +252,29 @@ def test_installed_pki_shared_asset_lookup(
     require_outside_checkout(example, "initialized PKI template", strict=True)
     require_outside_checkout(installed_template, "installed PKI template", strict=True)
     assert example.read_bytes() == installed_template.read_bytes()
+
+
+def test_installed_pki_command_prepares_legacy_control_state(
+    process_runner: Callable[..., ProcessResult], install: Install
+) -> None:
+    pki = install.state / "legacy-pki"
+    for directory in (pki / "inventory", pki / "root-ca", pki / "intermediate-ca"):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pki.chmod(0o700)
+    inventory = pki / "inventory/services.yml"
+    inventory.write_text("services: {}\n", encoding="utf-8")
+    inventory.chmod(0o600)
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / "platform-pki-list-expiry",
+        "--pki-dir",
+        pki,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == LEGACY_MIGRATION_ERROR
+    assert (pki / "locks").is_dir()
+    assert (pki / "state/rollover").is_dir()

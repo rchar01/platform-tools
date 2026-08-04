@@ -29,3 +29,4 @@ examples:
 footer: |-
   Verifies chain trust, private-key match, CA:false, serverAuth, inventory
   SANs, and remaining validity. The PKI directory defaults to <namespace>/pki.
+  Legacy singleton CA state must be migrated before this command can run.

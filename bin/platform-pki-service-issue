@@ -395,6 +395,8 @@ root_command() {
     pki_require_pass_file "$INTERMEDIATE_PASS_FILE"
   fi
   pki_require_cmd openssl
+  pki_require_pki_dir
+  pki_prepare_control_state
 
   ROOT_CA_DIR=''
   INTERMEDIATE_CA_DIR=''
@@ -537,6 +539,7 @@ root_command() {
   INTERMEDIATE_OPERATION_LOCK_HELD=true
   pki_acquire_operation_lock "$INVENTORY_OPERATION_LOCK" 'inventory operation'
   INVENTORY_OPERATION_LOCK_HELD=true
+  pki_require_generation_layout
   pki_load_active_issuer_snapshot
   ROOT_CERT=$(pki_root_cert)
   INT_KEY=$(pki_intermediate_key)
@@ -698,7 +701,7 @@ platform_pki_service_issue_usage() {
     printf "  platform-pki-service-issue platform-example --intermediate-pass-file\n  /run/secrets/platform-pki-intermediate-pass\n"
     echo
 
-    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nThe lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397\ndays, in that order. Existing private keys are reused unless --rotate-key\nis used. Existing certificates are never overwritten; use\nplatform-pki-service-renew after initial issuance. Passphrase files must be\nmode 600 or stricter and have a first line of at least 16 characters\ncontaining non-whitespace content.\n"
+    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nThe lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397\ndays, in that order. Existing private keys are reused unless --rotate-key\nis used. Existing certificates are never overwritten; use\nplatform-pki-service-renew after initial issuance. Passphrase files must be\nmode 600 or stricter and have a first line of at least 16 characters\ncontaining non-whitespace content.\nLegacy singleton CA state must be migrated before this command can run.\n"
     echo
 
   fi

@@ -510,6 +510,14 @@ Plain backup output uses `.tar.gz` and still contains secrets. Keep it outside G
 
 ## Migrate Legacy CA State
 
+Normal CA and service commands require generation-aware state. On a legacy
+layout they safely prepare missing private control directories, acquire the
+required persistent locks, and stop with migration guidance before reading or
+mutating authority state. Inventory installation, protected backup, and
+`platform-pki-ca-rollover status|migrate` remain available so migration can be
+completed. Mixed legacy and generation authority paths are rejected as
+incomplete or ambiguous state.
+
 First install the canonical inventory and create a new independent protected
 backup. Then inspect status and migrate with that backup's receipt:
 

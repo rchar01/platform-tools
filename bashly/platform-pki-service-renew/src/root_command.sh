@@ -247,6 +247,8 @@ NAMESPACE=$(pki_expand_path "$NAMESPACE"); PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki};
 pki_validate_openssl_config_value 'PKI directory' "$PKI_DIR"
 if [[ -n $INTERMEDIATE_PASS_FILE ]]; then INTERMEDIATE_PASS_FILE=$(pki_expand_path "$INTERMEDIATE_PASS_FILE"); pki_require_pass_file "$INTERMEDIATE_PASS_FILE"; fi
 pki_require_cmd openssl
+pki_require_pki_dir
+pki_prepare_control_state
 
 ROOT_CA_DIR=''; INTERMEDIATE_CA_DIR=''; SERVICES_DIR="$PKI_DIR/services"
 SERVICE_DIR=$(pki_service_dir "$SERVICE"); KEY=$(pki_service_key "$SERVICE"); CSR="$SERVICE_DIR/csr/tls.csr"
@@ -291,6 +293,7 @@ DNS_FILE="$INVENTORY_TMP_DIR/dns"; IPS_FILE="$INVENTORY_TMP_DIR/ips"; : >"$DNS_F
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+pki_require_generation_layout
 pki_load_active_issuer_snapshot
 ROOT_CERT=$(pki_root_cert); INT_KEY=$(pki_intermediate_key); INT_CERT=$(pki_intermediate_cert); INT_CONF="$INTERMEDIATE_CA_DIR/openssl.cnf"
 pki_load_inventory_snapshot "$INVENTORY_TMP_DIR"

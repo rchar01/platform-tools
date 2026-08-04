@@ -60,6 +60,7 @@ footer: |-
   The lifetime defaults to PLATFORM_PKI_INTERMEDIATE_DAYS or 1825 days.
   Intermediate generation IDs are allocated monotonically under the bootstrap
   root. A failed or interrupted bootstrap permanently abandons its reserved ID.
+  Legacy singleton CA state must be migrated before this command can run.
   Intermediate keys are encrypted unless
   --allow-unencrypted-intermediate-key is used. Passphrase files must be mode
   600 or stricter and have a first line of at least 16 characters containing

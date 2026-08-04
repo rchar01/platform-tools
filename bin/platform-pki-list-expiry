@@ -37,6 +37,7 @@ root_command() {
 
   pki_require_cmd openssl
   pki_require_pki_dir
+  pki_prepare_control_state
   pki_require_inventory
   ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock); INVENTORY_LOCK=$(pki_inventory_operation_lock)
   SNAPSHOT_DIR=''
@@ -55,6 +56,7 @@ root_command() {
   pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
   pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
   pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+  pki_require_generation_layout
   SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-list-expiry.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
   pki_load_active_issuer_snapshot
   pki_load_inventory_snapshot "$SNAPSHOT_DIR"
@@ -140,7 +142,7 @@ platform_pki_list_expiry_usage() {
     printf "  platform-pki-list-expiry --warn-days 90 --critical-days 30\n"
     echo
 
-    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\n\nCertificate status exit codes:\n  0 all OK\n  1 warning threshold reached\n  2 critical threshold reached\n  3 generated certificate missing\n\nParser and configuration errors exit 1.\n"
+    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nLegacy singleton CA state must be migrated before this command can run.\n\nCertificate status exit codes:\n  0 all OK\n  1 warning threshold reached\n  2 critical threshold reached\n  3 generated certificate missing\n\nParser and configuration errors exit 1.\n"
     echo
 
   fi

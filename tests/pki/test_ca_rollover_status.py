@@ -203,7 +203,7 @@ def test_status_rejects_missing_service_issuer(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     workspace = rollover_case_factory("missing-service-issuer")
-    (workspace.pki / "state/rollovers").mkdir(mode=0o700)
+    (workspace.pki / "state/rollovers").mkdir(mode=0o700, exist_ok=True)
     for name in ("lifecycle", "root", "intermediate", "inventory", "export"):
         lock = workspace.pki / "locks" / name
         if not lock.exists():
@@ -260,7 +260,7 @@ def test_status_reports_ready_generation(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     workspace = rollover_case_factory("ready-generation")
-    (workspace.pki / "state/rollovers").mkdir(mode=0o700)
+    (workspace.pki / "state/rollovers").mkdir(mode=0o700, exist_ok=True)
     for name in ("lifecycle", "root", "intermediate", "inventory", "export"):
         lock = workspace.pki / "locks" / name
         if not lock.exists():

@@ -33,6 +33,7 @@ pki_validate_openssl_config_value 'PKI directory' "$PKI_DIR"
 if [[ -n $ROOT_PASS_FILE ]]; then ROOT_PASS_FILE=$(pki_expand_path "$ROOT_PASS_FILE"); pki_require_pass_file "$ROOT_PASS_FILE"; fi
 pki_require_cmd openssl
 pki_require_pki_dir
+pki_prepare_control_state
 pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
 
 ROOT_LOCK=$(pki_root_operation_lock)
@@ -99,6 +100,7 @@ pki_require_no_unresolved_journal
   pki_die 'An active issuer exists; use platform-pki-ca-rollover instead of replacing the root CA'
 [[ ! -e $(pki_bootstrap_root_manifest) && ! -L $(pki_bootstrap_root_manifest) ]] || \
   pki_die 'A bootstrap root already exists; create its first intermediate or recover it'
+pki_require_empty_authority_layout
 [[ $FORCE != true ]] || pki_die '--force cannot delete unproven root state; recover the journaled disposable transaction instead'
 ROOT_ID=$(pki_next_root_generation); ROOT_CA_DIR=$(pki_root_authority_dir "$ROOT_ID")
 RESERVATION=$(pki_generation_reservation "$ROOT_ID")

@@ -30,3 +30,4 @@ examples:
 footer: |-
   The export contains service private keys. Custom export directories must be
   absolute and pass ownership, permission, and symlink safety checks.
+  Legacy singleton CA state must be migrated before this command can run.

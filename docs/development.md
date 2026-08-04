@@ -143,9 +143,9 @@ worker count is restricted to 1 through 4 because rollover tests perform real
 filesystem durability operations. Before shell retirement, three four-worker
 runs completed the then-221-test suite without failures or skips in 560.24,
 548.54, and 548.57 seconds, compared with the 2501.68-second serial baseline.
-Two shell-harness-only progress tests were removed with the retired shell suite,
-so the authoritative suite now collects 219 tests. Keep the serial target
-available for ordering and diagnostic checks.
+Two shell-harness-only progress tests were removed with the retired shell suite.
+The authoritative suite now collects 222 tests. Keep the serial target available
+for ordering and diagnostic checks.
 
 All 79 inventoried shell scenario groups have authoritative pytest mappings.
 The retired shell paths and selectors remain historical evidence in the
@@ -172,9 +172,8 @@ contracts.
 Focused retirement verification covers the parser target, rollover fixture
 module, infrastructure tests, and dry-run target ownership. The accepted
 revision's final `make container-check` run passed on `amd64` on 2026-08-03:
-1,245 aggregate tests and 10 separate container-only archive tests passed, for
-1,255 tests total, followed by ShellCheck. Arm64 image support remains available
-but its runtime behavior is outside the accepted migration scope and unverified.
+1,266 aggregate tests and 10 separate container-only archive tests passed, for
+1,276 tests total, followed by ShellCheck.
 
 Run the focused authoritative Python parser group without generating PKI seed
 state:

@@ -22,7 +22,7 @@ NAMESPACE=$(pki_expand_path "$NAMESPACE"); PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki};
 pki_validate_openssl_config_value 'PKI directory' "$PKI_DIR"
 if [[ -n $ROOT_PASS_FILE ]]; then ROOT_PASS_FILE=$(pki_expand_path "$ROOT_PASS_FILE"); pki_require_pass_file "$ROOT_PASS_FILE"; fi
 if [[ -n $INTERMEDIATE_PASS_FILE ]]; then INTERMEDIATE_PASS_FILE=$(pki_expand_path "$INTERMEDIATE_PASS_FILE"); pki_require_pass_file "$INTERMEDIATE_PASS_FILE"; fi
-pki_require_cmd openssl; pki_require_pki_dir
+pki_require_cmd openssl; pki_require_pki_dir; pki_prepare_control_state
 
 ROOT_LOCK=$(pki_root_operation_lock); INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock)
 STAGE_DIR=''; ROOT_BACKUP_DIR=''; ROOT_MUTATED=false
@@ -132,6 +132,7 @@ umask 077
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_require_no_unresolved_journal
+pki_reject_legacy_authorities
 [[ ! -e $(pki_active_issuer_manifest) && ! -L $(pki_active_issuer_manifest) ]] || \
   pki_die 'An active issuer exists; use platform-pki-ca-rollover instead of replacing the intermediate CA'
 BOOTSTRAP=$(pki_bootstrap_root_manifest)

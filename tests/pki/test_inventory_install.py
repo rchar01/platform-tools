@@ -107,6 +107,24 @@ def test_inventory_install_initial_noop_and_mode_normalization(tmp_path, process
     assert mode(destination) == 0o600
 
 
+def test_inventory_install_prepares_missing_legacy_control_state(tmp_path, process_runner, isolated_environment) -> None:
+    namespace, pki, private = setup_workspace(tmp_path, process_runner, isolated_environment)
+    shutil.rmtree(pki / "state")
+    shutil.rmtree(pki / "locks")
+    (pki / "root-ca").mkdir(mode=0o700)
+    (pki / "intermediate-ca").mkdir(mode=0o700)
+
+    result = run(process_runner, isolated_environment, namespace, private)
+
+    assert_result(result, 0)
+    assert (pki / "inventory/services.yml").read_bytes() == (private / "pki/services.yml").read_bytes()
+    for directory in ("locks", "state", "state/rollover", "state/rollovers", "state/generation-reservations"):
+        path = pki / directory
+        assert path.is_dir() and mode(path) == 0o700
+    assert {path.name for path in (pki / "locks").iterdir()} == {"lifecycle", "root", "intermediate", "inventory"}
+    assert all(mode(path) == 0o600 for path in (pki / "locks").iterdir())
+
+
 def test_inventory_install_source_identity_race_preserves_destination(tmp_path, process_runner, isolated_environment) -> None:
     namespace, pki, private = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)

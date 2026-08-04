@@ -529,9 +529,12 @@ pki_require_pki_dir() {
 
 pki_prepare_control_state() {
   pki_require_private_dir "$PKI_DIR" 'PKI directory'
+  pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
   local dir
   for dir in "$PKI_DIR/locks" "$PKI_DIR/state" "$PKI_DIR/state/rollover" "$PKI_DIR/state/rollovers" "$PKI_DIR/state/generation-reservations"; do
-    if [[ ! -e $dir && ! -L $dir ]]; then mkdir -m 700 -- "$dir" || pki_die "Cannot create PKI control directory: $dir"; fi
+    if [[ ! -e $dir && ! -L $dir ]]; then
+      mkdir -m 700 -- "$dir" 2>/dev/null || [[ -d $dir && ! -L $dir ]] || pki_die "Cannot create PKI control directory: $dir"
+    fi
     pki_require_private_dir "$dir" 'PKI control directory'
   done
 }
@@ -1035,12 +1038,26 @@ intermediate=$intermediate
 
 pki_detect_layout() {
   local legacy_any=false legacy_complete=false generation_any=false generation_complete=false
-  local active first second extra root_id intermediate_id path
+  local active authorities roots intermediates first second extra root_id intermediate_id path
   local -a generation_paths
-  [[ ! -e $PKI_DIR/root-ca && ! -e $PKI_DIR/intermediate-ca ]] || legacy_any=true
+  [[ ! -e $PKI_DIR/root-ca && ! -L $PKI_DIR/root-ca && ! -e $PKI_DIR/intermediate-ca && ! -L $PKI_DIR/intermediate-ca ]] || legacy_any=true
   [[ -d $PKI_DIR/root-ca && ! -L $PKI_DIR/root-ca && -d $PKI_DIR/intermediate-ca && ! -L $PKI_DIR/intermediate-ca ]] && legacy_complete=true
   active=$(pki_active_issuer_manifest)
-  generation_paths=("$active" "$(pki_bootstrap_root_manifest)" "$PKI_DIR/authorities/roots"/g* "$PKI_DIR/authorities/intermediates"/g*-i*)
+  authorities=$PKI_DIR/authorities
+  roots=$authorities/roots
+  intermediates=$authorities/intermediates
+  for path in "$authorities" "$roots" "$intermediates"; do
+    if [[ (-e $path || -L $path) && (! -d $path || -L $path) ]]; then
+      generation_any=true
+      break
+    fi
+  done
+  generation_paths=(
+    "$active"
+    "$(pki_bootstrap_root_manifest)"
+    "$roots"/* "$roots"/.[!.]* "$roots"/..?*
+    "$intermediates"/* "$intermediates"/.[!.]* "$intermediates"/..?*
+  )
   for path in "${generation_paths[@]}"; do
     [[ ! -e $path && ! -L $path ]] || { generation_any=true; break; }
   done
@@ -1061,6 +1078,45 @@ pki_detect_layout() {
   elif [[ $generation_complete == true && $legacy_any == false ]]; then printf '%s\n' generation
   elif [[ $legacy_any == false && $generation_any == false ]]; then printf '%s\n' empty
   else printf '%s\n' partial; fi
+}
+
+pki_die_legacy_migration_required() {
+  pki_die 'Legacy PKI state requires migration; create a fresh backup and follow platform-pki-ca-rollover status/migrate'
+}
+
+pki_require_generation_layout() {
+  local layout
+  pki_require_no_unresolved_journal
+  layout=$(pki_detect_layout)
+  case $layout in
+    generation) ;;
+    legacy) pki_die_legacy_migration_required ;;
+    empty) pki_die 'Generation-aware PKI state does not exist; create the root and intermediate authorities first' ;;
+    *) pki_die 'PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status' ;;
+  esac
+}
+
+pki_require_empty_authority_layout() {
+  local layout
+  layout=$(pki_detect_layout)
+  case $layout in
+    empty) ;;
+    legacy) pki_die_legacy_migration_required ;;
+    *) pki_die 'PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status' ;;
+  esac
+}
+
+pki_reject_legacy_authorities() {
+  local layout
+  layout=$(pki_detect_layout)
+  case $layout in
+    legacy) pki_die_legacy_migration_required ;;
+    partial)
+      if [[ -e $PKI_DIR/root-ca || -L $PKI_DIR/root-ca || -e $PKI_DIR/intermediate-ca || -L $PKI_DIR/intermediate-ca ]]; then
+        pki_die 'PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status'
+      fi
+      ;;
+  esac
 }
 
 pki_public_state_digest() {

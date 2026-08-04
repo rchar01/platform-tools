@@ -29,6 +29,7 @@ examples:
 footer: |-
   The namespace defaults to platform-infrastructure under the XDG
   configuration home. The PKI directory defaults to <namespace>/pki.
+  Legacy singleton CA state must be migrated before this command can run.
 
   Certificate status exit codes:
     0 all OK

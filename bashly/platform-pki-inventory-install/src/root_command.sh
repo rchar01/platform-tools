@@ -278,6 +278,7 @@ require_trusted_ancestors "$(dirname -- "$SOURCE")" 'Inventory source'
 require_source
 pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
 pki_require_pki_dir
+pki_prepare_control_state
 pki_require_cmd ln
 require_atomic_mv
 PKI_REAL=$(cd -- "$PKI_DIR" && pwd -P) || pki_die "Cannot resolve PKI directory: $PKI_DIR"

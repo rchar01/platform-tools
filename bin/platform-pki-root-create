@@ -43,6 +43,7 @@ root_command() {
   if [[ -n $ROOT_PASS_FILE ]]; then ROOT_PASS_FILE=$(pki_expand_path "$ROOT_PASS_FILE"); pki_require_pass_file "$ROOT_PASS_FILE"; fi
   pki_require_cmd openssl
   pki_require_pki_dir
+  pki_prepare_control_state
   pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
 
   ROOT_LOCK=$(pki_root_operation_lock)
@@ -109,6 +110,7 @@ root_command() {
     pki_die 'An active issuer exists; use platform-pki-ca-rollover instead of replacing the root CA'
   [[ ! -e $(pki_bootstrap_root_manifest) && ! -L $(pki_bootstrap_root_manifest) ]] || \
     pki_die 'A bootstrap root already exists; create its first intermediate or recover it'
+  pki_require_empty_authority_layout
   [[ $FORCE != true ]] || pki_die '--force cannot delete unproven root state; recover the journaled disposable transaction instead'
   ROOT_ID=$(pki_next_root_generation); ROOT_CA_DIR=$(pki_root_authority_dir "$ROOT_ID")
   RESERVATION=$(pki_generation_reservation "$ROOT_ID")
@@ -237,7 +239,7 @@ platform_pki_root_create_usage() {
     printf "  platform-pki-root-create --namespace /tmp/platform-pki-test --name \"Test Root\n  CA\" --org \"Test\" --country PL --allow-unencrypted-root-key\n"
     echo
 
-    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nThe lifetime defaults to PLATFORM_PKI_ROOT_DAYS or 3650 days.\nRoot keys are encrypted unless --allow-unencrypted-root-key is used.\nRoot generation IDs are allocated monotonically. A failed or interrupted\nbootstrap permanently abandons its reserved ID; a retry uses the next ID.\nPassphrase files must be mode 600 or stricter and have a first line of at\nleast 16 characters containing non-whitespace content.\n"
+    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nThe lifetime defaults to PLATFORM_PKI_ROOT_DAYS or 3650 days.\nRoot keys are encrypted unless --allow-unencrypted-root-key is used.\nRoot generation IDs are allocated monotonically. A failed or interrupted\nbootstrap permanently abandons its reserved ID; a retry uses the next ID.\nLegacy singleton CA state must be migrated before this command can run.\nPassphrase files must be mode 600 or stricter and have a first line of at\nleast 16 characters containing non-whitespace content.\n"
     echo
 
   fi

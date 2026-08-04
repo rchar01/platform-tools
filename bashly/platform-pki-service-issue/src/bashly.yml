@@ -45,3 +45,4 @@ footer: |-
   platform-pki-service-renew after initial issuance. Passphrase files must be
   mode 600 or stricter and have a first line of at least 16 characters
   containing non-whitespace content.
+  Legacy singleton CA state must be migrated before this command can run.

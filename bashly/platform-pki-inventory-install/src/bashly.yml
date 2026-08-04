@@ -25,3 +25,4 @@ footer: |-
   The source is <private-repo>/pki/services.yml. Relative repository paths
   resolve from the physical current directory. The destination is atomically
   installed as mode 600 and is never linked to the source.
+  Legacy layouts are accepted so inventory can be installed before migration.

@@ -385,6 +385,8 @@ if [[ -n $INTERMEDIATE_PASS_FILE ]]; then
   pki_require_pass_file "$INTERMEDIATE_PASS_FILE"
 fi
 pki_require_cmd openssl
+pki_require_pki_dir
+pki_prepare_control_state
 
 ROOT_CA_DIR=''
 INTERMEDIATE_CA_DIR=''
@@ -527,6 +529,7 @@ pki_acquire_operation_lock "$INTERMEDIATE_OPERATION_LOCK" 'intermediate CA opera
 INTERMEDIATE_OPERATION_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_OPERATION_LOCK" 'inventory operation'
 INVENTORY_OPERATION_LOCK_HELD=true
+pki_require_generation_layout
 pki_load_active_issuer_snapshot
 ROOT_CERT=$(pki_root_cert)
 INT_KEY=$(pki_intermediate_key)

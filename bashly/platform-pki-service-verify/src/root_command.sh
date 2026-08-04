@@ -27,6 +27,7 @@ PKI_DIR=$(pki_expand_path "$PKI_DIR")
 
 pki_require_cmd openssl
 pki_require_pki_dir
+pki_prepare_control_state
 pki_require_inventory
 ROOT_LOCK=$(pki_root_operation_lock)
 INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock)
@@ -46,6 +47,7 @@ umask 077
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
+pki_require_generation_layout
 SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/platform-pki-service-verify.XXXXXX") || pki_die 'Cannot create inventory snapshot directory'
 pki_load_active_issuer_snapshot
 pki_load_inventory_snapshot "$SNAPSHOT_DIR"

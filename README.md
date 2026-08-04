@@ -356,7 +356,10 @@ generations, with the active pair selected by a protected manifest. Generation
 reservations are monotonic: failed or interrupted bootstrap IDs remain
 permanently abandoned, and retries allocate the next root or intermediate ID.
 Existing singleton CA state is changed only through explicit, receipt-backed
-`platform-pki-ca-rollover migrate`. On generation-aware state, receipt-backed
+`platform-pki-ca-rollover migrate`. Inventory installation, protected backup,
+and rollover status/migration prepare missing private control directories for
+that workflow. Other PKI commands reject legacy state with migration guidance
+after acquiring persistent locks. On generation-aware state, receipt-backed
 `platform-pki-ca-rollover prepare --type intermediate|root` creates immutable
 candidate generations without changing the active issuer. Root preparation
 also requires the reviewed `pki/trust-consumers.yml` checklist from the private
