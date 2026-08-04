@@ -4,6 +4,14 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v2.0.0 - 2026-08-04
+
+- This release changes PKI initialization incompatibly. `platform-pki-init`
+  creates only `inventory/services.yml.example`; install reviewed active
+  inventory from the private repository with `platform-pki-inventory-install`.
+- Existing 1.x singleton CA layouts must take a protected backup and run the
+  explicit receipt-backed migration before normal CA or service operations.
+  Migration preserves existing keys, certificates, and active issuer identity.
 - All maintained behavior and integration tests now use pytest orchestration while preserving real Bash commands, external tools, PTYs, inherited descriptors, archive operations, and SSH subprocess boundaries. The canonical container check runs the full aggregate once.
 - Added `platform-pki-inventory-install` for strict, atomic mode-600 installation from `../platform-private/pki/services.yml`, with `--private-repo` override and guarded source/destination handling.
 - PKI inventory now has one strict whole-file schema and one-snapshot consumption across issuance, renewal, verification, expiry listing, certificate printing, and Ansible export.
@@ -18,6 +26,9 @@ This file gives a short, release-oriented view of what changed between versions.
 - Intermediate and service certificate publication now enforces actual ASN.1 validity against the issuer with a one-day default safety margin.
 - Inventory publication prefers `RENAME_EXCHANGE` and supports a guarded rename fallback under cooperative same-UID locks, including rootless Podman filesystems.
 - The development toolbox now uses a reproducible Debian 13 snapshot on `amd64` and `arm64`, with a locked Bashly bundle, pytest, and checksum-verified ShellCheck and shfmt binaries.
+- Rollover activation, acknowledgement, lifecycle rollback, retirement, and
+  completion remain unavailable in this release. Candidate preparation does not
+  change the active issuer.
 
 ## v1.4.0 - 2026-07-27
 

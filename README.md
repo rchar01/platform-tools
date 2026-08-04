@@ -351,6 +351,14 @@ example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
 
+Version 2 changes initialization and CA state incompatibly. Before using normal
+CA or service commands with an existing 1.x PKI, install the reviewed private
+inventory, create a fresh protected backup, inspect rollover status, and run the
+explicit receipt-backed migration documented in
+[`docs/pki-openssl.md`](docs/pki-openssl.md#migrate-legacy-ca-state). Migration
+preserves existing keys, certificates, and active issuer identity; it does not
+rotate the CA.
+
 Fresh CA state begins with immutable root `g1` and intermediate `g1-i1`
 generations, with the active pair selected by a protected manifest. Generation
 reservations are monotonic: failed or interrupted bootstrap IDs remain

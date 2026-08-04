@@ -7,6 +7,22 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-04
+
+### Compatibility
+
+- **Breaking:** `platform-pki-init` now creates only
+  `inventory/services.yml.example`; it no longer creates active inventory.
+  Install reviewed private inventory explicitly with
+  `platform-pki-inventory-install` before CA and service operations.
+- Existing 1.x singleton CA layouts must be migrated with a fresh protected
+  backup receipt and `platform-pki-ca-rollover migrate`. Migration preserves
+  existing keys, certificates, and active issuer identity. Normal CA and service
+  commands reject legacy or mixed layouts until migration completes.
+- Rollover candidate preparation does not activate a candidate. Acknowledgement,
+  activation, lifecycle rollback, retirement, and completion remain unavailable
+  pending immutable export and deployment-evidence support.
+
 ### Added
 
 - Added `platform-pki-inventory-install` with exact `../platform-private` default source resolution, `--private-repo` override, strict source and destination identity checks, exact-byte staged validation, ordered root/intermediate/inventory locking, atomic mode-600 publication, safe normalization, and no-op reporting.
