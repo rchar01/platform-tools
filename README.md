@@ -47,6 +47,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-print-cert` | Print readable certificate details for a service. |
 | `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
 | `platform-pki-backup` | Create encrypted or explicitly plain backups of PKI state. |
+| `platform-pki-custody-report` | Report managed PKI encryption, custody, and backup-policy findings without decrypting keys. |
 | `platform-pki-ca-rollover` | Inspect generation state; migrate legacy state; prepare or recover rollover candidates. |
 | `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
@@ -86,6 +87,8 @@ PKI helpers require:
 - GNU `mv` with `--no-copy` and `--update=none-fail`; inventory publication prefers exchange and supports a guarded rename fallback under cooperative same-UID locks
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
+- `python3` for byte-bounded `platform-pki-custody-report` header and receipt inspection
+- optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
 SSH and Proxmox helpers require:
 
@@ -340,6 +343,7 @@ platform-pki-intermediate-create --name "Platform Example Intermediate CA" --org
 platform-pki-service-issue platform-example
 platform-pki-service-verify platform-example
 platform-pki-list-expiry
+platform-pki-custody-report
 ```
 
 PKI initialization paths must be absolute, non-root, and symlink-free.
@@ -393,6 +397,14 @@ Service issuance refuses an existing certificate, reuses an existing private
 key unless `--rotate-key` is requested, and transactionally publishes service
 artifacts with the intermediate CA database only after successful signing and
 verification.
+
+`platform-pki-custody-report --format text|json` classifies managed root,
+intermediate, service, export, backup, inventory, CA-database, legacy, and
+public-artifact roles. It inspects metadata, storage ancestry, `age` headers,
+and only the first PEM header line of validated private-key files. It reports
+offline custody, recipient separation, offsite copies, restore rehearsal, and
+target-host leaf custody as `unknown` because filesystem structure cannot prove
+those operational controls.
 
 Service renewal requires an existing private key, reuses it unless
 `--rotate-key` is requested, and archives previous service material while

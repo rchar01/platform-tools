@@ -7,6 +7,17 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added `platform-pki-custody-report` with deterministic text and schema-1 JSON
+  output for managed PKI encryption, custody, backup policy, unsafe metadata,
+  unexpected keys, controller/export leaf-key copies, backup envelopes and
+  receipts, and optional LUKS ancestry evidence. It uses byte-bounded,
+  descriptor- and identity-checked PEM, `age`, and receipt reads, reports
+  headers and storage ancestry as evidence rather than encryption proof, never
+  decrypts or parses private keys, and reports non-filesystem custody controls
+  as unknown.
+
 ## [2.0.0] - 2026-08-04
 
 ### Compatibility

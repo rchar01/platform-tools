@@ -466,6 +466,67 @@ with exports created by earlier versions.
 Use `platform-pki-export-ansible --help` for generated option details and
 `platform-pki-export-ansible --version` for the installed version.
 
+## Report Encryption And Custody
+
+Inspect the managed PKI layout without decrypting or parsing private keys:
+
+```bash
+platform-pki-custody-report
+```
+
+Use schema-1 JSON for automation:
+
+```bash
+platform-pki-custody-report --format json
+```
+
+The report classifies root and intermediate authorities, controller service
+keys, Ansible-export key copies, backups, private inventory, CA databases,
+legacy quarantine, and public artifacts. Each material record states observed
+encryption evidence, recommended custody, backup policy, and structural status. Findings
+cover unconfirmed CA-key encryption, controller leaf keys, duplicate export
+keys, plaintext or malformed backups, missing or unsafe receipts, unsafe file
+metadata, and unexpected `*.key` files. Block-device ancestry is reported
+separately as evidence and does not by itself create an encryption finding.
+
+The command acquires the standard lifecycle, root, intermediate, inventory, and
+export locks and rejects unresolved recovery journals. Like other operationally
+read-only PKI commands, it may prepare missing standard control directories and
+lock files; it does not modify keys, certificates, databases, inventory,
+exports, or backups.
+
+For validated private-key files, the command reads only the first PEM header
+line. `BEGIN ENCRYPTED PRIVATE KEY` is reported as
+`encrypted-pkcs8-header`, `BEGIN PRIVATE KEY` as
+`plaintext-pkcs8-header`, and any legacy, unreadable, or unrecognized envelope
+as `unknown` or `unreadable`. These values are header evidence, not
+cryptographic validation. The command never asks for a passphrase, invokes
+OpenSSL on a private key, decrypts, hashes, copies, or prints key content. It
+similarly reports the public first-line `age-encryption.org/v1` marker as
+`age-v1-header` rather than claiming successful backup decryption.
+Header inspection uses a descriptor-bound Python byte reader, stops at the
+first newline or byte 257, rejects NUL bytes, and reports lines longer than 256
+bytes as findings. Receipt parsing reads at most 65,537 bytes from the verified
+descriptor, rejects content above 64 KiB, and validates the exact schema-2
+field set plus the bound archive path, device, inode, size, mode, and owner. It
+does not hash the archive payload. Visible and hidden backup entries are both
+inspected, and orphan receipts are reported.
+
+When available, util-linux `findmnt` and `lsblk` report whether the PKI mount's
+block-device ancestry includes `crypto_LUKS`. The evidence values are
+`luks-ancestor`, `no-luks-ancestor`, and `unknown`; absence of a LUKS ancestor
+does not claim absence of native filesystem or directory encryption. Overlay,
+network, unavailable-command, and unsupported storage stacks are reported as
+`unknown`. A recognized header or LUKS ancestor does not prove recipient
+custody, archive recoverability, or protection while mounted.
+
+Operational controls that cannot be established from local structure remain
+explicitly `unknown`: CA-key cryptographic validation, backup decryption and
+archive-digest validation, offline CA custody, backup-recipient separation, an
+offsite backup copy, isolated restore rehearsal, and target-host leaf custody.
+Exit status is 0 when there are no structural findings, 2 when findings exist,
+and 1 for parser, configuration, or unsafe-layout errors.
+
 ## Back Up PKI State
 
 Backups include the full PKI working directory, including CA private keys, service private keys, issued certificates, CSRs, CA database files, inventory, and exports. When the backup output directory is inside the PKI directory, it is excluded from the archive to avoid recursive backups.

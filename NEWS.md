@@ -4,6 +4,11 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki-custody-report` with deterministic text and JSON reports
+  for managed CA, leaf-key, export, backup, inventory, and legacy custody. The
+  command detects structural findings without decrypting or parsing private
+  keys and keeps unverifiable operational controls explicitly `unknown`.
+
 ## v2.0.0 - 2026-08-04
 
 - This release changes PKI initialization incompatibly. `platform-pki-init`

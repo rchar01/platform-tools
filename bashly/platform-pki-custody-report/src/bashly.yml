@@ -1,0 +1,32 @@
+name: platform-pki-custody-report
+help: Report PKI encryption, custody, and backup-policy findings
+version: platform-pki-custody-report <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --format
+  arg: value
+  help: Report format
+  default: text
+  validate: format
+
+examples:
+- platform-pki-custody-report
+- platform-pki-custody-report --format json
+
+footer: |-
+  The report inspects managed PKI paths, file metadata, storage ancestry, age
+  headers, and only the first PEM header line of validated private-key files.
+  It never decrypts, parses, hashes, copies, or prints private-key content.
+
+  Report exit codes:
+    0 no structural custody findings
+    1 parser, configuration, or unsafe-layout error
+    2 one or more custody or encryption findings
