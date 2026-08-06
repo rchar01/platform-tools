@@ -4,6 +4,10 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- The maintained test aggregate now runs non-rollover modules with two bounded
+  Make jobs before running the four-worker PKI rollover suite alone. Container
+  runs forward `TEST_MAKE_JOBS` and `PKI_PYTEST_WORKERS`, each bounded from 1
+  through 4, for reproducible resource tuning and serial diagnostics.
 - Documented the proposed production GitLab 18.11.3 Generic Package exchange and
   the development-only direct SSH/SFTP registry migration design/manual handoff
   for host-local CSR artifacts. These documents add no network transport,

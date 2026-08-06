@@ -59,6 +59,13 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decrypts or parses private keys, and reports non-filesystem custody controls
   as unknown.
 
+### Changed
+
+- Changed `make test` to run non-rollover targets with a bounded two-job Make
+  pool, then run the existing four-worker PKI rollover suite behind an explicit
+  phase barrier. `scripts/in-container` now forwards `TEST_MAKE_JOBS` and
+  `PKI_PYTEST_WORKERS`; both controls accept values from 1 through 4.
+
 ## [2.0.0] - 2026-08-04
 
 ### Compatibility

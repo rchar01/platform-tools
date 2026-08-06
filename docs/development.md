@@ -38,6 +38,23 @@ pinned image, runs static and generated checks, executes the Python-only
 ShellCheck. Do not run a separate full `make test` immediately beforehand unless
 an intentional host-versus-container comparison is required.
 
+The aggregate runs all non-rollover targets included by `make test` with two
+bounded Make jobs by default, waits for them to finish, then runs the
+durability-heavy rollover suite alone with four pytest workers. The archive
+smoke remains a separate container-only phase after the aggregate.
+`scripts/in-container` forwards both settings so host-side overrides affect the
+one-shot container:
+
+```bash
+make container-check TEST_MAKE_JOBS=1
+make container-check TEST_MAKE_JOBS=4 PKI_PYTEST_WORKERS=2
+```
+
+Both variables accept integers from 1 through 4. Use `TEST_MAKE_JOBS=1` for
+serial non-rollover ordering diagnostics. Do not use unbounded Make jobs or
+pytest `-n auto`; the test harness supervises real process trees and the PKI
+suites perform filesystem durability operations.
+
 ## Generated Bash Tools
 
 Bashly-backed command source lives under `bashly/<tool>/`. The corresponding
@@ -128,9 +145,10 @@ python3 -m pytest -m pki tests/pki/test_ca_rollover_*.py
 ```
 
 The first target routes to the bounded parallel target, so `make test` executes
-the suite exactly once with four workers by default. The development container
-pins `pytest-xdist`; use the direct serial target for ordering diagnostics or
-override the bounded worker count from 1 through 4:
+the suite exactly once, after the non-rollover Make pool, with four workers by
+default. The development container pins `pytest-xdist`; use the direct serial
+target for ordering diagnostics or override the bounded worker count from 1
+through 4:
 
 ```bash
 make test-pki-ca-rollover PKI_PYTEST_WORKERS=2

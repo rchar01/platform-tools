@@ -36,6 +36,7 @@
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
 - All maintained tests are pytest-orchestrated. They must preserve real generated commands, external tools, executable fakes, PTYs, inherited descriptors, and SSH transport as subprocess boundaries rather than replacing them with in-process mocks.
 - Run focused Make targets or pytest modules while developing. Reserve `make container-check`, which owns one complete `make test` execution in the pinned image, for final acceptance; do not run a separate full `make test` immediately before it.
+- `make test` runs non-rollover targets with two bounded Make jobs, then runs the rollover suite alone with four pytest workers. `TEST_MAKE_JOBS` and `PKI_PYTEST_WORKERS` accept 1 through 4 and are forwarded by `scripts/in-container`; use bounded values rather than `-j` or `-n auto`.
 - Run `make test-python-infrastructure` after changing pytest fixtures or process helpers. Keep subprocesses argv-only with `shell=False`, isolated process groups, bounded descendant cleanup, and shell-style signal statuses. PTY and escaped-descendant supervision requires Linux procfs and pidfds.
 - Run `make test-pki-ca-rollover` after changing authoritative rollover scenarios; it uses four bounded pytest workers by default. Use `make test-python-pki-rollover` for explicit serial diagnostics.
 - Run `make test-pki-ca-rollover-parser` for the authoritative Python parser contract.

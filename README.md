@@ -137,6 +137,21 @@ This is the canonical final acceptance command and runs the complete pytest
 aggregate once. Do not run `make test` immediately before it unless a separate
 host-environment comparison is intentional.
 
+The aggregate runs non-rollover test targets with two bounded Make jobs, then
+runs the durability-heavy rollover suite alone with its own four pytest workers.
+Set `TEST_MAKE_JOBS` from 1 through 4 to adjust the first pool; `1` preserves
+serial non-rollover execution. Both worker settings are forwarded into the
+one-shot container:
+
+```bash
+make container-check TEST_MAKE_JOBS=1
+make test TEST_MAKE_JOBS=4
+```
+
+The two pools never overlap. Avoid unbounded `make -j` or pytest `-n auto` runs;
+the subprocess harness and PKI tests perform real process supervision and
+filesystem work.
+
 Run only the generic pytest harness contract tests:
 
 ```bash
@@ -149,9 +164,11 @@ Run the authoritative PKI rollover pytest scenarios:
 make test-pki-ca-rollover
 ```
 
-The authoritative target uses four workers by default. Run the serial diagnostic
-target directly when comparing ordering or timing. The pinned development image
-includes pytest-xdist; host-only runs must provide it separately:
+Within `make test`, the authoritative rollover target runs only after the
+non-rollover pool and uses four workers by default. Invoking the rollover target
+directly does not run that pool. Run the serial diagnostic target directly when
+comparing ordering or timing. The pinned development image includes pytest-xdist;
+host-only runs must provide it separately:
 
 ```bash
 make test-python-pki-rollover
