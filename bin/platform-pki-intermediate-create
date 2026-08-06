@@ -673,7 +673,7 @@ parse_requirements() {
 }
 
 initialize() {
-  declare -g version="platform-pki-intermediate-create 2.0.0"
+  declare -g version="platform-pki-intermediate-create 2.1.0"
   set -euo pipefail
 
   enable_auto_colors

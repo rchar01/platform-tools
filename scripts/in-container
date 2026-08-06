@@ -7,7 +7,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-image=${PLATFORM_TOOLS_DEV_IMAGE:-localhost/platform-tools-dev:2.0.0}
+image=${PLATFORM_TOOLS_DEV_IMAGE:-localhost/platform-tools-dev:2.1.0}
 test_make_jobs=${TEST_MAKE_JOBS-2}
 pki_pytest_workers=${PKI_PYTEST_WORKERS-4}
 

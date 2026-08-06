@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v2.1.0 - 2026-08-06
+
 - The maintained test aggregate now runs non-rollover modules with two bounded
   Make jobs before running the four-worker PKI rollover suite alone. Container
   runs forward `TEST_MAKE_JOBS` and `PKI_PYTEST_WORKERS`, each bounded from 1
@@ -41,6 +43,9 @@ This file gives a short, release-oriented view of what changed between versions.
   for managed CA, leaf-key, export, backup, inventory, and legacy custody. The
   command detects structural findings without decrypting or parsing private
   keys and keeps unverifiable operational controls explicitly `unknown`.
+- Schema-2 CSR trust rotation remains operationally prohibited while any
+  request or candidate is pending. This release does not implement the required
+  empty-pending-state rotation gate.
 
 ## v2.0.0 - 2026-08-04
 

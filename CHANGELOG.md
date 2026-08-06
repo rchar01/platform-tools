@@ -7,6 +7,8 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-06
+
 ### Added
 
 - Added production-design documentation for exchanging public host-local PKI
@@ -65,6 +67,12 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pool, then run the existing four-worker PKI rollover suite behind an explicit
   phase barrier. `scripts/in-container` now forwards `TEST_MAKE_JOBS` and
   `PKI_PYTEST_WORKERS`; both controls accept values from 1 through 4.
+
+### Security
+
+- Kept schema-2 CSR trust rotation operationally prohibited while any request
+  or candidate is pending. The required empty-pending-state gate is not yet
+  implemented by `platform-pki-csr-trust-install`.
 
 ## [2.0.0] - 2026-08-04
 
