@@ -115,7 +115,7 @@ platform_pki_service_verify_usage() {
     printf "  platform-pki-service-verify platform-example --min-days 60\n"
     echo
 
-    printf "Verifies chain trust, private-key match, CA:false, serverAuth, inventory\nSANs, and remaining validity. The PKI directory defaults to <namespace>/pki.\nInventory entries with key_custody: host-local fail closed until signer-side\ncandidate verification is implemented.\nLegacy singleton CA state must be migrated before this command can run.\n"
+    printf "Verifies chain trust, private-key match, CA:false, serverAuth, inventory\nSANs, and remaining validity. The PKI directory defaults to <namespace>/pki.\nInventory entries with key_custody: host-local fail closed here; use\nplatform-pki-csr-candidate verify with an exact request ID.\nLegacy singleton CA state must be migrated before this command can run.\n"
     echo
 
   fi

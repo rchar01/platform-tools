@@ -1,0 +1,72 @@
+name: platform-pki-csr-candidate
+help: Verify, finalize, or abandon authenticated CSR candidate evidence
+version: platform-pki-csr-candidate <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+commands:
+- name: verify
+  help: Verify one exact candidate and report accepted historical state
+  args:
+  - &service
+    name: service
+    help: Exact inventory service
+    required: true
+  flags:
+  - &request_id
+    long: --request-id
+    arg: id
+    help: Exact 32-character lowercase hexadecimal CSR request ID
+    required: true
+    validate: not_empty
+  - long: --format
+    arg: format
+    help: Output format
+    default: text
+    allowed: [text, json]
+  - &namespace
+    long: --namespace
+    arg: path
+    help: Platform namespace root
+    validate: not_empty
+  - &pki_dir
+    long: --pki-dir
+    arg: path
+    help: PKI directory
+    validate: not_empty
+
+- name: finalize
+  help: Accept authenticated activation and validation evidence
+  args:
+  - *service
+  flags: &decision_flags
+  - *request_id
+  - long: --artifact-manifest-sha256
+    arg: digest
+    help: Exact lowercase SHA-256 digest of the export artifact manifest
+    required: true
+    validate: not_empty
+  - long: --evidence-file
+    arg: path
+    help: Exact canonical deployment evidence record
+    required: true
+    validate: not_empty
+  - long: --evidence-signature
+    arg: path
+    help: Detached OpenSSH deployment evidence signature
+    required: true
+    validate: not_empty
+  - long: --yes
+    help: Confirm the exact decision without a TTY
+  - *namespace
+  - *pki_dir
+
+- name: abandon
+  help: Record authenticated non-activation or rollback evidence
+  args:
+  - *service
+  flags: *decision_flags
+
+footer: |-
+  Verification reports accepted historical evidence and never claims current
+  live state. Finalization verifies bounded-time authenticated evidence but
+  performs no deployment. Abandonment is not revocation. Candidate, response,
+  replay, signing transaction, export, managed keys, and managed exports remain.

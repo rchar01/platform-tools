@@ -9,11 +9,12 @@ migration, or key cleanup.
 `platform-tools` implements reviewed trust installation, canonical signed
 request and approval validation, authenticated P-384 CSR issue/migration/renew,
 permanent replay state, certificate-only pending candidates, signed responses,
-transactional CA publication, and deterministic signer recovery. It does not
-implement target request collection, signer-side candidate selection or
-verification, deployment evidence, activation, abandonment, or key cleanup.
-Those downstream and lifecycle operations remain blocked by
-[Open Protocol Gate](#open-protocol-gate).
+transactional CA publication, deterministic signer recovery, exact immutable
+certificate-only export publication, and authenticated candidate evidence
+verification/finalization/abandonment. It does not implement target request
+collection, implicit/current candidate selection, live deployment or discovery,
+service restart, revocation, or key cleanup. Those operations belong to
+`platform-config` and remain separately gated from live execution.
 
 The first downstream pilot is the dev Zot registry. Other services follow only
 after its request, signing, activation, validation, rollback, and evidence path
@@ -23,8 +24,8 @@ passes this contract.
 
 | Owner | Responsibility |
 | --- | --- |
-| `platform-tools` | Validate inventory and authenticated requests; enforce replay and candidate state; sign with the active intermediate; transactionally update CA state; publish authenticated certificate-only responses; never receive a host leaf key. |
-| `platform-config` | Generate and retain the destination key; build and authenticate the request; fetch only public request material; verify and activate a response; reload, validate, and roll back the service. |
+| `platform-tools` | Validate inventory and authenticated requests; enforce replay and candidate state; sign with the active intermediate; transactionally update CA state; publish authenticated certificate-only responses; verify deployment evidence; record immutable outcomes and accepted historical pointers; never receive a host leaf key. |
+| `platform-config` | Generate and retain the destination key; build and authenticate the request; fetch only public request material; verify and activate one digest-pinned response; reload, validate, roll back, and return authenticated evidence. |
 | `platform-private` | Store reviewed non-secret service, environment, target, identity, profile, trust-key, deployment, and validation policy. It stores no generated key, CSR, certificate, signature, or live exchange bundle. |
 | Outside-Git state | Hold CA state, trusted signing identities, requests, responses, replay/candidate state, deployment evidence, target keys, and target pending/active/rollback state. |
 
@@ -92,15 +93,15 @@ The installed trust contract freezes OpenSSH `ssh-keygen -Y` detached Ed25519
 signatures, the request, approval, and response namespaces, request and
 approval timing limits, exact canonical request/approval/response schemas,
 immutable signer response paths, and no automatic replay/candidate deletion.
-Collection and deployment evidence, activation, abandonment, and rollback holds
-remain future lifecycle contracts.
+Schema-2 deployment evidence, signer-side finalization/abandonment, and rollback
+holds are now frozen. Target-side collection and live activation remain outside
+this repository.
 
 ## Platform-Tools Prerequisite
 
-The released trust bootstrap reads exactly `policy`,
-`requesters.allowed_signers`, `approvers.allowed_signers`, and
-`responses.allowed_signers` from `<private-repo>/pki/csr-trust` and atomically
-installs their validated public contents under
+The trust bootstrap accepts the exact schema-1 four-file set or the exact
+schema-2 five-file set that adds `deployers.allowed_signers` from
+`<private-repo>/pki/csr-trust`, and atomically installs validated public contents under
 `<pki-dir>/inventory/csr-trust`. Allowed-signer records contain only a unique
 principal, `ssh-ed25519`, and a valid public-key payload; the policy pins exactly
 one approver and response principal. The exact policy schema and safety rules
@@ -140,6 +141,142 @@ The response is an immutable certificate-only artifact containing the leaf,
 chain, response manifest, and response signature. It contains no leaf key, CA
 key, passphrase, private inventory snapshot, or mutable Ansible export.
 
+`platform-pki-certificate-export publish SERVICE --request-id ID` bridges one
+explicit pending response into
+`export/certificates/v1/artifacts/<service>/<request-id>/`. It validates the
+exact source trees and the original signing transaction's retained response
+trust snapshot, then publishes only `artifact`, `tls.crt`, `ca-chain.crt`,
+`fullchain.crt`, `response`, and `response.sig`. The artifact states
+`candidate_state=pending` and `deployment_state=unfinalized` and has no
+publication timestamp.
+
+Downstream automation must pin the reported artifact-manifest digest and call
+`platform-pki-certificate-export resolve` with the exact service, request ID,
+and digest. The resolver never scans or infers `current` or `latest`; its result
+is not deployment evidence and does not authorize activation.
+
+## Approved Registry Pilot Decisions
+
+The public implementation must expose these as strict reviewed inputs rather
+than silently selecting alternatives:
+
+| Decision | Registry pilot value |
+| --- | --- |
+| Request and deployment signer | The target's pinned Ed25519 SSH host key, used under separate request and deployment namespaces |
+| Target signer path | `/etc/ssh/ssh_host_ed25519_key` on `dev-registry-01` |
+| Minimum rollback hold | 1209600 seconds (14 days) |
+| Local validation | Strict Zot health and served-certificate validation on `dev-registry-01` |
+| Real-client validation boundary | Strict TLS and read-only OCI validation from `dev-registry-runner-01` |
+
+Using one physical host key does not merge protocol authority. The request and
+deployment signatures use different namespaces and separately reviewed
+`requesters.allowed_signers` and `deployers.allowed_signers` files. The private
+host key remains on `dev-registry-01` and is never copied to the controller.
+
+## Target State Contract
+
+The coding agent must implement the registry pilot with these ownership
+boundaries. Equivalent paths require a reviewed handoff update before coding;
+they must not be chosen implicitly by an Ansible role.
+
+```text
+/etc/zot/
+├── tls-pending/<request-id>/
+│   ├── tls.key
+│   ├── tls.csr
+│   ├── request
+│   └── request.sig
+└── tls-versions/<request-id>/
+    ├── tls.key
+    ├── tls.csr
+    ├── tls.crt
+    ├── ca-chain.crt
+    ├── fullchain.crt
+    ├── response
+    ├── response.sig
+    └── artifact
+
+/var/lib/platform-config/pki/host-local/registry-dev/
+├── lock
+├── active
+├── rollback
+├── activation-journal
+├── validation-boundary
+└── evidence/<request-id>/
+    ├── deployment
+    ├── deployment.sig
+    └── validation-result
+```
+
+All state directories are root-owned mode `700`. Private keys, lock files,
+journals, pointer records, request records, signatures, and evidence files are
+mode `600` and singly linked. Public certificate files may be mode `600` or
+`644`, but the implementation must choose one mode and verify it exactly.
+Symlinks, hard-linked files, unexpected entries, unsafe ancestors, and
+cross-filesystem publication are rejected.
+
+`tls-pending/<request-id>` is created under the same parent filesystem as
+`tls-versions`. Activation publishes the complete version with a no-copy,
+no-clobber rename. Zot configuration points to the exact versioned certificate
+and key paths; it does not use `latest`, a mutable certificate directory, or an
+independently switched pair of symlinks. The strict `active` and `rollback`
+records bind request ID, artifact digest, certificate/SPKI digests, version
+path identity, activation time, and rollback deadline. They are records, not
+filesystem inference.
+
+The activation journal is written and fsynced before changing Zot
+configuration or service state. It binds exact pre-state, staged-state, target
+version, prior active record, rollback record, Zot configuration identity, and
+the only allowed recovery action. Recovery never changes CA state and never
+selects another artifact.
+
+## Controller Exchange Contract
+
+The controller uses one explicit owner-only outside-Git root supplied by
+`PLATFORM_CONFIG_PKI_EXCHANGE_ROOT`. It must be mounted read-write into the
+development container as a narrow dedicated mount; the complete
+`~/.config/platform-infrastructure/` tree remains read-only.
+
+```text
+<exchange-root>/registry-dev/<request-id>/
+├── request/
+│   ├── tls.csr
+│   ├── request
+│   ├── request.sig
+│   └── collection-receipt
+├── response/
+│   ├── artifact
+│   ├── tls.crt
+│   ├── ca-chain.crt
+│   ├── fullchain.crt
+│   ├── response
+│   └── response.sig
+└── evidence/
+    ├── deployment
+    ├── deployment.sig
+    ├── validation-boundary
+    └── validation-result
+```
+
+The controller never receives `tls.key`. Collection must use an explicit
+allowlist of the four public request files; activation transfer must use the
+exact six-file certificate export. `fetch`, `slurp`, registered output, facts,
+debug, diffs, lookups, controller temporary files, and exception output must
+never handle the private key.
+
+The request run receives the exact reviewed inventory digest and response
+principal as non-secret inputs. It does not copy the private inventory to the
+target. The activation run receives an exact service, request ID, artifact
+manifest digest, and response-trust snapshot; it never scans for a newer
+response.
+
+Response and deployment trust remain frozen from request collection through
+finalization. A pending run must fail if the reviewed trust snapshot identity
+changes. Trust rotation is a separate operation: publish and review the new
+public trust, install it atomically, update target/controller pins, and begin
+only new requests. Historical signer verification uses transaction-retained
+trust; no public key supplied by an exchange bundle becomes trusted.
+
 ## Platform-Config Request Run
 
 The request run is an explicit Ansible phase and never activates or restarts a
@@ -155,6 +292,13 @@ service.
    collection inputs into an owner-only outside-Git controller directory.
 5. Verify the host signature through the authenticated inventory binding and
    write the collection receipt. End with the request pending.
+
+For `registry-dev`, require `operation=migrate` while the managed identity is
+active. The request uses `target=requester_principal=dev-registry-01`,
+`profile=server-p384-sha384-v1`, the exact reviewed inventory digest, the
+current managed certificate digest, and the policy response principal. Generate
+the request ID and nonce from the kernel CSPRNG. Request validity must not
+exceed the signer policy.
 
 `community.crypto` is not currently installed. The initial implementation uses
 `ansible.builtin.command` with `argv` for OpenSSL and SSH-signing operations. It
@@ -183,6 +327,34 @@ live-change authorization.
    service health, retain the journal/evidence, and fail closed.
 6. Return authenticated deployment evidence. Do not delete the old pair or any
    controller/export key as part of activation.
+
+The registry activation run must additionally:
+
+1. Resolve only the operator-supplied service, request ID, and artifact digest.
+2. Verify `response.sig` under `platform-pki-csr-response-v1` against the frozen
+   reviewed response trust before copying any version into active paths.
+3. Stop before mutation unless the pending key, CSR, response, artifact,
+   certificate profile, chain, SANs, validity, and all recorded digests agree.
+4. Preserve the exact prior Zot configuration and active identity as rollback
+   state before selecting the new version.
+5. Validate the restarted service locally, then validate strict TLS and a
+   read-only OCI request from `dev-registry-runner-01` with the exact reviewed
+   trust bundle. Insecure TLS flags are prohibited acceptance evidence.
+6. Record served leaf and intermediate digests from the real-client boundary.
+7. Build the exact deployment schema documented in `docs/pki-openssl.md`, set a
+   rollback deadline at least 1209600 seconds after evidence creation, and sign
+   it with `/etc/ssh/ssh_host_ed25519_key` under
+   `platform-pki-csr-deployment-v1`.
+8. Fetch only deployment evidence, its detached signature, and the canonical
+   validation files into the controller exchange root.
+
+The canonical validation-boundary file is retained alongside the evidence and
+its SHA-256 digest must equal `validation_boundary_sha256` in the reviewed PKI
+inventory. It binds `registry-dev`, `dev-registry-01`,
+`dev-registry-runner-01`, `https://registry.dev/v2/`, the local Zot check, strict
+TLS verification, served leaf/intermediate inspection, and read-only OCI API
+validation. The coding agent must define and test one exact ordered schema; it
+must not hash an ad hoc Ansible result.
 
 Check mode creates no key, CSR, nonce, request, certificate, pointer, restart,
 or consumed state. Repeating either successful phase is idempotent. A conflicting
@@ -228,19 +400,33 @@ secure erasure.
 - Run `make verify`, syntax/check mode for both phases, and the separately
   authorized `make smoke-registry ENV=dev` acceptance.
 
-## Open Protocol Gate
+The default test graph must include a static safety test that rejects any
+private-key transfer/logging primitive and validates the two-playbook
+separation. An opt-in disposable Rocky/Zot scenario must cover request,
+activation, interruption, exact rollback, evidence generation, check-mode
+non-mutation, and idempotency before a real VM is used.
 
-`platform-config` activation remains blocked until released contracts fix and
-test:
+## Coding And Live Gates
 
-1. Collection and deployment-evidence schemas and target-side immutable
-   exchange paths.
-2. Separately authenticated trust replacement and revocation procedures.
-3. Replay/evidence retention, rollback hold, and abandonment policy beyond the
-   frozen rule that replay and candidate records are never deleted
-   automatically.
-4. Candidate transition, activation, and deployment-finalization recovery.
+Public `platform-config` coding may implement this contract without changing
+real inventory or contacting a live host. It must use separate explicit request
+and activation playbooks; neither is imported by `site.yml` or normal registry
+convergence.
+
+The coding agent must not change `platform-private`, set
+`key_custody: host-local`, remove managed registry inputs, enable strict client
+validation in real inventory, or run a live request. Those changes require a
+separate reviewed private-data handoff and authorization after public tests pass.
+
+Live activation remains blocked until reviewed schema-2 public trust, the exact
+validation-boundary record and digest, the 14-day rollback policy, the narrow
+controller exchange mount, and target/client syntax and check-mode evidence are
+present. Registry request generation, signing, activation/restart, mutating
+client tests, rollback rehearsal, finalization, quarantine, and cleanup each
+require separate authorization.
 
 Do not substitute a leaf-key self-signature, a digest-only manifest, an
 authenticated transport session, or a public key supplied with a request for
-these durable trust bindings.
+these durable trust bindings. Signer evidence, replay, candidates,
+transactions, outcomes, and immutable exports are never deleted by
+`platform-config`.

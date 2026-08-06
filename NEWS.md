@@ -13,13 +13,21 @@ This file gives a short, release-oriented view of what changed between versions.
   state transactionally, and publishes certificate-only pending candidates and
   signed responses. `platform-pki-csr-recover` deterministically rolls back
   exact pre-commit publication or resumes post-commit response publication.
+- Added `platform-pki-certificate-export` to publish one explicit authenticated
+  pending CSR response as an immutable certificate-only artifact and resolve it
+  only by exact service, request ID, and manifest digest. Exports remain
+  unfinalized; there is no current/latest inference, deployment, or activation.
+- Added `platform-pki-csr-candidate` for exact candidate verification and
+  schema-2 authenticated finalize/abandon decisions with immutable outcomes,
+  fully authenticated historical active evidence, rollback holds, and
+  source-complete resume-only recovery. Certificate export and decisions require
+  exact current inventory targets and canonical nonces. It performs no live
+  operation; abandonment is not revocation.
 - Added `platform-pki-ca-passphrase-verify` for lock-safe, secret-free
   point-in-time validation that an active encrypted CA key can be opened by a
   supplied passphrase and matches its active certificate.
-- Extended strict service inventory with optional `key_custody: host-local`.
-  Omission remains the existing managed-key behavior and unknown values fail.
-  Candidate verification, deployment finalization, and host-local Ansible
-  export remain unavailable.
+- Extended strict host-local inventory with required target, validation-boundary
+  digest, and rollback-hold fields. Managed entries reject those fields.
 - Added `platform-pki-custody-report` with deterministic text and JSON reports
   for managed CA, leaf-key, export, backup, inventory, and legacy custody. The
   command detects structural findings without decrypting or parsing private

@@ -25,6 +25,9 @@ def create_legacy_pki(pki: Path) -> None:
     write_private(
         pki / "inventory/services.yml",
         "services:\n  backup-test:\n    key_custody: host-local\n"
+        "    target: host-01\n"
+        "    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"
+        "    rollback_hold_seconds: 3600\n"
         "    common_name: backup.example.internal\n"
         "    dns:\n      - backup.example.internal\n",
     )

@@ -23,16 +23,28 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   journal path and object-identity validation, deterministic pre-commit CA
   rollback without replay reuse, and post-commit response publication that
   never rolls back CA state or signs another certificate.
+- Added `platform-pki-certificate-export publish|resolve` with exact pending CSR
+  source validation, descriptor-snapshotted retained response trust, canonical
+  certificate-only manifests, same-parent no-clobber publication, deterministic
+  idempotency, current-inventory target binding, and final identity-rechecked
+  digest-pinned resolution. Artifacts
+  are explicitly unfinalized and no current/latest selection, deployment
+  evidence, activation, or key deletion is inferred or performed.
+- Added `platform-pki-csr-candidate verify|finalize|abandon` with exact immutable
+  source and export validation, bounded schema-2 deployment signatures,
+  predecessor and rollback-hold enforcement, immutable accepted-evidence
+  outcomes, fully authenticated atomic historical active pointers, canonical
+  nonce binding, idempotent conflict handling, full PKI lock ordering, and
+  source-complete exact-rename-state resume-only finalization recovery.
 - Added `platform-pki-ca-passphrase-verify` with descriptor-bound passphrase and
   CA-key reads, standard lifecycle/root/intermediate locking, encrypted-key
   consistency and active-certificate public-key checks, deterministic
   all-or-nothing output, generic OpenSSL failure handling, and no persistent
   verification receipt.
-- Added the optional strict-inventory scalar `key_custody: host-local` as a
-  protocol selector. Omission preserves managed-key behavior; unknown values
-  are rejected. Signer-side candidate verification and deployment finalization
-  remain unavailable, while managed-key Ansible export rejects explicit or
-  skips implicit host-local selection.
+- Added strict `target`, `validation_boundary_sha256`, and
+  `rollback_hold_seconds` inventory scalars. They are mandatory for host-local
+  custody and rejected for managed custody. Host-local Ansible export remains
+  fail closed.
 - Added `platform-pki-custody-report` with deterministic text and schema-1 JSON
   output for managed PKI encryption, custody, backup policy, unsafe metadata,
   unexpected keys, controller/export leaf-key copies, backup envelopes and

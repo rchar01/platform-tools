@@ -40,6 +40,8 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
 | `platform-pki-csr-recover` | Recover an interrupted authenticated host-local CSR signing transaction. |
+| `platform-pki-certificate-export` | Publish or digest-pin one immutable, unfinalized certificate-only CSR export. |
+| `platform-pki-csr-candidate` | Verify, finalize, or abandon one exact authenticated host-local candidate. |
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
 | `platform-pki-service-issue` | Issue a service certificate from PKI inventory. |
@@ -169,6 +171,12 @@ state:
 
 ```bash
 make test-pki-ca-rollover-parser
+```
+
+Run the focused immutable certificate-only export scenarios:
+
+```bash
+make test-pki-certificate-export
 ```
 
 Generate Bashly-backed executables and verify that committed output is current:
@@ -359,16 +367,23 @@ example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
 
-Service inventory may set the optional scalar `key_custody: host-local`;
-omitting it preserves the managed controller-generated-key workflow. No
-other explicit custody value is accepted. Authenticated host-local issue,
+Service inventory may set `key_custody: host-local`; such entries must also set
+canonical `target`, `validation_boundary_sha256`, and positive-decimal
+`rollback_hold_seconds` scalars. Managed entries must omit all four fields.
+Authenticated host-local issue,
 migration, and renewal accept a host-generated P-384 CSR plus canonical request
 and approval manifests, detached OpenSSH signatures, and a trusted response
 signing key. They publish immutable certificate-only pending candidates and
 signed responses under `state/csr/`; they never receive or publish the host
-private key. Signer-side candidate verification and deployment finalization
-remain unavailable, explicit Ansible export is rejected, and all-service
-Ansible export skips host-local entries.
+private key. `platform-pki-csr-candidate` verifies one exact exported candidate
+and can accept bounded-time schema-2 deployment evidence as finalized or
+abandoned historical evidence. It performs no live operation and never claims
+live state. Active predecessor pointers are accepted only after replaying the
+complete authenticated immutable outcome and source history; certificate export
+also requires the signed target to equal current inventory. Abandonment is not
+revocation. Managed keys and exports remain
+through the configured hold and require separate cleanup approval. Explicit
+host-local Ansible export remains rejected.
 
 Install reviewed public trust before signing:
 
@@ -377,7 +392,8 @@ platform-pki-csr-trust-install
 platform-pki-csr-trust-install --private-repo /absolute/path/to/platform-private
 ```
 
-The command validates exactly four files under
+The command accepts the exact four-file schema-1 signing/export trust set or
+the exact five-file schema-2 set that adds `deployers.allowed_signers` under
 `<private-repo>/pki/csr-trust` and atomically installs a protected snapshot at
 `<pki-dir>/inventory/csr-trust`. It installs no private key and performs no
 signing itself. See

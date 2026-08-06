@@ -123,7 +123,8 @@ corresponding commands populate it:
 │       ├── openssl.cnf
 │       └── issuer
 ├── export/
-│   └── ansible/
+│   ├── ansible/
+│   └── certificates/v1/artifacts/<service>/<request-id>/
 └── backups/
 ```
 
@@ -361,8 +362,10 @@ The inventory parser supports this strict YAML subset:
 ```yaml
 services:
   platform-example:
-    # Optional authenticated external-CSR workflow.
-    # key_custody: host-local
+    key_custody: host-local
+    target: host-01
+    validation_boundary_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    rollback_hold_seconds: 86400
     common_name: app.example.internal
     dns:
       - app.example.internal
@@ -376,11 +379,12 @@ The supported format is a restricted YAML subset, not general YAML. There must
 be exactly one `services:` mapping and at least one uniquely named service.
 Every service has exactly one `common_name`, optional unique `dns` and `ips`
 block lists, optional decimal `days` from 1 through 365000, and optional
-`key_custody: host-local`. Absence of `key_custody` preserves the existing
-managed controller-key workflow; no other explicit value is accepted.
-Authenticated issue, migration, and renewal are available for host-local
-entries. Signer-side candidate verification, deployment finalization, and
-explicit Ansible export remain fail closed. SANs are mandatory: a service must
+`key_custody: host-local`. Host-local entries require canonical `target`,
+`validation_boundary_sha256`, and positive `rollback_hold_seconds` scalars;
+managed entries reject those fields. Absence of `key_custody` preserves the
+managed controller-key workflow. Authenticated issue, migration, renewal, and
+exact candidate decisions are available for host-local entries. Explicit
+host-local Ansible export remains fail closed. SANs are mandatory: a service must
 define at least one value under `dns:` or `ips:`. Indentation is
 exactly two spaces for services, four for fields, and six before list dashes.
 Blank lines, whole-line comments, and one leading `---` are allowed. Duplicate
@@ -426,6 +430,30 @@ approver_principal=offline-approver
 response_principal=offline-response
 ```
 
+Schema 1 is accepted for signing and certificate export only. Candidate
+finalization and abandonment require an exact five-file schema-2 trust tree
+that additionally contains `deployers.allowed_signers` and this ordered policy:
+
+```text
+schema=2
+request_namespace=platform-pki-csr-request-v1
+approval_namespace=platform-pki-csr-approval-v1
+response_namespace=platform-pki-csr-response-v1
+deployment_namespace=platform-pki-csr-deployment-v1
+request_max_age_seconds=604800
+sole_operator_min_delay_seconds=86400
+approval_max_age_seconds=86400
+deployment_max_age_seconds=86400
+clock_skew_seconds=300
+approver_principal=offline-approver
+response_principal=offline-response
+```
+
+`deployers.allowed_signers` contains one or more unique no-options Ed25519
+principals. Deployment signatures use namespace
+`platform-pki-csr-deployment-v1`; deployment principal, target, request
+principal, and inventory target agree exactly.
+
 The principal values shown are examples chosen by the private repository. Each
 must match `[a-z0-9][a-z0-9.-]*`. The approver and response principal records
 pin the corresponding allowed-signer files.
@@ -442,7 +470,7 @@ the one principal pinned by `policy`. Blank records, key options, comments,
 duplicate principals, extra fields, non-Ed25519 keys, and keys rejected by
 `ssh-keygen` fail validation.
 
-All four source files must be current-user-owned, singly linked, readable
+All schema-selected source files must be current-user-owned, singly linked, readable
 regular files that are not group- or world-writable, are at most 65536 bytes,
 and contain bounded ASCII text with one trailing newline. The command rejects
 unsafe or linked path components, a private repository inside the PKI tree,
@@ -461,9 +489,9 @@ make installation fail.
 
 This trust snapshot freezes OpenSSH `ssh-keygen -Y` detached Ed25519 signature
 namespaces and timing limits. Installing it performs no signing. Authenticated
-host-local issue, migration, and renewal consume the installed snapshot;
-signer-side candidate verification, deployment finalization, and explicit
-Ansible export remain fail closed.
+host-local issue, migration, and renewal consume schema 1 or schema 2. Candidate
+decisions require schema 2. Explicit host-local Ansible export remains fail
+closed.
 
 ## Authenticated Host-Local CSR Signing
 
@@ -631,6 +659,182 @@ Ansible export acquire the current root, intermediate, and inventory operation
 locks in that order. Each command privately copies and validates active
 inventory once, then uses only its canonical parsed snapshot for the rest of
 the invocation. Locks are released inventory first, then intermediate and root.
+
+## Immutable Certificate-Only Export
+
+Publish one explicit authenticated pending CSR response by exact service and
+request ID:
+
+```bash
+platform-pki-certificate-export publish platform-example \
+  --request-id 0123456789abcdef0123456789abcdef
+```
+
+The command acquires lifecycle, root, intermediate, inventory, and export locks
+in that order and rejects unresolved or non-generation state before reading the
+candidate. It validates the exact candidate and response trees, signed response
+fields, certificate/SPKI/serial/validity, exact current inventory target and
+service profile,
+historical issuer generation chain, and full chain. Signature verification uses
+an identity-checked, descriptor-copied snapshot of the exact
+`responses.allowed_signers` file retained by the original
+`state/csr/transactions/csr-<request-id>/` signing transaction, not whichever
+response trust happens to be installed currently.
+
+The immutable output is:
+
+```text
+export/certificates/v1/artifacts/<service>/<request-id>/
+├── artifact
+├── tls.crt
+├── ca-chain.crt
+├── fullchain.crt
+├── response
+└── response.sig
+```
+
+The directory is current-user-owned mode `700`; every exact file is singly
+linked, current-user-owned mode `600`. It contains no key and permits no extra
+entry. Publication stages under the final service parent, writes `artifact`
+last, fsyncs the complete tree, and uses a same-filesystem no-clobber rename.
+Repeating an exact publication is idempotent; an unsafe or conflicting existing
+path is left untouched and fails. There is no force mode.
+
+The canonical `artifact` fields are ordered exactly as follows:
+
+```text
+schema=1
+kind=certificate-export
+service=<inventory-service>
+request_id=<request-id>
+operation=<issue|migrate|renew>
+target=<target-principal>
+source_kind=csr-response
+source_response_sha256=<sha256>
+source_response_signature_sha256=<sha256>
+certificate_sha256=<sha256>
+certificate_spki_sha256=<sha256>
+chain_sha256=<sha256>
+fullchain_sha256=<sha256>
+issuer_root=<root-generation>
+issuer_intermediate=<intermediate-generation>
+serial=<uppercase-even-length-hex>
+not_before_epoch=<canonical-decimal-epoch>
+not_after_epoch=<canonical-decimal-epoch>
+candidate_state=pending
+deployment_state=unfinalized
+response_principal=<response-principal>
+created_epoch=<original-response-creation-epoch>
+```
+
+The manifest has one final newline and no publication timestamp. Record its
+reported digest and resolve only that exact artifact:
+
+```bash
+platform-pki-certificate-export resolve platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --manifest-sha256 <sha256>
+```
+
+The default `path` format prints only the absolute artifact directory to
+standard output. `--format json` emits deterministic, secret-free pinned
+resolution metadata. Resolution revalidates the exact artifact, embedded signed
+response, chain, source identities, and retained historical response trust. It
+rechecks the complete artifact and source identities immediately before output,
+requires the embedded response and candidate target to remain equal to current
+inventory, never scans for another request, and never infers a `current` or
+`latest` artifact.
+
+These exports are explicitly pending and unfinalized. This command does not
+select a deployment candidate, finalize evidence, activate a certificate,
+modify managed-key state, delete a key, or change the existing mutable
+`platform-pki-export-ansible` workflow.
+
+## Host-Local Candidate Decisions
+
+`platform-pki-csr-candidate verify SERVICE --request-id ID` validates the exact
+immutable candidate, response, signing transaction, replay records, historical
+issuer, retained response trust, and explicit certificate export. Text and JSON
+status distinguish `pending`, `finalized`, and `abandoned`, plus `active` or
+`superseded` accepted evidence. This is historical signer evidence, not current
+live-state discovery.
+
+`finalize` and `abandon` additionally require the exact artifact-manifest digest
+and canonical deployment evidence plus its detached schema-2 deployer
+signature. Unless `--yes` is used, a TTY must confirm the exact action, service,
+and request ID. Evidence binds the request, response, response signature,
+candidate, export, canonical 64-lowercase-hex nonce, certificate, certificate
+SPKI, chain, full chain, inventory
+validation boundary, target, action, result, and deployment principal. Its
+validity interval is at most 86400 seconds with 300 seconds clock skew.
+
+The deployment evidence is printable ASCII, has one trailing newline, and uses
+this exact field order:
+
+```text
+schema
+request_id
+nonce
+operation
+service
+target
+request_sha256
+response_sha256
+response_signature_sha256
+candidate_sha256
+artifact_request_id
+artifact_manifest_sha256
+certificate_sha256
+certificate_spki_sha256
+chain_sha256
+fullchain_sha256
+action
+result
+local_certificate_sha256
+local_key_spki_sha256
+local_key_certificate_match
+served_certificate_sha256
+served_intermediate_sha256
+validation_boundary_sha256
+validation_result
+activation_epoch
+validation_epoch
+rollback_state
+rollback_hold_until_epoch
+deployment_principal
+created_epoch
+expires_epoch
+```
+
+`schema=1`, `artifact_request_id=request_id`, and `action` is exactly
+`finalize` or `abandon` as invoked. No target private key is an input or output.
+
+Finalization accepts only exact activated local and served certificate/SPKI and
+issuer-intermediate evidence with passed validation and ordered canonical
+epochs. Issue has no predecessor. Migration and renewal require retained
+rollback state through at least the inventory hold; renewal also requires the
+exact active accepted-evidence predecessor. Abandonment accepts exact
+not-activated or signer-known rolled-back evidence. Rolled-back evidence must
+record passed validation, ordered activation and validation epochs, the exact
+restored predecessor leaf and intermediate, `rollback_state=restored`, and the
+full inventory hold. Abandonment does not revoke a certificate.
+
+Outcomes are immutable four-file mode-`600` trees under
+`state/csr/outcomes/<service>/<request-id>/`; schema-2 deployer trust is retained
+with each accepted decision. `state/csr/active/<service>` is an atomic
+mode-`600` pointer to accepted historical evidence, not a live-state pointer.
+Status, renewal signing, and renewal finalization strictly parse every pointer
+scalar and authenticate the referenced immutable outcome, retained deployer
+trust, signature, complete source transaction/export, and recursive predecessor
+chain before accepting it.
+Candidate, response, replay, transaction, and export trees are never removed.
+Managed migration keys and Ansible exports remain byte-for-byte and
+metadata-identical; all managed material remains through rollback hold and any
+cleanup requires separate approval. Finalization recovery is resume-only from
+`state/csr/finalization-recovery-journal`; it never inverts the action or rolls
+back or reuses CA state. The journal binds every candidate, response, export,
+retained response-trust, outcome-stage, and active-pointer identity and digest;
+recovery accepts only the exact pre- or post-rename object states.
 
 ## Issue And Verify A Service Certificate
 

@@ -216,33 +216,56 @@ pki_csr_prepare_state_dirs() {
 
 pki_csr_load_policy() {
   local trust=$PKI_DIR/inventory/csr-trust path name
-  local -a lines=() expected=(approvers.allowed_signers policy requesters.allowed_signers responses.allowed_signers) actual=()
+  local -a lines=() expected=() actual=()
   pki_require_private_dir "$trust" 'Installed CSR trust directory'
   while IFS= read -r -d '' path; do actual+=("$(basename -- "$path")"); done < <(find "$trust" -mindepth 1 -maxdepth 1 -print0 | LC_ALL=C sort -z)
+  mapfile -t lines <"$trust/policy"
+  if [[ ${lines[0]:-} == schema=1 ]]; then
+    CSR_TRUST_SCHEMA=1
+    expected=(approvers.allowed_signers policy requesters.allowed_signers responses.allowed_signers)
+    [[ ${#lines[@]} -eq 10 && \
+      ${lines[1]} == request_namespace=platform-pki-csr-request-v1 && \
+      ${lines[2]} == approval_namespace=platform-pki-csr-approval-v1 && \
+      ${lines[3]} == response_namespace=platform-pki-csr-response-v1 && \
+      ${lines[4]} == request_max_age_seconds=604800 && \
+      ${lines[5]} == sole_operator_min_delay_seconds=86400 && \
+      ${lines[6]} == approval_max_age_seconds=86400 && \
+      ${lines[7]} == clock_skew_seconds=300 && \
+      ${lines[8]} =~ ^approver_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'Installed CSR trust policy is invalid'
+    CSR_APPROVER_PRINCIPAL=${BASH_REMATCH[1]}
+    [[ ${lines[9]} =~ ^response_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'Installed CSR response principal is invalid'
+  elif [[ ${lines[0]:-} == schema=2 ]]; then
+    CSR_TRUST_SCHEMA=2
+    expected=(approvers.allowed_signers deployers.allowed_signers policy requesters.allowed_signers responses.allowed_signers)
+    [[ ${#lines[@]} -eq 12 && \
+      ${lines[1]} == request_namespace=platform-pki-csr-request-v1 && \
+      ${lines[2]} == approval_namespace=platform-pki-csr-approval-v1 && \
+      ${lines[3]} == response_namespace=platform-pki-csr-response-v1 && \
+      ${lines[4]} == deployment_namespace=platform-pki-csr-deployment-v1 && \
+      ${lines[5]} == request_max_age_seconds=604800 && \
+      ${lines[6]} == sole_operator_min_delay_seconds=86400 && \
+      ${lines[7]} == approval_max_age_seconds=86400 && \
+      ${lines[8]} == deployment_max_age_seconds=86400 && \
+      ${lines[9]} == clock_skew_seconds=300 && \
+      ${lines[10]} =~ ^approver_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'Installed CSR trust policy is invalid'
+    CSR_APPROVER_PRINCIPAL=${BASH_REMATCH[1]}
+    [[ ${lines[11]} =~ ^response_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'Installed CSR response principal is invalid'
+  else
+    pki_die 'Installed CSR trust policy is invalid'
+  fi
   [[ ${actual[*]} == "${expected[*]}" ]] || pki_die 'Installed CSR trust directory contains unexpected state'
   unset -v CSR_TRUST_IDENTITIES
   declare -gA CSR_TRUST_IDENTITIES=()
-  for path in policy requesters.allowed_signers approvers.allowed_signers responses.allowed_signers; do
+  for path in "${expected[@]}"; do
     [[ -f $trust/$path && ! -L $trust/$path && $(stat -c '%u:%a:%h' "$trust/$path") == "$(id -u):600:1" ]] || pki_die "Installed CSR trust file is unsafe: $trust/$path"
     CSR_TRUST_IDENTITIES[$path]=$(pki_file_identity "$trust/$path")
   done
-  mapfile -t lines <"$trust/policy"
-  [[ ${#lines[@]} -eq 10 && ${lines[0]} == schema=1 && \
-    ${lines[1]} == request_namespace=platform-pki-csr-request-v1 && \
-    ${lines[2]} == approval_namespace=platform-pki-csr-approval-v1 && \
-    ${lines[3]} == response_namespace=platform-pki-csr-response-v1 && \
-    ${lines[4]} == request_max_age_seconds=604800 && \
-    ${lines[5]} == sole_operator_min_delay_seconds=86400 && \
-    ${lines[6]} == approval_max_age_seconds=86400 && \
-    ${lines[7]} == clock_skew_seconds=300 && \
-    ${lines[8]} =~ ^approver_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'Installed CSR trust policy is invalid'
-  CSR_APPROVER_PRINCIPAL=${BASH_REMATCH[1]}
-  [[ ${lines[9]} =~ ^response_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'Installed CSR response principal is invalid'
   CSR_RESPONSE_PRINCIPAL=${BASH_REMATCH[1]}
   CSR_TRUST_DIR=$trust
   pki_csr_validate_allowed_signers "$trust/requesters.allowed_signers" '' false
   pki_csr_validate_allowed_signers "$trust/approvers.allowed_signers" "$CSR_APPROVER_PRINCIPAL" true
   pki_csr_validate_allowed_signers "$trust/responses.allowed_signers" "$CSR_RESPONSE_PRINCIPAL" true
+  [[ $CSR_TRUST_SCHEMA != 2 ]] || pki_csr_validate_allowed_signers "$trust/deployers.allowed_signers" '' false
   for name in "${expected[@]}"; do [[ $(pki_file_identity "$trust/$name") == "${CSR_TRUST_IDENTITIES[$name]}" ]] || pki_die "Installed CSR trust changed during validation: $name"; done
 }
 
@@ -262,7 +285,7 @@ pki_csr_validate_allowed_signers() {
 
 pki_csr_recheck_trust() {
   local name
-  for name in policy requesters.allowed_signers approvers.allowed_signers responses.allowed_signers; do
+  for name in "${!CSR_TRUST_IDENTITIES[@]}"; do
     [[ -f $CSR_TRUST_DIR/$name && ! -L $CSR_TRUST_DIR/$name && $(pki_file_identity "$CSR_TRUST_DIR/$name") == "${CSR_TRUST_IDENTITIES[$name]}" ]] || pki_die "Installed CSR trust changed during signing validation: $name"
   done
 }
@@ -300,6 +323,39 @@ pki_csr_validate_times() {
   if [[ $requester_key == "$approver_key" ]]; then
     (( approval_created - request_created >= 86400 )) || pki_die 'Sole-operator CSR approval delay has not elapsed'
   fi
+}
+
+pki_csr_require_active_predecessor() {
+  declare -F pki_candidate_validate_active_outcome >/dev/null || pki_die 'CSR candidate outcome validator is unavailable'
+  # shellcheck disable=SC2034 # The shared candidate validator consumes these globals.
+  INVENTORY_TARGET=${CSR_REQUEST[target]}
+  # shellcheck disable=SC2034
+  VALIDATION_BOUNDARY_SHA256=$(pki_inventory_scalar "$SERVICE" validation_boundary_sha256)
+  # shellcheck disable=SC2034
+  ROLLBACK_HOLD_SECONDS=$(pki_inventory_scalar "$SERVICE" rollback_hold_seconds)
+  # shellcheck disable=SC2034
+  CANDIDATE_WORK_DIR=$CSR_INPUT_DIR
+  pki_candidate_load_active true
+  pki_candidate_validate_active_outcome
+  [[ ${CANDIDATE_ACTIVE[certificate_sha256]} == "${CSR_REQUEST[current_cert_sha256]}" ]] || pki_die 'Host-local renewal request does not match the authenticated active accepted evidence'
+}
+
+pki_csr_reject_unresolved_predecessor_candidate() {
+  local root=$PKI_DIR/state/csr/candidates/$SERVICE path request_id request_path
+  local -A pending_request=()
+  [[ -d $root && ! -L $root ]] || return 0
+  pki_require_private_dir "$root" 'CSR candidate service directory'
+  while IFS= read -r -d '' path; do
+    request_id=$(basename -- "$path")
+    [[ $request_id =~ ^[0-9a-f]{32}$ && -d $path && ! -L $path ]] || pki_die "Unsafe CSR candidate entry blocks renewal: $path"
+    [[ -e $PKI_DIR/state/csr/outcomes/$SERVICE/$request_id || -L $PKI_DIR/state/csr/outcomes/$SERVICE/$request_id ]] && continue
+    request_path=$PKI_DIR/state/csr/transactions/csr-$request_id/request
+    pending_request=()
+    pki_csr_read_ordered_record "$request_path" 'Pending CSR request' pending_request "${PKI_CSR_REQUEST_FIELDS[@]}"
+    if [[ ${pending_request[operation]} == renew && ${pending_request[service]} == "$SERVICE" && ${pending_request[current_cert_sha256]} == "${CSR_REQUEST[current_cert_sha256]}" ]]; then
+      pki_die "An unresolved renewal candidate already exists for the active predecessor: $request_id"
+    fi
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -print0)
 }
 
 pki_csr_spki_digest() {
@@ -889,6 +945,7 @@ pki_csr_sign_external() {
   [[ ${CSR_REQUEST[request_id]} =~ ^[0-9a-f]{32}$ && ${CSR_REQUEST[nonce]} =~ ^[0-9a-f]{64}$ ]] || pki_die 'CSR request ID or nonce is invalid'
   [[ ${CSR_REQUEST[service]} == "$SERVICE" && ${CSR_REQUEST[target]} =~ ^[a-z0-9][a-z0-9.-]*$ && ${CSR_REQUEST[requester_principal]} =~ ^[a-z0-9][a-z0-9.-]*$ ]] || pki_die 'CSR request service, target, or requester is invalid'
   [[ ${CSR_REQUEST[requester_principal]} == "${CSR_REQUEST[target]}" ]] || pki_die 'CSR requester principal must exactly match the target identity'
+  [[ ${CSR_REQUEST[target]} == "$(pki_inventory_scalar "$SERVICE" target)" ]] || pki_die 'CSR request target and requester principal must exactly match inventory target'
   [[ ${CSR_REQUEST[profile]} == server-p384-sha384-v1 && ${CSR_REQUEST[response_principal]} == "$CSR_RESPONSE_PRINCIPAL" ]] || pki_die 'CSR request profile or response signer is invalid'
   if [[ $command_kind == issue ]]; then [[ ${CSR_REQUEST[operation]} == issue || ${CSR_REQUEST[operation]} == migrate ]] || pki_die 'Issue accepts only issue or migrate CSR requests'; else [[ ${CSR_REQUEST[operation]} == renew ]] || pki_die 'Renew accepts only renew CSR requests'; fi
   for key in request_id nonce operation service target csr_sha256 inventory_sha256 profile; do [[ ${CSR_APPROVAL[$key]} == "${CSR_REQUEST[$key]}" ]] || pki_die "CSR approval does not bind request field: $key"; done
@@ -912,9 +969,11 @@ pki_csr_sign_external() {
     [[ -n $current_cert ]] || pki_die 'Host-local renewal requires --current-cert-file'
     pki_csr_require_protocol_file "$current_cert" 'Current host-local certificate'
     [[ ${CSR_REQUEST[current_cert_sha256]} == "$(pki_csr_sha256 "$current_cert")" ]] || pki_die 'Renewal request does not bind the current certificate'
+    pki_csr_require_active_predecessor
     openssl verify -CAfile "$ROOT_CERT" -untrusted "$INT_CERT" "$current_cert" >/dev/null 2>&1 || pki_die 'Current host-local certificate does not verify against the active issuer'
   fi
   pki_csr_prepare_state_dirs
+  [[ ${CSR_REQUEST[operation]} != renew ]] || pki_csr_reject_unresolved_predecessor_candidate
   [[ ! -e $PKI_DIR/state/csr/replay/requests/${CSR_REQUEST[request_id]} && ! -L $PKI_DIR/state/csr/replay/requests/${CSR_REQUEST[request_id]} ]] || pki_die 'CSR request ID has already been consumed'
   [[ ! -e $PKI_DIR/state/csr/replay/nonces/${CSR_REQUEST[nonce]} && ! -L $PKI_DIR/state/csr/replay/nonces/${CSR_REQUEST[nonce]} ]] || pki_die 'CSR request nonce has already been consumed'
   transaction="csr-${CSR_REQUEST[request_id]}"; CSR_JOURNAL_PATH=$(pki_csr_recovery_journal); pki_csr_initialize_journal "$transaction"

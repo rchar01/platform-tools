@@ -45,6 +45,8 @@ def create_legacy_pki(pki: Path) -> None:
         pytest.param("platform-pki-service-issue", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-issue"),
         pytest.param("platform-pki-service-renew", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-renew"),
         pytest.param("platform-pki-export-ansible", (), ("lifecycle", "root", "intermediate", "inventory", "export"), id="export-ansible"),
+        pytest.param("platform-pki-certificate-export", ("publish", "legacy-service", "--request-id", "0123456789abcdef0123456789abcdef"), ("lifecycle", "root", "intermediate", "inventory", "export"), id="certificate-export"),
+        pytest.param("platform-pki-csr-candidate", ("verify", "legacy-service", "--request-id", "0123456789abcdef0123456789abcdef"), ("lifecycle", "root", "intermediate", "inventory", "export"), id="csr-candidate"),
         pytest.param("platform-pki-root-create", ("--name", "Test Root", "--org", "Test", "--country", "PL", "--allow-unencrypted-root-key"), ("lifecycle", "root"), id="root-create"),
         pytest.param("platform-pki-intermediate-create", ("--name", "Test Intermediate", "--org", "Test", "--country", "PL", "--allow-unencrypted-intermediate-key"), ("lifecycle", "root", "intermediate"), id="intermediate-create"),
     ),

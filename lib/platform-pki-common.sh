@@ -234,7 +234,7 @@ pki_validate_inventory_file() {
     [[ $saw_services == true ]] || pki_die "Inventory content outside services at line $line_number"
 
     if [[ $line =~ ^\ \ ([A-Za-z0-9][A-Za-z0-9_.-]*):$ ]]; then
-      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $field != target && $field != validation_boundary_sha256 && $field != rollback_hold_seconds && $list_count -eq 0 ]]; then
         pki_die "Inventory $field list for service $service must not be empty"
       fi
       service=${BASH_REMATCH[1]}
@@ -247,8 +247,8 @@ pki_validate_inventory_file() {
     fi
     [[ -n $service ]] || pki_die "Inventory requires a service key at line $line_number"
 
-    if [[ $line =~ ^\ \ \ \ (common_name|days|key_custody):[[:space:]]+(.+)$ ]]; then
-      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
+    if [[ $line =~ ^\ \ \ \ (common_name|days|key_custody|target|validation_boundary_sha256|rollback_hold_seconds):[[:space:]]+(.+)$ ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $field != target && $field != validation_boundary_sha256 && $field != rollback_hold_seconds && $list_count -eq 0 ]]; then
         pki_die "Inventory $field list for service $service must not be empty"
       fi
       field=${BASH_REMATCH[1]}
@@ -259,15 +259,21 @@ pki_validate_inventory_file() {
         pki_validate_dns_name_value "common_name for service $service" "$value"
       elif [[ $field == days ]]; then
         pki_validate_days "$value"
-      else
+      elif [[ $field == key_custody ]]; then
         [[ $value == host-local ]] || pki_die "Inventory key_custody for service $service must be host-local"
+      elif [[ $field == target ]]; then
+        [[ $value =~ ^[a-z0-9][a-z0-9.-]*$ ]] || pki_die "Inventory target for service $service is invalid"
+      elif [[ $field == validation_boundary_sha256 ]]; then
+        [[ $value =~ ^[0-9a-f]{64}$ ]] || pki_die "Inventory validation_boundary_sha256 for service $service must be 64 lowercase hexadecimal characters"
+      else
+        [[ $value =~ ^[1-9][0-9]*$ ]] || pki_die "Inventory rollback_hold_seconds for service $service must be a canonical positive decimal"
       fi
       printf '%s\t%s\t%s\n' "$service" "$field" "$value" >>"$canonical"
       list_count=0
       continue
     fi
     if [[ $line =~ ^\ \ \ \ (dns|ips):$ ]]; then
-      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $field != target && $field != validation_boundary_sha256 && $field != rollback_hold_seconds && $list_count -eq 0 ]]; then
         pki_die "Inventory $field list for service $service must not be empty"
       fi
       field=${BASH_REMATCH[1]}
@@ -295,12 +301,21 @@ pki_validate_inventory_file() {
 
   [[ $saw_services == true ]] || pki_die 'Inventory must contain exactly one services mapping'
   [[ $service_count -gt 0 ]] || pki_die 'Inventory must define at least one service'
-  if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
+  if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $field != target && $field != validation_boundary_sha256 && $field != rollback_hold_seconds && $list_count -eq 0 ]]; then
     pki_die "Inventory $field list for service $service must not be empty"
   fi
   for service in "${!services_seen[@]}"; do
     [[ -v fields_seen["$service:common_name"] ]] || pki_die "common_name is missing for service: $service"
     [[ -v fields_seen["$service:dns"] || -v fields_seen["$service:ips"] ]] || pki_die "Service must define at least one DNS or IP SAN: $service"
+    if [[ -v fields_seen["$service:key_custody"] ]]; then
+      for field in target validation_boundary_sha256 rollback_hold_seconds; do
+        [[ -v fields_seen["$service:$field"] ]] || pki_die "Inventory $field is required for host-local service: $service"
+      done
+    else
+      for field in target validation_boundary_sha256 rollback_hold_seconds; do
+        [[ ! -v fields_seen["$service:$field"] ]] || pki_die "Inventory $field is allowed only for key_custody: host-local service: $service"
+      done
+    fi
   done
 }
 
@@ -634,14 +649,21 @@ pki_release_operation_lock() {
 pki_recovery_journal() { printf '%s/state/rollover/journal\n' "$PKI_DIR"; }
 pki_recovery_marker() { printf '%s/state/rollover/recovery-required\n' "$PKI_DIR"; }
 pki_csr_recovery_journal() { printf '%s/state/csr/recovery-journal\n' "$PKI_DIR"; }
+pki_csr_finalization_recovery_journal() { printf '%s/state/csr/finalization-recovery-journal\n' "$PKI_DIR"; }
 pki_active_rollover_pointer() { printf '%s/state/active-rollover\n' "$PKI_DIR"; }
 pki_rollover_transaction_dir() { [[ $1 =~ ^prepare-(root|intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || pki_die "Invalid rollover transaction ID: $1"; printf '%s/state/rollovers/%s\n' "$PKI_DIR" "$1"; }
 
 pki_require_no_unresolved_journal() {
-  local journal marker csr_journal
+  local journal marker csr_journal finalization_journal
   journal=$(pki_recovery_journal)
   marker=$(pki_recovery_marker)
   csr_journal=$(pki_csr_recovery_journal)
+  finalization_journal=$(pki_csr_finalization_recovery_journal)
+  if [[ -e $finalization_journal || -L $finalization_journal ]]; then
+    pki_read_state_record "$finalization_journal" 'CSR candidate finalization recovery journal'
+    [[ ${PKI_RECORD[operation]:-} == csr-finalize ]] || pki_die "Unsupported CSR finalization recovery state blocks this command: $finalization_journal"
+    pki_die "CSR candidate finalization recovery is required before this command can continue: $finalization_journal"
+  fi
   if [[ -e $csr_journal || -L $csr_journal ]]; then
     pki_read_state_record "$csr_journal" 'Authenticated CSR signing recovery journal'
     [[ ${PKI_RECORD[operation]:-} != csr-sign ]] || \

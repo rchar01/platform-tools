@@ -1,0 +1,58 @@
+name: platform-pki-certificate-export
+help: Publish or resolve an immutable certificate-only CSR export
+version: platform-pki-certificate-export <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+commands:
+- name: publish
+  help: Publish one exact pending CSR response as an immutable export
+  args:
+  - &service
+    name: service
+    help: Exact inventory service
+    required: true
+  flags:
+  - &request_id
+    long: --request-id
+    arg: id
+    help: Exact 32-character lowercase hexadecimal CSR request ID
+    required: true
+    validate: not_empty
+  - &namespace
+    long: --namespace
+    arg: path
+    help: Platform namespace root
+    validate: not_empty
+  - &pki_dir
+    long: --pki-dir
+    arg: path
+    help: PKI directory
+    validate: not_empty
+  examples:
+  - platform-pki-certificate-export publish platform-example --request-id 0123456789abcdef0123456789abcdef
+
+- name: resolve
+  help: Resolve one digest-pinned immutable certificate export
+  args:
+  - *service
+  flags:
+  - *request_id
+  - long: --manifest-sha256
+    arg: digest
+    help: Exact lowercase SHA-256 digest of the artifact manifest
+    required: true
+    validate: not_empty
+  - long: --format
+    arg: format
+    help: Output format
+    default: path
+    allowed: [path, json]
+  - *namespace
+  - *pki_dir
+  examples:
+  - platform-pki-certificate-export resolve platform-example --request-id 0123456789abcdef0123456789abcdef --manifest-sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+footer: |-
+  Publication copies only an authenticated pending CSR certificate response.
+  Exports are unfinalized and contain no private key. Resolution requires the
+  exact service, request ID, and manifest digest; it never infers current or
+  latest state and performs no deployment, activation, or finalization.

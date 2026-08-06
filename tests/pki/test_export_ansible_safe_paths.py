@@ -25,6 +25,9 @@ INVENTORY = """services:
       - platform-second.internal
   platform-host-local:
     key_custody: host-local
+    target: host-01
+    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    rollback_hold_seconds: 3600
     common_name: platform-host-local.internal
     dns:
       - platform-host-local.internal
@@ -160,6 +163,9 @@ def test_all_service_export_skips_only_host_local_service_and_preserves_existing
     write_private(
         pki / "inventory/services.yml",
         "services:\n  platform-host-local:\n    key_custody: host-local\n"
+        "    target: host-01\n"
+        "    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"
+        "    rollback_hold_seconds: 3600\n"
         "    common_name: platform-host-local.internal\n"
         "    dns:\n      - platform-host-local.internal\n",
     )

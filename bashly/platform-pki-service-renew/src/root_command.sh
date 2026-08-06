@@ -266,6 +266,10 @@ if [[ $CSR_EXTERNAL == true ]]; then
   [[ -r $CSR_COMMON_PATH ]] || pki_die 'platform-pki-csr-sign.sh not found'
   # shellcheck source=../../../../lib/platform-pki-csr-sign.sh disable=SC1091
   source "$CSR_COMMON_PATH"
+  CANDIDATE_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-candidate.sh
+  [[ -r $CANDIDATE_COMMON_PATH ]] || pki_die 'platform-pki-csr-candidate.sh not found'
+  # shellcheck source=../../../../lib/platform-pki-csr-candidate.sh disable=SC1091
+  source "$CANDIDATE_COMMON_PATH"
   pki_csr_sign_external renew
 fi
 

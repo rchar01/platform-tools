@@ -24,22 +24,34 @@ root_command() {
   [[ -r $CSR_COMMON_PATH ]] || { printf '[ERROR] platform-pki-csr-sign.sh not found\n' >&2; exit 1; }
   # shellcheck source=../../../../lib/platform-pki-csr-sign.sh disable=SC1091
   source "$CSR_COMMON_PATH"
+  CANDIDATE_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-candidate.sh
+  [[ -r $CANDIDATE_COMMON_PATH ]] || { printf '[ERROR] platform-pki-csr-candidate.sh not found\n' >&2; exit 1; }
+  # shellcheck source=../../../../lib/platform-pki-csr-candidate.sh disable=SC1091
+  source "$CANDIDATE_COMMON_PATH"
 
   pki_reject_repeated_options --transaction --response-key --namespace --pki-dir --yes
-  TRANSACTION=${args[--transaction]}
-  [[ $TRANSACTION =~ ^csr-[0-9a-f]{32}$ ]] || pki_die 'CSR recovery transaction ID is invalid'
+  TRANSACTION=${args[--transaction]:-}
+  [[ -z $TRANSACTION || $TRANSACTION =~ ^csr-[0-9a-f]{32}$ ]] || pki_die 'CSR recovery transaction ID is invalid'
   NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
   PKI_DIR=${args[--pki-dir]:-}
   NAMESPACE=$(pki_expand_path "$NAMESPACE")
   PKI_DIR=${PKI_DIR:-${NAMESPACE}/pki}
   PKI_DIR=$(pki_expand_path "$PKI_DIR")
+  FINALIZATION_JOURNAL=$(pki_csr_finalization_recovery_journal)
+  if [[ -e $FINALIZATION_JOURNAL || -L $FINALIZATION_JOURNAL ]]; then
+    [[ -z ${args[--response-key]:-} ]] || pki_die '--response-key is not accepted for candidate finalization recovery'
+    RECOVERY_DESCRIPTION='candidate finalization'
+  else
+    [[ -n $TRANSACTION ]] || pki_die '--transaction is required for CSR signing recovery'
+    RECOVERY_DESCRIPTION=$TRANSACTION
+  fi
   if [[ ! -v args[--yes] ]]; then
     [[ -t 0 ]] || pki_die 'CSR recovery requires a TTY or --yes'
-    printf 'Type recover %s to continue: ' "$TRANSACTION" >&2
+    printf 'Type recover %s to continue: ' "$RECOVERY_DESCRIPTION" >&2
     IFS= read -r confirmation
-    [[ $confirmation == "recover $TRANSACTION" ]] || pki_die 'CSR recovery confirmation did not match'
+    [[ $confirmation == "recover $RECOVERY_DESCRIPTION" ]] || pki_die 'CSR recovery confirmation did not match'
   fi
-  pki_csr_recover "${args[--response-key]:-}"
+  if [[ -e $FINALIZATION_JOURNAL || -L $FINALIZATION_JOURNAL ]]; then pki_candidate_recover; else pki_csr_recover "${args[--response-key]:-}"; fi
 
 }
 
@@ -60,7 +72,7 @@ platform_pki_csr_recover_usage() {
 
     printf "%s\n" "$(bold "Options:")"
 
-    printf "  %s\n" "$(magenta "--transaction ID (required)")"
+    printf "  %s\n" "$(magenta "--transaction ID")"
     printf "    Exact csr-<request-id> transaction\n"
     echo
 
@@ -91,7 +103,7 @@ platform_pki_csr_recover_usage() {
     printf "  platform-pki-csr-recover --transaction csr-0123456789abcdef0123456789abcdef\n  --response-key /secure/response_ed25519\n"
     echo
 
-    printf "Uncommitted recovery restores only exact partial CA publication and keeps the\nrequest and nonce consumed. Committed recovery never rolls back or re-signs;\nit resumes exact response and pending-candidate publication. A response key\nis required only when the journaled response signature is absent.\n"
+    printf "Uncommitted recovery restores only exact partial CA publication and keeps the\nrequest and nonce consumed. Committed recovery never rolls back or re-signs;\nit resumes exact response and pending-candidate publication. Finalization\nrecovery resumes exact immutable-outcome and active-pointer publication from\nits separate journal. A response key is used only for CSR signing recovery.\n"
     echo
 
   fi
@@ -243,11 +255,6 @@ parse_requirements() {
 
     esac
   done
-
-  if [[ -z ${args['--transaction']+x} ]]; then
-    printf "missing required flag: --transaction ID\n" >&2
-    exit 1
-  fi
 
   if [[ -v args['--transaction'] ]]; then
     validation_output="$(validate_not_empty "${args['--transaction']:-}")"

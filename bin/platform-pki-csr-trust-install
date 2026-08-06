@@ -78,19 +78,35 @@ PY
     local path=$1
     local -a lines=()
     mapfile -t lines <"$path"
-    [[ ${#lines[@]} -eq 10 ]] || pki_die 'CSR trust policy must contain exactly 10 ordered fields'
-    [[ ${lines[0]} == schema=1 ]] || pki_die 'CSR trust policy schema must be 1'
+    [[ ${lines[0]:-} == schema=1 || ${lines[0]:-} == schema=2 ]] || pki_die 'CSR trust policy schema must be 1 or 2'
+    TRUST_SCHEMA=${lines[0]#schema=}
+    if [[ $TRUST_SCHEMA == 1 ]]; then
+      [[ ${#lines[@]} -eq 10 ]] || pki_die 'CSR trust schema 1 policy must contain exactly 10 ordered fields'
+      deployment_offset=0
+    else
+      [[ ${#lines[@]} -eq 12 ]] || pki_die 'CSR trust schema 2 policy must contain exactly 12 ordered fields'
+      [[ ${lines[4]} == deployment_namespace=platform-pki-csr-deployment-v1 ]] || pki_die 'CSR trust deployment namespace is invalid'
+      deployment_offset=1
+    fi
     [[ ${lines[1]} == request_namespace=platform-pki-csr-request-v1 ]] || pki_die 'CSR trust request namespace is invalid'
     [[ ${lines[2]} == approval_namespace=platform-pki-csr-approval-v1 ]] || pki_die 'CSR trust approval namespace is invalid'
     [[ ${lines[3]} == response_namespace=platform-pki-csr-response-v1 ]] || pki_die 'CSR trust response namespace is invalid'
-    [[ ${lines[4]} == request_max_age_seconds=604800 ]] || pki_die 'CSR trust request maximum age must be 604800 seconds'
-    [[ ${lines[5]} == sole_operator_min_delay_seconds=86400 ]] || pki_die 'CSR trust sole-operator delay must be 86400 seconds'
-    [[ ${lines[6]} == approval_max_age_seconds=86400 ]] || pki_die 'CSR trust approval maximum age must be 86400 seconds'
-    [[ ${lines[7]} == clock_skew_seconds=300 ]] || pki_die 'CSR trust clock skew must be 300 seconds'
-    [[ ${lines[8]} =~ ^approver_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'CSR trust approver principal is invalid'
+    [[ ${lines[4 + deployment_offset]} == request_max_age_seconds=604800 ]] || pki_die 'CSR trust request maximum age must be 604800 seconds'
+    [[ ${lines[5 + deployment_offset]} == sole_operator_min_delay_seconds=86400 ]] || pki_die 'CSR trust sole-operator delay must be 86400 seconds'
+    [[ ${lines[6 + deployment_offset]} == approval_max_age_seconds=86400 ]] || pki_die 'CSR trust approval maximum age must be 86400 seconds'
+    if [[ $TRUST_SCHEMA == 2 ]]; then
+      [[ ${lines[8]} == deployment_max_age_seconds=86400 ]] || pki_die 'CSR trust deployment maximum age must be 86400 seconds'
+    fi
+    [[ ${lines[7 + 2 * deployment_offset]} == clock_skew_seconds=300 ]] || pki_die 'CSR trust clock skew must be 300 seconds'
+    [[ ${lines[8 + 2 * deployment_offset]} =~ ^approver_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'CSR trust approver principal is invalid'
     APPROVER_PRINCIPAL=${BASH_REMATCH[1]}
-    [[ ${lines[9]} =~ ^response_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'CSR trust response principal is invalid'
+    [[ ${lines[9 + 2 * deployment_offset]} =~ ^response_principal=([a-z0-9][a-z0-9.-]*)$ ]] || pki_die 'CSR trust response principal is invalid'
     RESPONSE_PRINCIPAL=${BASH_REMATCH[1]}
+    if [[ $TRUST_SCHEMA == 1 ]]; then
+      TRUST_FILES=(approvers.allowed_signers policy requesters.allowed_signers responses.allowed_signers)
+    else
+      TRUST_FILES=(approvers.allowed_signers deployers.allowed_signers policy requesters.allowed_signers responses.allowed_signers)
+    fi
   }
 
   validate_allowed_signers() {
@@ -119,14 +135,17 @@ PY
 
   validate_trust_tree() {
     local root=$1 path
-    local -a expected=(approvers.allowed_signers policy requesters.allowed_signers responses.allowed_signers) actual=()
+    local -a actual=()
     while IFS= read -r -d '' path; do actual+=("$(basename -- "$path")"); done < <(find "$root" -mindepth 1 -maxdepth 1 -print0 | LC_ALL=C sort -z)
-    [[ ${actual[*]} == "${expected[*]}" ]] || pki_die 'CSR trust directory must contain exactly policy and the three allowed_signers files'
-    for path in "${expected[@]}"; do require_source_file "$root/$path"; validate_text_file "$root/$path"; done
+    [[ ${actual[0]:-} == approvers.allowed_signers ]] || pki_die 'CSR trust directory has an invalid file set'
+    require_source_file "$root/policy"; validate_text_file "$root/policy"
     validate_policy "$root/policy"
+    [[ ${actual[*]} == "${TRUST_FILES[*]}" ]] || pki_die 'CSR trust directory must contain exactly policy and the allowed_signers files required by its policy schema'
+    for path in "${TRUST_FILES[@]}"; do require_source_file "$root/$path"; validate_text_file "$root/$path"; done
     validate_allowed_signers "$root/requesters.allowed_signers" 'CSR requester trust'
     validate_allowed_signers "$root/approvers.allowed_signers" 'CSR approver trust' "$APPROVER_PRINCIPAL"
     validate_allowed_signers "$root/responses.allowed_signers" 'CSR response trust' "$RESPONSE_PRINCIPAL"
+    [[ $TRUST_SCHEMA != 2 ]] || validate_allowed_signers "$root/deployers.allowed_signers" 'CSR deployer trust'
   }
 
   snapshot_source_tree() {
@@ -134,7 +153,7 @@ PY
     SOURCE_DIR_IDENTITY=$(stat -c '%d:%i:%u:%a:%y:%z' "$SOURCE") || pki_die 'Cannot snapshot CSR trust source directory'
     unset -v SOURCE_IDENTITIES
     declare -gA SOURCE_IDENTITIES=()
-    for name in policy requesters.allowed_signers approvers.allowed_signers responses.allowed_signers; do
+    for name in "${TRUST_FILES[@]}"; do
       value=$(pki_file_identity "$SOURCE/$name") || pki_die "Cannot snapshot CSR trust source: $name"
       SOURCE_IDENTITIES[$name]=$value
     done
@@ -144,7 +163,7 @@ PY
     local name
     [[ -d $SOURCE && ! -L $SOURCE && $(stat -c '%d:%i:%u:%a:%y:%z' "$SOURCE") == "$SOURCE_DIR_IDENTITY" ]] || \
       pki_die 'CSR trust source directory changed during installation'
-    for name in policy requesters.allowed_signers approvers.allowed_signers responses.allowed_signers; do
+    for name in "${TRUST_FILES[@]}"; do
       [[ -f $SOURCE/$name && ! -L $SOURCE/$name && $(pki_file_identity "$SOURCE/$name") == "${SOURCE_IDENTITIES[$name]}" ]] || \
         pki_die "CSR trust source changed during installation: $name"
     done
@@ -153,11 +172,11 @@ PY
   validate_installed_trust() {
     local name
     pki_require_private_dir "$DESTINATION" 'Installed CSR trust directory'
-    for name in policy requesters.allowed_signers approvers.allowed_signers responses.allowed_signers; do
+    validate_trust_tree "$DESTINATION"
+    for name in "${TRUST_FILES[@]}"; do
       [[ -f $DESTINATION/$name && ! -L $DESTINATION/$name && $(stat -c '%u:%a:%h' "$DESTINATION/$name") == "$(id -u):600:1" ]] || \
         pki_die "Installed CSR trust file is unsafe: $DESTINATION/$name"
     done
-    validate_trust_tree "$DESTINATION"
   }
 
   finish_trust_install() {
@@ -204,23 +223,27 @@ PY
 
   STAGE=$(mktemp -d "$PKI_DIR/inventory/.platform-pki-csr-trust.XXXXXX") || pki_die 'Cannot create CSR trust staging directory'
   STAGE_IDENTITY=$(pki_dir_identity "$STAGE") || pki_die 'Cannot snapshot CSR trust staging identity'
-  for name in policy requesters.allowed_signers approvers.allowed_signers responses.allowed_signers; do
+  for name in "${TRUST_FILES[@]}"; do
     cp -P -- "$SOURCE/$name" "$STAGE/$name" || pki_die "Cannot stage CSR trust file: $name"
     chmod 600 "$STAGE/$name" || pki_die "Cannot secure staged CSR trust file: $name"
   done
   recheck_source_tree
   validate_trust_tree "$STAGE"
+  STAGED_TRUST_FILES=("${TRUST_FILES[@]}")
   pki_fsync_tree "$STAGE"
 
   if [[ -e $DESTINATION || -L $DESTINATION ]]; then
     validate_installed_trust
     DESTINATION_IDENTITY=$(pki_dir_identity "$DESTINATION") || pki_die 'Cannot snapshot installed CSR trust identity'
   fi
-  if [[ -d $DESTINATION && ! -L $DESTINATION ]] && \
-    cmp -s "$STAGE/policy" "$DESTINATION/policy" && \
-    cmp -s "$STAGE/requesters.allowed_signers" "$DESTINATION/requesters.allowed_signers" && \
-    cmp -s "$STAGE/approvers.allowed_signers" "$DESTINATION/approvers.allowed_signers" && \
-    cmp -s "$STAGE/responses.allowed_signers" "$DESTINATION/responses.allowed_signers"; then
+  TRUST_FILES=("${STAGED_TRUST_FILES[@]}")
+  same=true
+  if [[ -d $DESTINATION && ! -L $DESTINATION ]]; then
+    for name in "${TRUST_FILES[@]}"; do cmp -s -- "$STAGE/$name" "$DESTINATION/$name" || same=false; done
+  else
+    same=false
+  fi
+  if [[ $same == true ]]; then
     [[ $(pki_dir_identity "$DESTINATION") == "$DESTINATION_IDENTITY" ]] || pki_die 'Installed CSR trust changed during comparison'
     pki_ok "CSR trust already current: $DESTINATION"
     exit 0

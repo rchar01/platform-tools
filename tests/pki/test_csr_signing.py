@@ -37,6 +37,9 @@ EXPORT = BIN / "platform-pki-export-ansible"
 INVENTORY = """services:
   external:
     key_custody: host-local
+    target: host-01
+    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    rollback_hold_seconds: 3600
     common_name: external.example.internal
     dns:
       - external.example.internal
@@ -406,7 +409,13 @@ def test_authenticated_issue_publishes_certificate_only_candidate_and_response(c
 @pytest.mark.parametrize("checkpoint", (None, "response-signed"), ids=("success", "recovery"))
 def test_migration_preserves_complete_managed_service_and_export_state(csr_workspace: CsrWorkspace, checkpoint: str | None) -> None:
     workspace = csr_workspace
-    managed_inventory = INVENTORY.replace("    key_custody: host-local\n", "")
+    managed_inventory = INVENTORY.replace(
+        "    key_custody: host-local\n"
+        "    target: host-01\n"
+        "    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"
+        "    rollback_hold_seconds: 3600\n",
+        "",
+    )
     write_private(workspace.pki / "inventory/services.yml", managed_inventory)
     managed = run(
         workspace.runner,
@@ -458,7 +467,7 @@ def test_migration_preserves_complete_managed_service_and_export_state(csr_works
     assert "state=pending\n" in (candidate / "candidate").read_text()
 
 
-def test_host_local_renewal_publishes_another_pending_candidate(csr_workspace: CsrWorkspace) -> None:
+def test_host_local_renewal_requires_active_accepted_evidence(csr_workspace: CsrWorkspace) -> None:
     workspace = csr_workspace
     assert_result(workspace.issue(), 0)
     current = workspace.pki / "state/csr/candidates/external/0123456789abcdef0123456789abcdef/tls.crt"
@@ -472,9 +481,10 @@ def test_host_local_renewal_publishes_another_pending_candidate(csr_workspace: C
 
     result = workspace.sign(RENEW, current_cert=current)
 
-    assert_result(result, 0)
-    assert (workspace.pki / "state/csr/candidates/external/2123456789abcdef0123456789abcdef/tls.crt").is_file()
-    assert (workspace.pki / "authorities/intermediates/g1-i1/serial").read_text().strip() == "1002"
+    assert result.status == 1
+    assert "active accepted-evidence pointer" in result.stderr
+    assert not (workspace.pki / "state/csr/candidates/external/2123456789abcdef0123456789abcdef").exists()
+    assert (workspace.pki / "authorities/intermediates/g1-i1/serial").read_text().strip() == "1001"
 
 
 def test_issue_rejects_renewal_only_current_certificate_input(csr_workspace: CsrWorkspace) -> None:

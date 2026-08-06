@@ -29,6 +29,6 @@ examples:
 footer: |-
   Verifies chain trust, private-key match, CA:false, serverAuth, inventory
   SANs, and remaining validity. The PKI directory defaults to <namespace>/pki.
-  Inventory entries with key_custody: host-local fail closed until signer-side
-  candidate verification is implemented.
+  Inventory entries with key_custody: host-local fail closed here; use
+  platform-pki-csr-candidate verify with an exact request ID.
   Legacy singleton CA state must be migrated before this command can run.

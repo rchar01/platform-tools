@@ -263,7 +263,10 @@ def test_host_local_service_verification_fails_closed(
         pki / "inventory/services.yml",
         INVENTORY.replace(
             "  platform-example:\n",
-            "  platform-example:\n    key_custody: host-local\n",
+            "  platform-example:\n    key_custody: host-local\n"
+            "    target: host-01\n"
+            "    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"
+            "    rollback_hold_seconds: 3600\n",
         ),
     )
     environment, log = _environment(tmp_path, fake_library, fake_bin, "none")

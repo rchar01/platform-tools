@@ -36,6 +36,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
 - Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
+- Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).
 - Inspect or migrate legacy PKI CA state: use [`pki-openssl.md`](./pki-openssl.md#migrate-legacy-ca-state).
 - Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).
@@ -54,6 +55,8 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
 - [`../bin/platform-pki-csr-trust-install`](../bin/platform-pki-csr-trust-install): Strict public-trust installer for authenticated host-local CSR signing.
 - [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Deterministic recovery for interrupted host-local CSR signing.
+- [`../bin/platform-pki-certificate-export`](../bin/platform-pki-certificate-export): Exact immutable certificate-only CSR export publisher and resolver.
+- [`../bin/platform-pki-csr-candidate`](../bin/platform-pki-csr-candidate): Authenticated candidate verification, finalization, abandonment, and recovery state.
 - [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Root CA creation helper.
 - [`../bin/platform-pki-intermediate-create`](../bin/platform-pki-intermediate-create): Intermediate CA creation helper.
 - [`../bin/platform-pki-service-issue`](../bin/platform-pki-service-issue): Service certificate issuance helper.

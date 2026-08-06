@@ -22,6 +22,9 @@ INVENTORY = """services:
       - next.example.internal
   external:
     key_custody: host-local
+    target: host-01
+    validation_boundary_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    rollback_hold_seconds: 3600
     common_name: external.example.internal
     dns:
       - external.example.internal

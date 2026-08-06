@@ -6,7 +6,6 @@ flags:
 - long: --transaction
   arg: id
   help: Exact csr-<request-id> transaction
-  required: true
   validate: not_empty
 - long: --response-key
   arg: path
@@ -29,5 +28,6 @@ examples:
 footer: |-
   Uncommitted recovery restores only exact partial CA publication and keeps the
   request and nonce consumed. Committed recovery never rolls back or re-signs;
-  it resumes exact response and pending-candidate publication. A response key
-  is required only when the journaled response signature is absent.
+  it resumes exact response and pending-candidate publication. Finalization
+  recovery resumes exact immutable-outcome and active-pointer publication from
+  its separate journal. A response key is used only for CSR signing recovery.

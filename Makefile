@@ -3,14 +3,14 @@ SHELL := /bin/sh
 
 INSTALL_DIR ?= $(HOME)/.local/bin
 SHARE_DIR ?= $(HOME)/.local/share/platform-tools
-SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot platform-pki-init platform-pki-inventory-install platform-pki-csr-trust-install platform-pki-csr-recover platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-ca-rollover
+SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot platform-pki-init platform-pki-inventory-install platform-pki-csr-trust-install platform-pki-csr-recover platform-pki-certificate-export platform-pki-csr-candidate platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-ca-rollover
 PYTHON_TOOLS := platform-bastion-policy
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
-LIBS := lib/platform-pki-common.sh lib/platform-pki-csr-sign.sh
+LIBS := lib/platform-pki-common.sh lib/platform-pki-csr-sign.sh lib/platform-pki-csr-candidate.sh
 DEV_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/verify-generated
-BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-inventory-install platform-pki-csr-trust-install platform-pki-csr-recover platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-ca-rollover platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
+BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-inventory-install platform-pki-csr-trust-install platform-pki-csr-recover platform-pki-certificate-export platform-pki-csr-candidate platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-ca-rollover platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
 
-.PHONY: help shell container-check generate verify-generated install verify test test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover test-pki-ca-rollover-parser shellcheck
+.PHONY: help shell container-check generate verify-generated install verify test test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover test-pki-ca-rollover-parser shellcheck
 
 ## Show available commands
 help:
@@ -73,7 +73,7 @@ verify:
 	done
 
 ## Run maintained tests
-test: test-python-infrastructure test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover
+test: test-python-infrastructure test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover
 
 ## Run generic Python test-harness contract tests
 test-python-infrastructure:
@@ -191,6 +191,14 @@ test-pki-ca-passphrase-verify:
 ## Run PKI Ansible export path safety tests
 test-pki-export:
 	python3 -m pytest tests/pki/test_export_ansible_safe_paths.py
+
+## Run immutable certificate-only export tests
+test-pki-certificate-export:
+	python3 -m pytest tests/pki/test_certificate_export.py
+
+## Run authenticated CSR candidate decision and recovery tests
+test-pki-csr-candidate:
+	python3 -m pytest tests/pki/test_csr_candidate.py
 
 ## Run PKI inventory value validation tests
 test-pki-inventory:
