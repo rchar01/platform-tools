@@ -19,6 +19,8 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
 - [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
+- [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md): Proposed production GitLab 18.11.3 Generic Package exchange for public host-local PKI workflow artifacts.
+- [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md): Development-only direct SSH/SFTP registry migration design and manual handoff; not executable or crash-safe.
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
 - [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md): How to manage short-lived Proxmox VE 9 development snapshots safely.
@@ -37,6 +39,8 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
 - Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).
+- Plan production CI exchange through GitLab Generic Packages: use [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md).
+- Review the direct development-host registry migration design/manual handoff: use [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md).
 - Inspect or migrate legacy PKI CA state: use [`pki-openssl.md`](./pki-openssl.md#migrate-legacy-ca-state).
 - Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).

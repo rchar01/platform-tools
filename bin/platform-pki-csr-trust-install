@@ -315,7 +315,7 @@ platform_pki_csr_trust_install_usage() {
     printf "  platform-pki-csr-trust-install --private-repo /srv/platform-private\n"
     echo
 
-    printf "The source is <private-repo>/pki/csr-trust. It must contain exactly policy,\nrequesters.allowed_signers, approvers.allowed_signers, and\nresponses.allowed_signers. The complete validated snapshot is atomically\ninstalled under <pki-dir>/inventory/csr-trust. No private key is installed.\n"
+    printf "The source is <private-repo>/pki/csr-trust. Schema 1 contains exactly policy,\nrequesters.allowed_signers, approvers.allowed_signers, and\nresponses.allowed_signers. Schema 2 adds exactly deployers.allowed_signers\nand is required for candidate finalization or abandonment. The complete\nvalidated snapshot is atomically installed under\n<pki-dir>/inventory/csr-trust. No private key is installed.\n"
     echo
 
   fi

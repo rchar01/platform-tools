@@ -541,11 +541,13 @@ sudo ./bin/platform-vm-env-collect
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
 | `docs/bastion-policy.md` | Kubernetes bastion access-policy validation and rendering flow. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
+| `docs/pki-gitlab-package-exchange.md` | Proposed production GitLab 18.11.3 Generic Package exchange contract for public host-local PKI artifacts. |
+| `docs/pki-host-local-csr-development-runbook.md` | Development-only direct SSH/SFTP registry migration design and manual handoff; not executable or crash-safe. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
 | `docs/proxmox-vm-snapshot.md` | Proxmox VE 9 development snapshot workflows, safety model, and environment-tag gate. |
 | `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |
-| `docs/handoffs/pki-host-local-csr-handoff.md` | Implemented signer contract and future platform-config activation contract for host-local leaf keys. |
+| `docs/handoffs/pki-host-local-csr-handoff.md` | Implemented signer contract, transport-neutral controller workspace, and future platform-config activation contract for host-local leaf keys. |
 | `docs/handoffs/tofu-ansible-handoff.md` | Example OpenTofu/Ansible handoff from a collected VM report. |
 | `assets/brand/` | Project brand assets for release metadata and forge profiles. |
 

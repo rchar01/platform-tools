@@ -22,7 +22,9 @@ examples:
 - platform-pki-csr-trust-install --private-repo /srv/platform-private
 
 footer: |-
-  The source is <private-repo>/pki/csr-trust. It must contain exactly policy,
+  The source is <private-repo>/pki/csr-trust. Schema 1 contains exactly policy,
   requesters.allowed_signers, approvers.allowed_signers, and
-  responses.allowed_signers. The complete validated snapshot is atomically
-  installed under <pki-dir>/inventory/csr-trust. No private key is installed.
+  responses.allowed_signers. Schema 2 adds exactly deployers.allowed_signers
+  and is required for candidate finalization or abandonment. The complete
+  validated snapshot is atomically installed under
+  <pki-dir>/inventory/csr-trust. No private key is installed.

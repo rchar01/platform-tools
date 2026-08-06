@@ -9,6 +9,11 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added production-design documentation for exchanging public host-local PKI
+  stages through one private GitLab 18.11.3 Generic Package project, plus a
+  development-only direct SSH/SFTP registry migration design/manual handoff.
+  The documents keep GitLab and SSH as untrusted transport and do not implement
+  crash-safe target activation or authorize live operations.
 - Added `platform-pki-csr-trust-install` with strict public-policy and
   no-options Ed25519 allowed-signer validation, source-race detection, standard
   PKI locking, protected no-op handling, and atomic whole-directory

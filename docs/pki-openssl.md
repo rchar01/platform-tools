@@ -808,6 +808,13 @@ expires_epoch
 
 `schema=1`, `artifact_request_id=request_id`, and `action` is exactly
 `finalize` or `abandon` as invoked. No target private key is an input or output.
+The certificate export intentionally omits the signer-internal candidate file.
+Downstream evidence producers derive `candidate_sha256` by reconstructing the
+exact canonical candidate record from the authenticated response and the exact
+response/signature digests, as specified in
+[Candidate Digest Reconstruction](handoffs/pki-host-local-csr-handoff.md#candidate-digest-reconstruction).
+The signer compares that digest with its immutable internal record during every
+decision; a transport-supplied unsigned digest is never authoritative.
 
 Finalization accepts only exact activated local and served certificate/SPKI and
 issuer-intermediate evidence with passed validation and ordered canonical
@@ -835,6 +842,26 @@ cleanup requires separate approval. Finalization recovery is resume-only from
 back or reuses CA state. The journal binds every candidate, response, export,
 retained response-trust, outcome-stage, and active-pointer identity and digest;
 recovery accepts only the exact pre- or post-rename object states.
+
+## Host-Local Exchange Runbooks
+
+The signer commands do not implement network transport, target activation, or
+GitLab integration. Use the transport-neutral ownership and workspace contract
+in [Host-Local PKI CSR Handoff](handoffs/pki-host-local-csr-handoff.md), then
+select one reviewed workflow:
+
+- [GitLab Generic Package Exchange for Host-Local PKI](pki-gitlab-package-exchange.md)
+  defines the proposed production CI exchange through one dedicated private
+  GitLab 18.11 project. GitLab remains untrusted transport and the offline
+  signer never connects to it.
+- [Development Direct SSH/SFTP Host-Local CSR Runbook](pki-host-local-csr-development-runbook.md)
+  defines the development-only direct host-to-VM registry migration design and
+  manual handoff. It is not executable or crash-safe, and the current
+  development host is not production offline custody.
+
+Neither document authorizes a live request, CA mutation, target restart,
+deployment, rollback, finalization, or cleanup. Exact protocol signatures,
+replay state, artifact pins, and separate operation approvals remain mandatory.
 
 ## Issue And Verify A Service Certificate
 

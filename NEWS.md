@@ -4,6 +4,11 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Documented the proposed production GitLab 18.11.3 Generic Package exchange and
+  the development-only direct SSH/SFTP registry migration design/manual handoff
+  for host-local CSR artifacts. These documents add no network transport,
+  target activation, crash-safe automation, or live authorization to
+  `platform-tools`.
 - Added `platform-pki-csr-trust-install` for strict, atomic installation of the
   reviewed public Ed25519 trust and timing policy reserved for authenticated
   host-local CSR exchange. Installing trust performs no signing itself.

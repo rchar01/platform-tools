@@ -155,6 +155,43 @@ Downstream automation must pin the reported artifact-manifest digest and call
 and digest. The resolver never scans or infers `current` or `latest`; its result
 is not deployment evidence and does not authorize activation.
 
+### Candidate Digest Reconstruction
+
+The six-file export does not copy the signer-internal `candidate` file. To fill
+the deployment record's `candidate_sha256`, downstream code reconstructs these
+exact LF-terminated bytes from the authenticated response, export, and their
+locally verified file digests, then hashes them with SHA-256:
+
+```text
+schema=1
+request_id=<response-request-id>
+nonce=<response-nonce>
+operation=<response-operation>
+service=<response-service>
+target=<response-target>
+state=pending
+request_sha256=<response-request-sha256>
+approval_sha256=<response-approval-sha256>
+inventory_sha256=<response-inventory-sha256>
+csr_sha256=<response-csr-sha256>
+csr_spki_sha256=<response-csr-spki-sha256>
+certificate_sha256=<response-certificate-sha256>
+chain_sha256=<response-chain-sha256>
+issuer_root=<response-issuer-root>
+issuer_intermediate=<response-issuer-intermediate>
+serial=<response-serial>
+response_sha256=<sha256-of-exact-response-bytes>
+response_signature_sha256=<sha256-of-exact-response.sig-bytes>
+created_epoch=<response-created-epoch>
+```
+
+This reconstruction does not create a trusted candidate. It only derives the
+digest that the signer later compares with its immutable internal candidate.
+Unknown, reordered, or noncanonical response data still fails. The served
+intermediate digest in deployment evidence is the SHA-256 of the exact first
+PEM certificate in the verified `ca-chain.crt`; it must equal the recorded
+issuer intermediate held by the signer.
+
 ## Approved Registry Pilot Decisions
 
 The public implementation must expose these as strict reviewed inputs rather
@@ -201,11 +238,20 @@ they must not be chosen implicitly by an Ansible role.
 ├── active
 ├── rollback
 ├── activation-journal
+├── evidence-attempt-journal
 ├── validation-boundary
-└── evidence/<request-id>/
+├── trust/<reviewed-trust-id>/
+│   ├── policy
+│   ├── requesters.allowed_signers
+│   ├── approvers.allowed_signers
+│   ├── responses.allowed_signers
+│   └── deployers.allowed_signers
+└── evidence/<request-id>/<deployment-sha256>/
     ├── deployment
     ├── deployment.sig
-    └── validation-result
+    ├── validation-boundary
+    ├── validation-result
+    └── validation-result.sig
 ```
 
 All state directories are root-owned mode `700`. Private keys, lock files,
@@ -227,23 +273,40 @@ filesystem inference.
 The activation journal is written and fsynced before changing Zot
 configuration or service state. It binds exact pre-state, staged-state, target
 version, prior active record, rollback record, Zot configuration identity, and
-the only allowed recovery action. Recovery never changes CA state and never
-selects another artifact.
+the only allowed recovery action. Immediately before mutation it reserves the
+canonical initial deployment `created_epoch`; rollback hold is measured from
+that exact epoch, and the initial deployment bytes must reuse it. As part of the
+activation mutation, publish journal-bound active and rollback records before
+validation so the local check can authenticate the selected active version. If
+activation fails, restore the exact prior records or leave recovery-required
+state. Strict validation must complete within the signer's 300-second
+epoch-ordering window or activation rolls back. Recovery never changes CA state
+and never selects another artifact.
 
-## Controller Exchange Contract
+## Controller Workspace And Transport Contract
 
-The controller uses one explicit owner-only outside-Git root supplied by
-`PLATFORM_CONFIG_PKI_EXCHANGE_ROOT`. It must be mounted read-write into the
-development container as a narrow dedicated mount; the complete
-`~/.config/platform-infrastructure/` tree remains read-only.
+The controller uses one explicit owner-only outside-Git workspace supplied by
+`PLATFORM_CONFIG_PKI_EXCHANGE_ROOT`. If containerized automation needs it, mount
+only that workspace read-write; the complete
+`~/.config/platform-infrastructure/` tree remains read-only. The workspace is
+local staging, not the transport or a trust anchor.
 
 ```text
 <exchange-root>/registry-dev/<request-id>/
+├── trust/
+│   ├── policy
+│   ├── requesters.allowed_signers
+│   ├── approvers.allowed_signers
+│   ├── responses.allowed_signers
+│   └── deployers.allowed_signers
 ├── request/
 │   ├── tls.csr
 │   ├── request
 │   ├── request.sig
 │   └── collection-receipt
+├── approval/
+│   ├── approval
+│   └── approval.sig
 ├── response/
 │   ├── artifact
 │   ├── tls.crt
@@ -251,31 +314,101 @@ development container as a narrow dedicated mount; the complete
 │   ├── fullchain.crt
 │   ├── response
 │   └── response.sig
-└── evidence/
+└── evidence/<deployment-sha256>/
     ├── deployment
     ├── deployment.sig
     ├── validation-boundary
-    └── validation-result
+    ├── validation-result
+    └── validation-result.sig
 ```
 
-The controller never receives `tls.key`. Collection must use an explicit
-allowlist of the four public request files; activation transfer must use the
-exact six-file certificate export. `fetch`, `slurp`, registered output, facts,
-debug, diffs, lookups, controller temporary files, and exception output must
-never handle the private key.
+The controller never receives `tls.key`. Collection fetches an explicit
+allowlist of only `tls.csr`, `request`, and `request.sig`; after complete
+verification the controller creates `collection-receipt` locally. Activation
+transfer must use the exact six-file certificate export. `fetch`, `slurp`,
+registered output, facts, debug, diffs, lookups, controller temporary files, and
+exception output must never handle the private key.
+
+`collection-receipt` is printable ASCII with LF endings, one final newline, and
+this exact ordered schema:
+
+```text
+schema=1
+kind=pki-request-collection
+service=<canonical-inventory-service>
+target=<canonical-target-principal>
+request_id=<32-lowercase-hex>
+transport=<ssh|sftp>
+transport_host_key_sha256=<64-lowercase-hex>
+csr_sha256=<64-lowercase-hex>
+request_sha256=<64-lowercase-hex>
+request_signature_sha256=<64-lowercase-hex>
+trust_policy_sha256=<64-lowercase-hex>
+request_trust_sha256=<64-lowercase-hex>
+approval_trust_sha256=<64-lowercase-hex>
+response_trust_sha256=<64-lowercase-hex>
+deployment_trust_sha256=<64-lowercase-hex>
+request_principal=<canonical-target-principal>
+request_namespace=platform-pki-csr-request-v1
+collected_epoch=<canonical-decimal-epoch>
+verification_result=passed
+```
+
+`transport_host_key_sha256` is SHA-256 over the binary SSH host public-key blob
+that matched the independently enrolled transport pin. The receipt is created
+only after rechecking the three collected files, parsing the request, verifying
+its detached signature against installed requester trust, and matching service,
+target, inventory, CSR, request ID, and freshness. It is non-authoritative audit
+evidence: the signer does not consume it, and it cannot replace request or
+approval signatures, replay state, an artifact digest, or deployment evidence.
+The production request-job profile records `transport=ssh`; the direct
+development profile records `transport=sftp`. No other value is accepted.
+
+The five trust digests are SHA-256 over the exact bytes of the frozen `policy`,
+`requesters.allowed_signers`, `approvers.allowed_signers`,
+`responses.allowed_signers`, and `deployers.allowed_signers` files. Before
+request creation, target and controller must independently provision and
+identity-check the exact schema-2 five-file trust tree shown above. The
+controller snapshot must byte-match the reviewed source and signer installation;
+the target snapshot independently pins the same policy. The workspace location
+does not make those files trusted. No exchange payload may add, replace, or
+select trust.
 
 The request run receives the exact reviewed inventory digest and response
 principal as non-secret inputs. It does not copy the private inventory to the
 target. The activation run receives an exact service, request ID, artifact
-manifest digest, and response-trust snapshot; it never scans for a newer
+manifest digest, and expected response- and deployment-trust digests, then
+verifies the separately provisioned snapshots; it never scans for a newer
 response.
 
-Response and deployment trust remain frozen from request collection through
-finalization. A pending run must fail if the reviewed trust snapshot identity
-changes. Trust rotation is a separate operation: publish and review the new
-public trust, install it atomically, update target/controller pins, and begin
-only new requests. Historical signer verification uses transaction-retained
-trust; no public key supplied by an exchange bundle becomes trusted.
+Target and controller trust remain frozen from request creation through
+finalization or abandonment. Every phase rechecks the exact protected paths,
+file identities, and five receipt digests; activation also requires the
+operator-supplied expected response-trust digest, and evidence acceptance
+requires the expected deployment-trust digest. The signer retains response trust
+with the signing transaction and deployer trust with an accepted decision, but
+the current signer does not bind request-time deployer trust into a pending
+candidate. Therefore schema-2 signer trust rotation is operationally prohibited
+while any request or candidate is pending; trust installation and lifecycle
+automation must enforce an empty-pending-state gate before rotation. A pending
+run fails if any target/controller snapshot changes. Rotation publishes and
+reviews new public trust, installs it atomically only after that gate, updates
+target/controller pins, and begins only new requests. No exchange-provided key
+becomes trusted. The current `platform-pki-csr-trust-install` does not implement
+the empty-pending-state gate, so schema-2 trust rotation remains blocked until
+that enforcement and its lifecycle tests are added.
+
+Select exactly one reviewed transport profile without changing these local
+workspace or PKI rules:
+
+- [GitLab Generic Package Exchange for Host-Local PKI](../pki-gitlab-package-exchange.md)
+  is the production CI transport contract.
+- [Development Direct SSH/SFTP Host-Local CSR Runbook](../pki-host-local-csr-development-runbook.md)
+  is the direct development-host design/manual handoff; it is not executable or
+  crash-safe.
+
+Transport authentication, package checksums, SSH success, and transport
+manifests never replace canonical protocol signatures or exact digest pins.
 
 ## Platform-Config Request Run
 
@@ -346,15 +479,119 @@ The registry activation run must additionally:
    it with `/etc/ssh/ssh_host_ed25519_key` under
    `platform-pki-csr-deployment-v1`.
 8. Fetch only deployment evidence, its detached signature, and the canonical
-   validation files into the controller exchange root.
+   validation files and validation-result signature into the controller
+   workspace, then publish them through the selected reviewed transport when
+   that profile requires publication.
 
-The canonical validation-boundary file is retained alongside the evidence and
-its SHA-256 digest must equal `validation_boundary_sha256` in the reviewed PKI
-inventory. It binds `registry-dev`, `dev-registry-01`,
-`dev-registry-runner-01`, `https://registry.dev/v2/`, the local Zot check, strict
-TLS verification, served leaf/intermediate inspection, and read-only OCI API
-validation. The coding agent must define and test one exact ordered schema; it
-must not hash an ad hoc Ansible result.
+### Canonical Validation Files
+
+The reviewed registry pilot `validation-boundary` is printable ASCII with LF
+endings, one final newline, and these exact ordered bytes:
+
+```text
+schema=1
+kind=pki-validation-boundary
+service=registry-dev
+target=dev-registry-01
+local_validator=dev-registry-01
+remote_validator=dev-registry-runner-01
+endpoint=https://registry.dev/v2/
+local_check=platform-zot-local-active-tls-v1
+remote_check=platform-oci-v2-read-only-strict-tls-v1
+```
+
+Its SHA-256 must equal `validation_boundary_sha256` in reviewed PKI inventory.
+`platform-zot-local-active-tls-v1` means verifying the identity-bound active
+record and exact Zot configuration/version, service health, a strict
+hostname-validating TLS connection to the endpoint with the reviewed trust
+bundle, and the served leaf and first issuer-intermediate digests.
+`platform-oci-v2-read-only-strict-tls-v1` means making the same strict TLS and
+served-chain checks from `dev-registry-runner-01`, then issuing only `GET /v2/`.
+It accepts either a successful OCI Distribution v2 response or the configured
+authentication challenge, requires the `Docker-Distribution-Api-Version:
+registry/2.0` response, and performs no upload, deletion, tag mutation, or
+insecure retry. Implementations must freeze and fixture-test these versioned
+check semantics before installing the boundary digest. A behavior change
+requires a new check token, reviewed boundary bytes, and inventory digest.
+
+For each decision attempt, `validation-result` is printable ASCII with LF
+endings, one final newline, and this exact ordered schema:
+
+```text
+schema=1
+kind=pki-validation-result
+service=<canonical-inventory-service>
+target=<canonical-target-principal>
+request_id=<32-lowercase-hex>
+artifact_manifest_sha256=<64-lowercase-hex>
+validation_boundary_sha256=<64-lowercase-hex>
+action=<finalize|abandon>
+result=<activated|not-activated|rolled-back>
+local_validator=<canonical-target-principal>
+remote_validator=<reviewed-validation-principal>
+endpoint=<exact-boundary-endpoint>
+local_service_result=<passed|not-run>
+local_tls_result=<passed|not-run>
+remote_tls_result=<passed|not-run>
+remote_application_result=<passed|not-run>
+remote_http_status=<200|401|not-run>
+remote_api_version=<registry/2.0|not-run>
+remote_auth_challenge=<present|not-required|not-run>
+served_certificate_sha256=<64-lowercase-hex|none>
+served_intermediate_sha256=<64-lowercase-hex|none>
+activation_epoch=<canonical-decimal-epoch|none>
+validation_epoch=<canonical-decimal-epoch|none>
+deployment_sha256=<64-lowercase-hex>
+```
+
+The result is created only after canonical `deployment` bytes exist;
+`deployment_sha256` hashes those exact bytes. Its service, target, request,
+artifact, boundary, action, result, served digests, and epochs must equal the
+corresponding deployment fields. Validator and endpoint values must equal the
+canonical boundary. Finalization requires all four check results `passed`, exact
+candidate served digests, canonical activation/validation epochs,
+`remote_api_version=registry/2.0`, and either status `200` with
+`remote_auth_challenge=not-required` or status `401` with
+`remote_auth_challenge=present`. A not-activated abandonment requires all four
+results and all three remote observation fields `not-run`, both served digests
+and both epochs `none`. A rolled-back abandonment requires all four `passed`,
+the same valid remote observations, exact signer-known predecessor served
+digests, and canonical activation/restored-state validation epochs. Mixed states
+fail closed.
+
+The installed boundary is copied byte-for-byte into the immutable evidence tree
+and rehashed before and after publication. The target signs the exact
+`validation-result` bytes with its frozen deployment key and principal under
+`platform-pki-csr-deployment-v1`, producing `validation-result.sig`; controller
+and transfer stations verify it against the frozen deployer trust before using
+the detailed result for review. This is the same deployment authority, while
+strict validation-result and deployment parsers reject the other record's exact
+field grammar before accepting a signature. The signer decision command does not
+consume either supplemental validation file, so the detached deployment
+signature and signer validation of canonical deployment fields remain decisive.
+Unknown, duplicate, reordered, blank, noncanonical, CRLF, NUL-containing, or
+trailing fields in either file fail closed. Neither file may be synthesized from
+ad hoc Ansible output.
+
+An evidence producer builds all five files in a protected same-parent temporary
+directory, derives `<deployment-sha256>` from exact deployment bytes, rechecks
+both signatures and every cross-binding, then no-clobber publishes the complete
+directory at `evidence/<request-id>/<deployment-sha256>/`. The controller uses
+the same digest-keyed attempt directory. Consumers receive the exact request ID
+and deployment digest and never scan or select an attempt. Existing attempt
+directories are immutable and retained; matching bytes are idempotent, while a
+conflict fails closed.
+
+If signer acceptance misses the deployment evidence freshness window while the
+same identity remains active, a fresh attempt does not reuse the initial
+`created_epoch`. Under the target lifecycle lock, an evidence-attempt journal
+reserves a new canonical `created_epoch`, atomically extends the identity-bound
+rollback deadline to at least that epoch plus the inventory hold, and repeats
+all local and remote checks within the 300-second ordering window. It then
+creates new deployment, validation-result, and detached-signature bytes and a
+new digest-suffixed evidence coordinate. It never changes only timestamps,
+shortens a hold, selects another artifact, or bypasses revalidation. Failure
+restores the exact prior records or leaves explicit recovery-required state.
 
 Check mode creates no key, CSR, nonce, request, certificate, pointer, restart,
 or consumed state. Repeating either successful phase is idempotent. A conflicting
@@ -393,6 +630,8 @@ secure erasure.
   changed files, and unresolved journals.
 - Reject wrong key, CSR, request, response signer, service, target, inventory,
   SAN, EKU, issuer, chain, validity, digest, request ID, nonce, and artifact.
+- Reject any trust-tree change while state is pending and any substituted,
+  unsigned, wrong-principal, or wrong-namespace validation result.
 - Prove no target mutation occurs before complete candidate validation.
 - Inject staging, pointer, restart, strict-health, interruption, and rollback
   failures; preserve old service health or fail closed with recovery evidence.
@@ -419,9 +658,10 @@ validation in real inventory, or run a live request. Those changes require a
 separate reviewed private-data handoff and authorization after public tests pass.
 
 Live activation remains blocked until reviewed schema-2 public trust, the exact
-validation-boundary record and digest, the 14-day rollback policy, the narrow
-controller exchange mount, and target/client syntax and check-mode evidence are
-present. Registry request generation, signing, activation/restart, mutating
+validation-boundary record and digest, the 14-day rollback policy, the protected
+controller workspace, one reviewed transport profile, and target/client syntax
+and check-mode evidence are present. Registry request generation, signing,
+activation/restart, mutating
 client tests, rollback rehearsal, finalization, quarantine, and cleanup each
 require separate authorization.
 
