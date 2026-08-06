@@ -234,7 +234,7 @@ pki_validate_inventory_file() {
     [[ $saw_services == true ]] || pki_die "Inventory content outside services at line $line_number"
 
     if [[ $line =~ ^\ \ ([A-Za-z0-9][A-Za-z0-9_.-]*):$ ]]; then
-      if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
         pki_die "Inventory $field list for service $service must not be empty"
       fi
       service=${BASH_REMATCH[1]}
@@ -247,8 +247,8 @@ pki_validate_inventory_file() {
     fi
     [[ -n $service ]] || pki_die "Inventory requires a service key at line $line_number"
 
-    if [[ $line =~ ^\ \ \ \ (common_name|days):[[:space:]]+(.+)$ ]]; then
-      if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+    if [[ $line =~ ^\ \ \ \ (common_name|days|key_custody):[[:space:]]+(.+)$ ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
         pki_die "Inventory $field list for service $service must not be empty"
       fi
       field=${BASH_REMATCH[1]}
@@ -257,15 +257,17 @@ pki_validate_inventory_file() {
       value=$(pki_inventory_parse_value "${BASH_REMATCH[2]}")
       if [[ $field == common_name ]]; then
         pki_validate_dns_name_value "common_name for service $service" "$value"
-      else
+      elif [[ $field == days ]]; then
         pki_validate_days "$value"
+      else
+        [[ $value == host-local ]] || pki_die "Inventory key_custody for service $service must be host-local"
       fi
       printf '%s\t%s\t%s\n' "$service" "$field" "$value" >>"$canonical"
       list_count=0
       continue
     fi
     if [[ $line =~ ^\ \ \ \ (dns|ips):$ ]]; then
-      if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+      if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
         pki_die "Inventory $field list for service $service must not be empty"
       fi
       field=${BASH_REMATCH[1]}
@@ -293,7 +295,7 @@ pki_validate_inventory_file() {
 
   [[ $saw_services == true ]] || pki_die 'Inventory must contain exactly one services mapping'
   [[ $service_count -gt 0 ]] || pki_die 'Inventory must define at least one service'
-  if [[ -n $field && $field != common_name && $field != days && $list_count -eq 0 ]]; then
+  if [[ -n $field && $field != common_name && $field != days && $field != key_custody && $list_count -eq 0 ]]; then
     pki_die "Inventory $field list for service $service must not be empty"
   fi
   for service in "${!services_seen[@]}"; do
@@ -340,6 +342,12 @@ pki_inventory_array() {
   local field=$2
   [[ -n ${INVENTORY_CANONICAL:-} ]] || pki_die 'Service inventory snapshot is not loaded'
   awk -F '\t' -v service="$service" -v field="$field" '$1 == service && $2 == field { print $3 }' "$INVENTORY_CANONICAL"
+}
+
+pki_inventory_key_custody() {
+  local service=$1 custody
+  custody=$(pki_inventory_scalar "$service" key_custody)
+  printf '%s\n' "${custody:-managed}"
 }
 
 pki_require_service_in_inventory() {
@@ -625,13 +633,21 @@ pki_release_operation_lock() {
 
 pki_recovery_journal() { printf '%s/state/rollover/journal\n' "$PKI_DIR"; }
 pki_recovery_marker() { printf '%s/state/rollover/recovery-required\n' "$PKI_DIR"; }
+pki_csr_recovery_journal() { printf '%s/state/csr/recovery-journal\n' "$PKI_DIR"; }
 pki_active_rollover_pointer() { printf '%s/state/active-rollover\n' "$PKI_DIR"; }
 pki_rollover_transaction_dir() { [[ $1 =~ ^prepare-(root|intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+$ ]] || pki_die "Invalid rollover transaction ID: $1"; printf '%s/state/rollovers/%s\n' "$PKI_DIR" "$1"; }
 
 pki_require_no_unresolved_journal() {
-  local journal marker
+  local journal marker csr_journal
   journal=$(pki_recovery_journal)
   marker=$(pki_recovery_marker)
+  csr_journal=$(pki_csr_recovery_journal)
+  if [[ -e $csr_journal || -L $csr_journal ]]; then
+    pki_read_state_record "$csr_journal" 'Authenticated CSR signing recovery journal'
+    [[ ${PKI_RECORD[operation]:-} != csr-sign ]] || \
+      pki_die "Authenticated CSR signing recovery is required before this command can continue: $csr_journal"
+    pki_die "Unsupported CSR recovery state blocks this command: $csr_journal"
+  fi
   if [[ -e $marker || -L $marker ]]; then
     [[ -f $marker && ! -L $marker && $(stat -c '%u:%a:%h' "$marker") == "$(id -u):600:1" ]] || pki_die "PKI recovery marker is unsafe: $marker"
     pki_die "PKI recovery is required before this command can continue: $marker"
@@ -1454,9 +1470,11 @@ pki_cert_has_server_auth() {
 }
 
 pki_verify_service_certificate() {
-  local service=$1 min_days=$2 key cert root_cert int_cert dns ip
+  local service=$1 min_days=$2 key cert root_cert int_cert dns ip custody
 
   pki_require_service_in_inventory "$service"
+  custody=$(pki_inventory_key_custody "$service")
+  [[ $custody == managed ]] || pki_die "Host-local signer-side candidate verification is unavailable: $service"
   key=$(pki_service_key "$service")
   cert=$(pki_service_cert "$service")
   pki_load_service_issuer_snapshot "$service"

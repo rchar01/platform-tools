@@ -11,6 +11,8 @@ fi
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
 
+pki_reject_repeated_options --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file
+
 require_private_dir() {
   local path=$1 label=$2 mode owner current_uid
   [[ -d $path && ! -L $path ]] || pki_die "$label must be a non-symlink directory: $path"
@@ -250,6 +252,23 @@ pki_require_cmd openssl
 pki_require_pki_dir
 pki_prepare_control_state
 
+CSR_EXTERNAL=false
+for option in --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file; do
+  [[ ! -v args[$option] ]] || CSR_EXTERNAL=true
+done
+if [[ $CSR_EXTERNAL == true ]]; then
+  for option in --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file; do
+    [[ -v args[$option] && -n ${args[$option]} ]] || pki_die "Authenticated host-local renewal requires $option"
+  done
+  [[ ! -v args[--days] ]] || pki_die '--days is unavailable for host-local CSR signing; inventory is authoritative'
+  [[ $ROTATE_KEY != true ]] || pki_die '--rotate-key conflicts with --csr-file'
+  CSR_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-sign.sh
+  [[ -r $CSR_COMMON_PATH ]] || pki_die 'platform-pki-csr-sign.sh not found'
+  # shellcheck source=../../../../lib/platform-pki-csr-sign.sh disable=SC1091
+  source "$CSR_COMMON_PATH"
+  pki_csr_sign_external renew
+fi
+
 ROOT_CA_DIR=''; INTERMEDIATE_CA_DIR=''; SERVICES_DIR="$PKI_DIR/services"
 SERVICE_DIR=$(pki_service_dir "$SERVICE"); KEY=$(pki_service_key "$SERVICE"); CSR="$SERVICE_DIR/csr/tls.csr"
 CERT=$(pki_service_cert "$SERVICE"); CHAIN=$(pki_service_chain "$SERVICE"); FULLCHAIN=$(pki_service_fullchain "$SERVICE")
@@ -268,9 +287,11 @@ validate_renewal_state() {
   for sidecar in index.txt.old index.txt.attr.old serial.old; do require_safe_file "$INTERMEDIATE_CA_DIR/$sidecar" "Intermediate CA $sidecar" true; done
   for specification in "$INVENTORY" "$ROOT_CERT" "$INT_KEY" "$INT_CERT" "$INT_CONF" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/crlnumber"; do pki_require_file "$specification"; done
   process_intermediate_signing_config "$INT_CONF"
-  [[ -f $KEY ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
   [[ -n ${INVENTORY_CANONICAL:-} ]] || return 0
-  pki_require_service_in_inventory "$SERVICE"; COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name); [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
+  pki_require_service_in_inventory "$SERVICE"
+  [[ $(pki_inventory_key_custody "$SERVICE") == managed ]] || pki_die "Host-local service renewal requires authenticated CSR inputs: $SERVICE"
+  [[ -f $KEY ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
+  COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name); [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
   DAYS=$DAYS_OVERRIDE; [[ -n $DAYS ]] || DAYS=$(pki_inventory_scalar "$SERVICE" days); DAYS=${DAYS:-${PLATFORM_PKI_SERVICE_DAYS:-397}}; pki_validate_days "$DAYS"
   : >"$DNS_FILE"; : >"$IPS_FILE"; pki_inventory_array "$SERVICE" dns >"$DNS_FILE"; pki_inventory_array "$SERVICE" ips >"$IPS_FILE"
   [[ -s $DNS_FILE || -s $IPS_FILE ]] || pki_die "Service must define at least one DNS or IP SAN: $SERVICE"

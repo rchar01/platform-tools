@@ -4,6 +4,22 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki-csr-trust-install` for strict, atomic installation of the
+  reviewed public Ed25519 trust and timing policy reserved for authenticated
+  host-local CSR exchange. Installing trust performs no signing itself.
+- Added authenticated host-local issue, managed-to-host-local migration, and
+  renewal from P-384 CSRs. The signer verifies canonical request and approval
+  signatures, enforces replay and inventory-authoritative profiles, updates CA
+  state transactionally, and publishes certificate-only pending candidates and
+  signed responses. `platform-pki-csr-recover` deterministically rolls back
+  exact pre-commit publication or resumes post-commit response publication.
+- Added `platform-pki-ca-passphrase-verify` for lock-safe, secret-free
+  point-in-time validation that an active encrypted CA key can be opened by a
+  supplied passphrase and matches its active certificate.
+- Extended strict service inventory with optional `key_custody: host-local`.
+  Omission remains the existing managed-key behavior and unknown values fail.
+  Candidate verification, deployment finalization, and host-local Ansible
+  export remain unavailable.
 - Added `platform-pki-custody-report` with deterministic text and JSON reports
   for managed CA, leaf-key, export, backup, inventory, and legacy custody. The
   command detects structural findings without decrypting or parsing private

@@ -21,6 +21,8 @@ root_command() {
   # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
   source "$COMMON_PATH"
 
+  pki_reject_repeated_options --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file
+
   require_private_dir() {
     local path=$1 label=$2 mode owner current_uid
     [[ -d $path && ! -L $path ]] || pki_die "$label must be a non-symlink directory: $path"
@@ -260,6 +262,23 @@ root_command() {
   pki_require_pki_dir
   pki_prepare_control_state
 
+  CSR_EXTERNAL=false
+  for option in --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file; do
+    [[ ! -v args[$option] ]] || CSR_EXTERNAL=true
+  done
+  if [[ $CSR_EXTERNAL == true ]]; then
+    for option in --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file; do
+      [[ -v args[$option] && -n ${args[$option]} ]] || pki_die "Authenticated host-local renewal requires $option"
+    done
+    [[ ! -v args[--days] ]] || pki_die '--days is unavailable for host-local CSR signing; inventory is authoritative'
+    [[ $ROTATE_KEY != true ]] || pki_die '--rotate-key conflicts with --csr-file'
+    CSR_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-sign.sh
+    [[ -r $CSR_COMMON_PATH ]] || pki_die 'platform-pki-csr-sign.sh not found'
+    # shellcheck source=../../../../lib/platform-pki-csr-sign.sh disable=SC1091
+    source "$CSR_COMMON_PATH"
+    pki_csr_sign_external renew
+  fi
+
   ROOT_CA_DIR=''; INTERMEDIATE_CA_DIR=''; SERVICES_DIR="$PKI_DIR/services"
   SERVICE_DIR=$(pki_service_dir "$SERVICE"); KEY=$(pki_service_key "$SERVICE"); CSR="$SERVICE_DIR/csr/tls.csr"
   CERT=$(pki_service_cert "$SERVICE"); CHAIN=$(pki_service_chain "$SERVICE"); FULLCHAIN=$(pki_service_fullchain "$SERVICE")
@@ -278,9 +297,11 @@ root_command() {
     for sidecar in index.txt.old index.txt.attr.old serial.old; do require_safe_file "$INTERMEDIATE_CA_DIR/$sidecar" "Intermediate CA $sidecar" true; done
     for specification in "$INVENTORY" "$ROOT_CERT" "$INT_KEY" "$INT_CERT" "$INT_CONF" "$INTERMEDIATE_CA_DIR/index.txt" "$INTERMEDIATE_CA_DIR/index.txt.attr" "$INTERMEDIATE_CA_DIR/serial" "$INTERMEDIATE_CA_DIR/crlnumber"; do pki_require_file "$specification"; done
     process_intermediate_signing_config "$INT_CONF"
-    [[ -f $KEY ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
     [[ -n ${INVENTORY_CANONICAL:-} ]] || return 0
-    pki_require_service_in_inventory "$SERVICE"; COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name); [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
+    pki_require_service_in_inventory "$SERVICE"
+    [[ $(pki_inventory_key_custody "$SERVICE") == managed ]] || pki_die "Host-local service renewal requires authenticated CSR inputs: $SERVICE"
+    [[ -f $KEY ]] || pki_die "Service private key is missing; use platform-pki-service-issue first: $KEY"
+    COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name); [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
     DAYS=$DAYS_OVERRIDE; [[ -n $DAYS ]] || DAYS=$(pki_inventory_scalar "$SERVICE" days); DAYS=${DAYS:-${PLATFORM_PKI_SERVICE_DAYS:-397}}; pki_validate_days "$DAYS"
     : >"$DNS_FILE"; : >"$IPS_FILE"; pki_inventory_array "$SERVICE" dns >"$DNS_FILE"; pki_inventory_array "$SERVICE" ips >"$IPS_FILE"
     [[ -s $DNS_FILE || -s $IPS_FILE ]] || pki_die "Service must define at least one DNS or IP SAN: $SERVICE"
@@ -416,6 +437,34 @@ platform_pki_service_renew_usage() {
     printf "    Archive and replace the existing service private key\n"
     echo
 
+    printf "  %s\n" "$(magenta "--csr-file PATH")"
+    printf "    Host-generated P-384 CSR\n"
+    echo
+
+    printf "  %s\n" "$(magenta "--request-file PATH")"
+    printf "    Canonical authenticated CSR request manifest\n"
+    echo
+
+    printf "  %s\n" "$(magenta "--request-signature PATH")"
+    printf "    Detached OpenSSH request signature\n"
+    echo
+
+    printf "  %s\n" "$(magenta "--approval-file PATH")"
+    printf "    Canonical offline approval manifest\n"
+    echo
+
+    printf "  %s\n" "$(magenta "--approval-signature PATH")"
+    printf "    Detached OpenSSH approval signature\n"
+    echo
+
+    printf "  %s\n" "$(magenta "--response-key PATH")"
+    printf "    Trusted Ed25519 response-signing private key\n"
+    echo
+
+    printf "  %s\n" "$(magenta "--current-cert-file PATH")"
+    printf "    Current host-local certificate bound by the request\n"
+    echo
+
     printf "  %s\n" "$(magenta "--help, -h")"
     printf "    Show this help\n"
     echo
@@ -434,7 +483,7 @@ platform_pki_service_renew_usage() {
     printf "  platform-pki-service-renew platform-example --rotate-key\n"
     echo
 
-    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nThe lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397\ndays, in that order. The existing private key is reused unless --rotate-key\nis used. Previous service state is archived only when renewal and verification\ncomplete successfully. Passphrase files must be mode 600 or stricter and have\na first line of at least 16 characters containing non-whitespace content.\nLegacy singleton CA state must be migrated before this command can run.\n"
+    printf "The namespace defaults to platform-infrastructure under the XDG\nconfiguration home. The PKI directory defaults to <namespace>/pki.\nThe lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397\ndays, in that order. The existing private key is reused unless --rotate-key\nis used. Previous service state is archived only when renewal and verification\ncomplete successfully. Passphrase files must be mode 600 or stricter and have\na first line of at least 16 characters containing non-whitespace content.\nHost-local renewal requires the complete authenticated CSR, current\ncertificate, request, approval, and response-signing inputs. It publishes\nonly a pending certificate candidate and signed response.\nLegacy singleton CA state must be migrated before this command can run.\n"
     echo
 
   fi
@@ -625,6 +674,90 @@ parse_requirements() {
         shift
         ;;
 
+      --csr-file)
+
+        if [[ -n ${2+x} ]]; then
+          args['--csr-file']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--csr-file requires an argument: --csr-file PATH" >&2
+          exit 1
+        fi
+        ;;
+
+      --request-file)
+
+        if [[ -n ${2+x} ]]; then
+          args['--request-file']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--request-file requires an argument: --request-file PATH" >&2
+          exit 1
+        fi
+        ;;
+
+      --request-signature)
+
+        if [[ -n ${2+x} ]]; then
+          args['--request-signature']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--request-signature requires an argument: --request-signature PATH" >&2
+          exit 1
+        fi
+        ;;
+
+      --approval-file)
+
+        if [[ -n ${2+x} ]]; then
+          args['--approval-file']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--approval-file requires an argument: --approval-file PATH" >&2
+          exit 1
+        fi
+        ;;
+
+      --approval-signature)
+
+        if [[ -n ${2+x} ]]; then
+          args['--approval-signature']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--approval-signature requires an argument: --approval-signature PATH" >&2
+          exit 1
+        fi
+        ;;
+
+      --response-key)
+
+        if [[ -n ${2+x} ]]; then
+          args['--response-key']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--response-key requires an argument: --response-key PATH" >&2
+          exit 1
+        fi
+        ;;
+
+      --current-cert-file)
+
+        if [[ -n ${2+x} ]]; then
+          args['--current-cert-file']="$2"
+          shift
+          shift
+        else
+          printf "%s\n" "--current-cert-file requires an argument: --current-cert-file PATH" >&2
+          exit 1
+        fi
+        ;;
+
       -?*)
         printf "invalid option: %s\n" "$key" >&2
         exit 1
@@ -689,6 +822,62 @@ parse_requirements() {
     validation_output="$(validate_not_empty "${args['--intermediate-pass-file']:-}")"
     if [[ -n "${validation_output}" ]]; then
       printf "validation error in %s:\n%s\n" "--intermediate-pass-file PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--csr-file'] ]]; then
+    validation_output="$(validate_not_empty "${args['--csr-file']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--csr-file PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--request-file'] ]]; then
+    validation_output="$(validate_not_empty "${args['--request-file']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--request-file PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--request-signature'] ]]; then
+    validation_output="$(validate_not_empty "${args['--request-signature']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--request-signature PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--approval-file'] ]]; then
+    validation_output="$(validate_not_empty "${args['--approval-file']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--approval-file PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--approval-signature'] ]]; then
+    validation_output="$(validate_not_empty "${args['--approval-signature']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--approval-signature PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--response-key'] ]]; then
+    validation_output="$(validate_not_empty "${args['--response-key']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--response-key PATH" "$validation_output" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -v args['--current-cert-file'] ]]; then
+    validation_output="$(validate_not_empty "${args['--current-cert-file']:-}")"
+    if [[ -n "${validation_output}" ]]; then
+      printf "validation error in %s:\n%s\n" "--current-cert-file PATH" "$validation_output" >&2
       exit 1
     fi
   fi

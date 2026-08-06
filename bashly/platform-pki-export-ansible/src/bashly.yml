@@ -30,4 +30,6 @@ examples:
 footer: |-
   The export contains service private keys. Custom export directories must be
   absolute and pass ownership, permission, and symlink safety checks.
+  Explicit host-local service selection fails; all-service export skips
+  host-local inventory entries because this export is managed-key-only.
   Legacy singleton CA state must be migrated before this command can run.

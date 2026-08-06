@@ -43,6 +43,11 @@ INVENTORY = """services:
     common_name: keyonly.example.internal
     dns:
       - keyonly.example.internal
+  external:
+    key_custody: host-local
+    common_name: external.example.internal
+    dns:
+      - external.example.internal
 """
 
 
@@ -162,6 +167,14 @@ def test_service_renew_requires_issued_service_state(renew_workspace: Workspace)
     assert result.status == 1
     assert "Service private key is missing; use platform-pki-service-issue first" in result.stderr
     assert not (renew_workspace.pki / "services/app").exists()
+
+
+def test_service_renew_host_local_inventory_fails_closed(renew_workspace: Workspace) -> None:
+    result = renew_workspace.renew("external")
+    assert result.status == 1
+    assert "Host-local service renewal requires authenticated CSR inputs: external" in result.stderr
+    assert not (renew_workspace.pki / "services/external").exists()
+    no_residue(renew_workspace.pki)
 
 
 def test_service_renew_reuses_key_archives_material_and_honors_inventory_days(renew_workspace: Workspace) -> None:

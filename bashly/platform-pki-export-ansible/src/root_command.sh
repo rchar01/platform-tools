@@ -197,6 +197,10 @@ esac
 if [[ ${#SERVICES[@]} -eq 0 ]]; then
   while IFS= read -r service || [[ -n $service ]]; do
     [[ -n $service ]] || continue
+    if [[ $(pki_inventory_key_custody "$service") == host-local ]]; then
+      pki_warn "Skipping host-local service; Ansible export is managed-key-only: $service"
+      continue
+    fi
     if service_is_generated "$service"; then
       SERVICES+=("$service")
     else
@@ -206,6 +210,8 @@ if [[ ${#SERVICES[@]} -eq 0 ]]; then
 else
   for service in "${SERVICES[@]}"; do
     pki_require_service_in_inventory "$service"
+    [[ $(pki_inventory_key_custody "$service") == managed ]] || \
+      pki_die "Host-local service cannot be exported through the managed-key Ansible export: $service"
     service_is_generated "$service" || pki_die "Generated certificate files are incomplete for service: $service"
   done
 fi

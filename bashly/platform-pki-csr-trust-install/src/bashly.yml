@@ -1,0 +1,28 @@
+name: platform-pki-csr-trust-install
+help: Install reviewed host-local CSR signing trust
+version: platform-pki-csr-trust-install <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --private-repo
+  arg: path
+  help: Private repository path
+  default: ../platform-private
+  validate: not_empty
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+
+examples:
+- platform-pki-csr-trust-install
+- platform-pki-csr-trust-install --private-repo /srv/platform-private
+
+footer: |-
+  The source is <private-repo>/pki/csr-trust. It must contain exactly policy,
+  requesters.allowed_signers, approvers.allowed_signers, and
+  responses.allowed_signers. The complete validated snapshot is atomically
+  installed under <pki-dir>/inventory/csr-trust. No private key is installed.

@@ -1,5 +1,8 @@
 services:
   platform-example:
+    # Omit key_custody for managed controller-generated keys. The only
+    # supported explicit value is host-local.
+    # key_custody: host-local
     common_name: app.example.internal
     dns:
       - app.example.internal

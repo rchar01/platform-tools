@@ -51,6 +51,11 @@ INVENTORY = """services:
       - failure.example.internal
     ips:
       - 192.0.2.12
+  external:
+    key_custody: host-local
+    common_name: external.example.internal
+    dns:
+      - external.example.internal
 """
 
 
@@ -188,6 +193,17 @@ def test_real_openssl_issuance_artifacts_lifetime_and_ca_database(tmp_path: Path
     assert (authority / "serial").read_text().strip() == "1001"
     assert len((authority / "index.txt").read_text().splitlines()) == 1
     assert (authority / "newcerts/1000.pem").is_file()
+    _assert_no_residue(value)
+
+
+def test_host_local_inventory_fails_before_ca_or_service_mutation(tmp_path: Path, process_runner: Callable[..., ProcessResult]) -> None:
+    toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment"); _ready(process_runner, value, env, toolset)
+    before = _ca_state(value)
+    result = run(process_runner, _issue(value, toolset, "external"), env)
+    assert result.status == 1
+    assert "Host-local service issuance requires authenticated CSR inputs: external" in result.stderr
+    assert not (value.pki / "services/external").exists()
+    assert _ca_state(value) == before
     _assert_no_residue(value)
 
 

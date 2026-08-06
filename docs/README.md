@@ -24,6 +24,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md): How to manage short-lived Proxmox VE 9 development snapshots safely.
 - [`proxmox-vm-snapshot-acceptance.md`](./proxmox-vm-snapshot-acceptance.md): How to run live acceptance against the isolated disposable VM environment.
 - [`handoffs/config-namespace-handoff.md`](./handoffs/config-namespace-handoff.md): Downstream ownership notes for the local secret namespace.
+- [`handoffs/pki-host-local-csr-handoff.md`](./handoffs/pki-host-local-csr-handoff.md): Implemented host-local signer contract and future downstream activation contract.
 - [`handoffs/tofu-ansible-handoff.md`](./handoffs/tofu-ansible-handoff.md): Example handoff that separates OpenTofu infrastructure work from Ansible guest configuration.
 
 ## Common Tasks
@@ -51,6 +52,8 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-proxmox-vm-cleanup`](../bin/platform-proxmox-vm-cleanup): Safe single-VM Proxmox cleanup helper.
 - [`../bin/platform-proxmox-vm-snapshot`](../bin/platform-proxmox-vm-snapshot): Safe Proxmox VE 9 development snapshot helper.
 - [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
+- [`../bin/platform-pki-csr-trust-install`](../bin/platform-pki-csr-trust-install): Strict public-trust installer for authenticated host-local CSR signing.
+- [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Deterministic recovery for interrupted host-local CSR signing.
 - [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Root CA creation helper.
 - [`../bin/platform-pki-intermediate-create`](../bin/platform-pki-intermediate-create): Intermediate CA creation helper.
 - [`../bin/platform-pki-service-issue`](../bin/platform-pki-service-issue): Service certificate issuance helper.
@@ -61,6 +64,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki-export-ansible`](../bin/platform-pki-export-ansible): Ansible export helper for generated PKI files.
 - [`../bin/platform-pki-backup`](../bin/platform-pki-backup): PKI state backup helper.
 - [`../bin/platform-pki-custody-report`](../bin/platform-pki-custody-report): Read-only PKI encryption, custody, and backup-policy report helper.
+- [`../bin/platform-pki-ca-passphrase-verify`](../bin/platform-pki-ca-passphrase-verify): Read-only active CA passphrase and certificate-match verification helper.
 - [`../bin/platform-pki-ca-rollover`](../bin/platform-pki-ca-rollover): Generation state inspection, legacy migration, and rollover candidate preparation helper.
 - [`../bin/platform-bastion-policy`](../bin/platform-bastion-policy): Bastion access-policy validation and rendering helper.
 - [`../assets/brand/`](../assets/brand/): Project brand assets for release metadata and forge profiles.

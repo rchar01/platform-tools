@@ -9,6 +9,30 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added `platform-pki-csr-trust-install` with strict public-policy and
+  no-options Ed25519 allowed-signer validation, source-race detection, standard
+  PKI locking, protected no-op handling, and atomic whole-directory
+  installation. It installs no private key and performs no signing itself.
+- Added authenticated P-384 CSR issue, managed-key migration, and renewal for
+  `key_custody: host-local`, with strict canonical request and approval
+  records, detached OpenSSH Ed25519 signatures, freshness and sole-operator
+  delay checks, inventory-authoritative certificate profiles, permanent request
+  and nonce replay records, transactional CA publication, and immutable
+  certificate-only pending candidate and signed-response directories.
+- Added `platform-pki-csr-recover` with a dedicated recovery journal, exact
+  journal path and object-identity validation, deterministic pre-commit CA
+  rollback without replay reuse, and post-commit response publication that
+  never rolls back CA state or signs another certificate.
+- Added `platform-pki-ca-passphrase-verify` with descriptor-bound passphrase and
+  CA-key reads, standard lifecycle/root/intermediate locking, encrypted-key
+  consistency and active-certificate public-key checks, deterministic
+  all-or-nothing output, generic OpenSSL failure handling, and no persistent
+  verification receipt.
+- Added the optional strict-inventory scalar `key_custody: host-local` as a
+  protocol selector. Omission preserves managed-key behavior; unknown values
+  are rejected. Signer-side candidate verification and deployment finalization
+  remain unavailable, while managed-key Ansible export rejects explicit or
+  skips implicit host-local selection.
 - Added `platform-pki-custody-report` with deterministic text and schema-1 JSON
   output for managed PKI encryption, custody, backup policy, unsafe metadata,
   unexpected keys, controller/export leaf-key copies, backup envelopes and

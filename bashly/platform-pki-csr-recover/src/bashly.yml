@@ -1,0 +1,33 @@
+name: platform-pki-csr-recover
+help: Recover an authenticated host-local CSR signing transaction
+version: platform-pki-csr-recover <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --transaction
+  arg: id
+  help: Exact csr-<request-id> transaction
+  required: true
+  validate: not_empty
+- long: --response-key
+  arg: path
+  help: Trusted response-signing key when post-commit signing remains
+  validate: not_empty
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --yes
+  help: Confirm deterministic recovery without a TTY
+
+examples:
+- platform-pki-csr-recover --transaction csr-0123456789abcdef0123456789abcdef --response-key /secure/response_ed25519
+
+footer: |-
+  Uncommitted recovery restores only exact partial CA publication and keeps the
+  request and nonce consumed. Committed recovery never rolls back or re-signs;
+  it resumes exact response and pending-candidate publication. A response key
+  is required only when the journaled response signature is absent.

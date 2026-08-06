@@ -38,6 +38,8 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
+| `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
+| `platform-pki-csr-recover` | Recover an interrupted authenticated host-local CSR signing transaction. |
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
 | `platform-pki-service-issue` | Issue a service certificate from PKI inventory. |
@@ -48,6 +50,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-export-ansible` | Export generated PKI files for `platform-config` Ansible consumption. |
 | `platform-pki-backup` | Create encrypted or explicitly plain backups of PKI state. |
 | `platform-pki-custody-report` | Report managed PKI encryption, custody, and backup-policy findings without decrypting keys. |
+| `platform-pki-ca-passphrase-verify` | Verify active encrypted CA passphrases and certificate matches without publishing secret material. |
 | `platform-pki-ca-rollover` | Inspect generation state; migrate legacy state; prepare or recover rollover candidates. |
 | `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
@@ -84,7 +87,8 @@ PKI helpers require:
 - `openssl`
 - util-linux `flock` and Linux procfs at `/proc` for stable operation-lock identity checks
 - GNU `date` for certificate expiry calculations
-- GNU `mv` with `--no-copy` and `--update=none-fail`; inventory publication prefers exchange and supports a guarded rename fallback under cooperative same-UID locks
+- GNU `mv` with `--no-copy`, `--update=none-fail`, and `--exchange`; inventory publication supports a guarded rename fallback, while CSR trust replacement requires atomic exchange
+- OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 - `python3` for byte-bounded `platform-pki-custody-report` header and receipt inspection
@@ -355,6 +359,31 @@ example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
 
+Service inventory may set the optional scalar `key_custody: host-local`;
+omitting it preserves the managed controller-generated-key workflow. No
+other explicit custody value is accepted. Authenticated host-local issue,
+migration, and renewal accept a host-generated P-384 CSR plus canonical request
+and approval manifests, detached OpenSSH signatures, and a trusted response
+signing key. They publish immutable certificate-only pending candidates and
+signed responses under `state/csr/`; they never receive or publish the host
+private key. Signer-side candidate verification and deployment finalization
+remain unavailable, explicit Ansible export is rejected, and all-service
+Ansible export skips host-local entries.
+
+Install reviewed public trust before signing:
+
+```bash
+platform-pki-csr-trust-install
+platform-pki-csr-trust-install --private-repo /absolute/path/to/platform-private
+```
+
+The command validates exactly four files under
+`<private-repo>/pki/csr-trust` and atomically installs a protected snapshot at
+`<pki-dir>/inventory/csr-trust`. It installs no private key and performs no
+signing itself. See
+[`docs/pki-openssl.md`](docs/pki-openssl.md#host-local-csr-trust) for the exact
+policy, manifest, signing, response, and recovery contracts.
+
 Version 2 changes initialization and CA state incompatibly. Before using normal
 CA or service commands with an existing 1.x PKI, install the reviewed private
 inventory, create a fresh protected backup, inspect rollover status, and run the
@@ -392,6 +421,21 @@ Activation, acknowledgement, rollback, retirement, and completion
 remain unavailable pending immutable export and evidence support.
 
 For non-interactive PKI automation with encrypted CA keys, pass restricted passphrase files such as `--root-pass-file /run/secrets/platform-pki-root-pass` and `--intermediate-pass-file /run/secrets/platform-pki-intermediate-pass`. See `docs/pki-openssl.md` for the full flow, migration procedure, and safety rules.
+
+Validate a candidate passphrase against the active encrypted key and certificate
+without changing CA state:
+
+```bash
+platform-pki-ca-passphrase-verify \
+  --root-pass-file /run/secrets/platform-pki-root-pass \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+```
+
+The command holds the standard lifecycle, root, and intermediate locks, passes
+secrets to OpenSSL through inherited descriptors, suppresses OpenSSL diagnostics,
+and writes no persistent validation receipt. Success is point-in-time evidence;
+`platform-pki-custody-report` continues to report cryptographic validation as
+`unknown`.
 
 Service issuance refuses an existing certificate, reuses an existing private
 key unless `--rotate-key` is requested, and transactionally publishes service
@@ -485,6 +529,7 @@ sudo ./bin/platform-vm-env-collect
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
 | `docs/proxmox-vm-snapshot.md` | Proxmox VE 9 development snapshot workflows, safety model, and environment-tag gate. |
 | `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |
+| `docs/handoffs/pki-host-local-csr-handoff.md` | Implemented signer contract and future platform-config activation contract for host-local leaf keys. |
 | `docs/handoffs/tofu-ansible-handoff.md` | Example OpenTofu/Ansible handoff from a collected VM report. |
 | `assets/brand/` | Project brand assets for release metadata and forge profiles. |
 
@@ -496,9 +541,15 @@ Use `~/.config/platform-infrastructure/` for local secret material. Private but 
 
 Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.
 
-PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts over long-lived files.
+PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts over long-lived files. The parser minimum is not a production entropy recommendation: use separate secret-manager-generated root and intermediate credentials with independent recovery copies, and keep backup recipients separate from both CA passphrases and archived data.
 
-PKI Ansible exports contain service private keys. Custom export directories must be absolute paths with current-user-owned parents that are not group- or world-writable and do not contain symlink components.
+PKI Ansible exports contain service private keys. The controller service key and
+its Ansible-export copy are compatibility inputs for the current deployment
+workflow, not the desired custody end state. Do not remove either copy solely
+because the custody report flags it; retain it until a validated host-local
+migration, rollback hold, and separately authorized quarantine complete. Custom
+export directories must be absolute paths with current-user-owned parents that
+are not group- or world-writable and do not contain symlink components.
 
 Real bastion access policies can reveal users, groups, cluster endpoints, and access intent. Keep real policies in `platform-private`; only fake examples belong in this repository.
 

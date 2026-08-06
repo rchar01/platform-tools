@@ -20,6 +20,11 @@ INVENTORY = """services:
     common_name: next.example.internal
     dns:
       - next.example.internal
+  external:
+    key_custody: host-local
+    common_name: external.example.internal
+    dns:
+      - external.example.internal
 """
 
 TRANSACTION_ID = r"prepare-(?:root|intermediate)-[0-9]{8}-[0-9]{6}-[0-9]+"

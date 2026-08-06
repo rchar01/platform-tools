@@ -105,6 +105,12 @@ corresponding commands populate it:
 ├── state/
 │   ├── active-issuer
 │   ├── bootstrap-root
+│   ├── csr/
+│   │   ├── candidates/
+│   │   ├── replay/
+│   │   ├── responses/
+│   │   ├── transactions/
+│   │   └── recovery-journal
 │   ├── generation-reservations/
 │   └── rollover/
 ├── locks/
@@ -282,6 +288,50 @@ platform-pki-intermediate-create \
 
 Passphrase files must exist, be readable by the current user, and must not be group- or world-accessible. OpenSSL uses the first line of each passphrase file; that first line must be at least 16 characters and contain non-whitespace characters. Keep passphrase files outside Git and prefer temporary secret-manager mounts such as `/run/secrets` over long-lived files. Omit pass-file options to let OpenSSL prompt interactively.
 
+The 16-character rule is a parser minimum, not a production-strength creation
+policy. For production custody:
+
+1. Generate distinct root and intermediate credentials inside an approved
+   cryptographic secret manager or on the isolated signer from at least 32
+   random bytes. Do not type a generated value into a command argument, shell
+   history, Git file, ticket, chat, or automation log.
+2. Keep the durable credentials outside the PKI tree and separate from CA-key
+   and backup media. Maintain two independently accessible recovery paths whose
+   loss does not depend on a service protected by this PKI.
+3. Inject only an operation-scoped, current-user-owned mode-`600` first-line
+   file such as `/run/secrets/platform-pki-root-pass`; remove or unmount it
+   after the operation. An ephemeral `/run` file is not a recovery copy.
+4. Record only non-secret ceremony evidence: credential identifier, purpose,
+   creation and review times, custodians, recovery locations, and successful
+   validation result. Never record the value or a reusable verifier.
+5. Replace a credential after suspected disclosure, custody loss, unauthorized
+   access, or an approved cryptographic-policy change. Validate replacement and
+   recovery paths before retiring the old credential.
+
+Backup encryption uses a separate credential or, preferably, independent
+`age` recipients. Never store an `age` identity or backup passphrase beside the
+archive it decrypts, and do not reuse either CA passphrase for backups.
+
+Verify candidate CA passphrase files against the active generation:
+
+```bash
+platform-pki-ca-passphrase-verify \
+  --root-pass-file /run/secrets/platform-pki-root-pass \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+```
+
+At least one pass-file option is required. The command acquires the standard
+lifecycle, root, and intermediate locks, rejects unresolved journals and legacy
+layouts, and gates both rollover and authenticated-CSR recovery before reading
+the active issuer or inspecting a passphrase or CA key. It verifies each
+encrypted key and proves its public key matches the active certificate. It emits `root=valid` and/or `intermediate=valid` only after
+all requested checks succeed. Failures suppress raw OpenSSL diagnostics, and
+passphrases are passed through inherited descriptors rather than argv or the
+environment. The command writes no persistent receipt; a successful run is
+point-in-time evidence and does not prove offline custody or future recovery.
+Temporary verification cleanup is bound to the directory identity created by
+the command; an unexpected replacement is retained and makes cleanup fail.
+
 ## Service Inventory
 
 Service certificates are issued from:
@@ -311,6 +361,8 @@ The inventory parser supports this strict YAML subset:
 ```yaml
 services:
   platform-example:
+    # Optional authenticated external-CSR workflow.
+    # key_custody: host-local
     common_name: app.example.internal
     dns:
       - app.example.internal
@@ -323,8 +375,13 @@ services:
 The supported format is a restricted YAML subset, not general YAML. There must
 be exactly one `services:` mapping and at least one uniquely named service.
 Every service has exactly one `common_name`, optional unique `dns` and `ips`
-block lists, and optional decimal `days` from 1 through 365000. SANs are mandatory: a
-service must define at least one value under `dns:` or `ips:`. Indentation is
+block lists, optional decimal `days` from 1 through 365000, and optional
+`key_custody: host-local`. Absence of `key_custody` preserves the existing
+managed controller-key workflow; no other explicit value is accepted.
+Authenticated issue, migration, and renewal are available for host-local
+entries. Signer-side candidate verification, deployment finalization, and
+explicit Ansible export remain fail closed. SANs are mandatory: a service must
+define at least one value under `dns:` or `ips:`. Indentation is
 exactly two spaces for services, four for fields, and six before list dashes.
 Blank lines, whole-line comments, and one leading `---` are allowed. Duplicate
 names, fields, or SANs; tabs; inline comments; unknown fields including
@@ -332,6 +389,242 @@ names, fields, or SANs; tabs; inline comments; unknown fields including
 documents, and trailing top-level content are rejected.
 
 Inventory values are written into OpenSSL configuration files during issuance and renewal. `common_name` and `dns` entries must be DNS names using only letters, digits, dots, and hyphens; wildcard names are not supported. `ips` entries must be IPv4 addresses. Inventory values must not contain OpenSSL configuration expansion syntax such as `$ENV::SECRET_NAME`.
+
+## Host-Local CSR Trust
+
+Install the reviewed public trust snapshot for authenticated CSR signing after
+PKI initialization:
+
+```bash
+platform-pki-csr-trust-install
+platform-pki-csr-trust-install --private-repo /absolute/path/to/platform-private
+```
+
+The source is `<private-repo>/pki/csr-trust`; the protected destination is
+`<pki-dir>/inventory/csr-trust`. The source directory must contain exactly:
+
+```text
+policy
+requesters.allowed_signers
+approvers.allowed_signers
+responses.allowed_signers
+```
+
+`policy` is bounded ASCII text with exactly these ten ordered records and one
+trailing newline:
+
+```text
+schema=1
+request_namespace=platform-pki-csr-request-v1
+approval_namespace=platform-pki-csr-approval-v1
+response_namespace=platform-pki-csr-response-v1
+request_max_age_seconds=604800
+sole_operator_min_delay_seconds=86400
+approval_max_age_seconds=86400
+clock_skew_seconds=300
+approver_principal=offline-approver
+response_principal=offline-response
+```
+
+The principal values shown are examples chosen by the private repository. Each
+must match `[a-z0-9][a-z0-9.-]*`. The approver and response principal records
+pin the corresponding allowed-signer files.
+
+Every allowed-signer line has exactly this no-options OpenSSH form:
+
+```text
+principal ssh-ed25519 BASE64_PUBLIC_KEY
+```
+
+`requesters.allowed_signers` contains one or more unique principals.
+`approvers.allowed_signers` and `responses.allowed_signers` each contain exactly
+the one principal pinned by `policy`. Blank records, key options, comments,
+duplicate principals, extra fields, non-Ed25519 keys, and keys rejected by
+`ssh-keygen` fail validation.
+
+All four source files must be current-user-owned, singly linked, readable
+regular files that are not group- or world-writable, are at most 65536 bytes,
+and contain bounded ASCII text with one trailing newline. The command rejects
+unsafe or linked path components, a private repository inside the PKI tree,
+source changes during staging, unresolved PKI journals, and an unsafe existing
+destination. It holds the lifecycle, root, intermediate, and inventory locks;
+pins any existing destination identity through comparison and exchange;
+publishes the complete mode-`700` directory with mode-`600` files atomically;
+and makes identical protected content a no-op. An exchange, durability, or
+cleanup failure leaves either the prior complete tree or the complete staged
+tree, never a per-file mixture. If identities become ambiguous after exchange,
+the command fails and retains the displaced tree for review rather than
+deleting or restoring potentially independent state. No private key is
+installed. Temporary files used to validate public keys are removed only while
+their exact created identity remains current; replacements are retained and
+make installation fail.
+
+This trust snapshot freezes OpenSSH `ssh-keygen -Y` detached Ed25519 signature
+namespaces and timing limits. Installing it performs no signing. Authenticated
+host-local issue, migration, and renewal consume the installed snapshot;
+signer-side candidate verification, deployment finalization, and explicit
+Ansible export remain fail closed.
+
+## Authenticated Host-Local CSR Signing
+
+Host-local signing requires all protocol inputs in one invocation. Issue and
+migration use `platform-pki-service-issue`; renewal uses
+`platform-pki-service-renew` and additionally requires the exact current
+certificate:
+
+```bash
+platform-pki-service-issue external \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
+  --csr-file ./tls.csr \
+  --request-file ./request \
+  --request-signature ./request.sig \
+  --approval-file ./approval \
+  --approval-signature ./approval.sig \
+  --response-key /secure/offline-response
+
+platform-pki-service-renew external \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
+  --csr-file ./tls.csr \
+  --request-file ./request \
+  --request-signature ./request.sig \
+  --approval-file ./approval \
+  --approval-signature ./approval.sig \
+  --response-key /secure/offline-response \
+  --current-cert-file ./current-tls.crt
+```
+
+These inputs are current-user-owned, singly linked, non-writable-by-others
+regular files. Records are printable ASCII, ordered exactly as documented, and
+reject missing, duplicate, unknown, reordered, or trailing fields. Request IDs
+are 32 lowercase hexadecimal characters and nonces are 64. The request
+signature uses namespace `platform-pki-csr-request-v1`; the approval signature
+uses `platform-pki-csr-approval-v1`. In schema 1, `target` is the canonical
+target inventory identity and `requester_principal` must equal it exactly. The
+signer verifies the request with the installed allowed-signers key for that
+exact principal; another trusted requester cannot claim the target.
+
+The request schema is:
+
+```text
+schema=1
+request_id=<32-lowercase-hex>
+nonce=<64-lowercase-hex>
+created_epoch=<canonical-decimal-epoch>
+expires_epoch=<canonical-decimal-epoch>
+operation=<issue|migrate|renew>
+service=<inventory-service>
+target=<target-principal>
+requester_principal=<trusted-requester-principal>
+inventory_sha256=<sha256>
+csr_sha256=<sha256>
+csr_spki_sha256=<sha256>
+current_cert_sha256=<sha256|none>
+profile=server-p384-sha384-v1
+response_principal=<policy-response-principal>
+```
+
+The approval schema is:
+
+```text
+schema=1
+request_id=<request-id>
+nonce=<request-nonce>
+created_epoch=<canonical-decimal-epoch>
+expires_epoch=<canonical-decimal-epoch>
+approver_principal=<policy-approver-principal>
+request_sha256=<request-manifest-sha256>
+csr_sha256=<request-csr-sha256>
+inventory_sha256=<request-inventory-sha256>
+operation=<request-operation>
+service=<request-service>
+target=<request-target>
+profile=server-p384-sha384-v1
+```
+
+Requests may be valid for at most 604800 seconds and approvals for at most
+86400 seconds, with 300 seconds of clock skew. Approval cannot predate the
+request. If requester and approver resolve to the same Ed25519 public key,
+approval must be at least 86400 seconds after request creation.
+
+Inventory is authoritative for subject, SANs, validity, and profile. The signer
+accepts only a self-signed EC P-384 CSR whose subject is exactly the inventory
+common name and whose only requested extension is the exact inventory SAN set.
+It rejects unsupported attributes and extensions. Issue requires no existing
+managed key or certificate and `current_cert_sha256=none`. Migration requires
+the digest of the preserved managed certificate. Renewal requires the supplied
+current certificate digest and verifies that certificate against the active
+issuer. `--days` and `--rotate-key` are unavailable in the host-local path.
+
+Before CA mutation, the signer permanently reserves both request ID and nonce
+under `state/csr/replay/`. It signs against staged CA state, validates the
+issued chain, profile, SANs, serial, validity, and CSR public-key match, and
+publishes each CA database file transactionally. It never receives a host leaf
+private key. Migration leaves existing managed service and export state intact.
+
+The signed response record uses namespace
+`platform-pki-csr-response-v1` and this exact schema:
+
+```text
+schema=1
+request_id=<request-id>
+nonce=<request-nonce>
+operation=<issue|migrate|renew>
+service=<inventory-service>
+target=<target-principal>
+request_sha256=<sha256>
+approval_sha256=<sha256>
+inventory_sha256=<sha256>
+csr_sha256=<sha256>
+csr_spki_sha256=<sha256>
+certificate_sha256=<sha256>
+certificate_spki_sha256=<sha256>
+chain_sha256=<sha256>
+issuer_root=<root-generation>
+issuer_intermediate=<intermediate-generation>
+serial=<uppercase-even-length-hex>
+not_before_epoch=<canonical-decimal-epoch>
+not_after_epoch=<canonical-decimal-epoch>
+candidate_state=pending
+response_principal=<policy-response-principal>
+created_epoch=<canonical-decimal-epoch>
+```
+
+Certificate-only artifacts are published at
+`state/csr/candidates/<service>/<request-id>/` and
+`state/csr/responses/<service>/<request-id>/`. Each contains `tls.crt`,
+`ca-chain.crt`, `fullchain.crt`, `response`, and `response.sig`; the candidate
+also contains its exact pending-state record. These directories contain no
+leaf key. Records and candidates are not automatically deleted or selected for
+deployment.
+
+If signing is interrupted, every normal PKI command rejects
+`state/csr/recovery-journal`. Recover the exact transaction shown in the
+journal:
+
+```bash
+platform-pki-csr-recover \
+  --transaction csr-0123456789abcdef0123456789abcdef \
+  --response-key /secure/offline-response
+```
+
+Pre-commit recovery restores exact original CA database state, removes only
+identity-matched staging, writes terminal evidence, and keeps the request and
+nonce consumed. Post-commit recovery never restores CA state, re-signs the CSR,
+or allocates another serial; it validates exact journal paths and identities
+and resumes the original signed response and candidate publication. Omit
+`--response-key` only when the journaled response signature already exists.
+Without `--yes`, recovery requires a TTY and the exact transaction confirmation.
+The signer rejects a pre-existing transaction path before creating its journal,
+removes a staged CA key only when its exact identity was recorded, and binds
+temporary input cleanup to the directory identity it created. Unexpected
+temporary-directory replacements are retained and cause cleanup to fail.
+Replay records must remain current-user-owned, singly linked, non-symlink
+mode-`600` files at their exact journaled identities. Artifact-stage ownership
+is journaled before the first copy, and an existing stage must match that exact
+identity before any write. Published candidate and response identities remain
+authoritative after their checkpoints; content-based reconciliation is limited
+to the interrupted atomic-rename window immediately before each checkpoint and
+requires the destination to retain the exact journaled stage identity.
 
 Issuance, renewal, verification, certificate printing, expiry listing, and
 Ansible export acquire the current root, intermediate, and inventory operation
@@ -463,6 +756,26 @@ replacement of an existing custom export requires the marker written by this
 version of the helper; the default `export/ansible` path remains compatible
 with exports created by earlier versions.
 
+### Why Two Controller Copies Exist
+
+Under the current managed-key workflow, `services/<service>/private/tls.key` is
+the controller's signing and renewal input. `platform-pki-export-ansible` makes
+a second key-bearing copy under `export/ansible/services/<service>/tls.key`
+because existing `platform-config` roles copy that export to the destination.
+Protected PKI backups include both trees because they preserve the complete
+current state. The custody report classifies every retained export key as a
+duplicate by role; it deliberately does not compare or hash private-key bytes.
+
+These copies are compatibility-bound migration inputs, not the target custody
+model. A custody finding is not deletion authorization. Retain the active
+controller key, export, destination rollback pair, renewal history, and relevant
+encrypted backups until a fresh destination-generated key has a signed
+certificate, strict endpoint and real-client validation has succeeded, and the
+approved rollback and evidence holds have expired. Quarantine requires separate
+authorization and identity-bound evidence. Unlinking a current file does not
+erase copies retained in historical backups and must not be described as secure
+erasure.
+
 Use `platform-pki-export-ansible --help` for generated option details and
 `platform-pki-export-ansible --version` for the installed version.
 
@@ -527,9 +840,18 @@ offsite backup copy, isolated restore rehearsal, and target-host leaf custody.
 Exit status is 0 when there are no structural findings, 2 when findings exist,
 and 1 for parser, configuration, or unsafe-layout errors.
 
+`platform-pki-ca-passphrase-verify` intentionally remains separate from this
+report. Supplying a passphrase changes the trust and secret-access boundary, and
+a prior successful check does not establish the report's current operational
+controls.
+
 ## Back Up PKI State
 
-Backups include the full PKI working directory, including CA private keys, service private keys, issued certificates, CSRs, CA database files, inventory, and exports. When the backup output directory is inside the PKI directory, it is excluded from the archive to avoid recursive backups.
+Backups include the full PKI working directory, including CA private keys,
+managed service private keys, issued certificates, CSRs, CA database files,
+inventory, exports, and host-local replay, transaction, candidate, and response
+state. When the backup output directory is inside the PKI directory, it is
+excluded from the archive to avoid recursive backups.
 
 The backup command acquires the full lifecycle, root, intermediate, inventory,
 and export lock matrix and accepts only a complete legacy or generation-aware
@@ -749,7 +1071,7 @@ critical.
 
 Do not commit anything generated under `~/.config/platform-infrastructure/pki/`.
 
-Do not commit CA passphrases or passphrase files. If automation needs passphrase files, keep them outside Git, use mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer short-lived secret-manager mounts.
+Do not commit CA passphrases or passphrase files. If automation needs passphrase files, keep them outside Git, use mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer short-lived secret-manager mounts. Use separate production credentials and independent recovery paths; do not reuse CA passphrases for backups.
 
 Do not issue service certificates without SANs.
 

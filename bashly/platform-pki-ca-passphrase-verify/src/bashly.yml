@@ -1,0 +1,38 @@
+name: platform-pki-ca-passphrase-verify
+help: Verify active CA key passphrases and certificate matches
+version: platform-pki-ca-passphrase-verify <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --namespace
+  arg: path
+  help: Platform namespace root
+  validate: not_empty
+- long: --pki-dir
+  arg: path
+  help: PKI directory
+  validate: not_empty
+- long: --root-pass-file
+  arg: path
+  help: Restricted file containing the active root key passphrase
+  validate: not_empty
+- long: --intermediate-pass-file
+  arg: path
+  help: Restricted file containing the active intermediate key passphrase
+  validate: not_empty
+
+examples:
+- platform-pki-ca-passphrase-verify --root-pass-file /run/secrets/platform-pki-root-pass
+- platform-pki-ca-passphrase-verify --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+- platform-pki-ca-passphrase-verify --root-pass-file /run/secrets/platform-pki-root-pass --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+
+footer: |-
+  At least one passphrase-file option is required. The command validates the
+  active encrypted private key, derives its public key, and proves that it
+  matches the active certificate. Passphrases are supplied to OpenSSL through
+  inherited file descriptors and are never placed in argv, the environment,
+  or output. No receipt or persistent verification state is written.
+
+  Passphrase files must be current-user-owned, singly linked, non-symlink
+  regular files with mode 600 or stricter and a first line of at least 16
+  characters containing non-whitespace content. Legacy singleton CA state
+  must be migrated before this command can run.

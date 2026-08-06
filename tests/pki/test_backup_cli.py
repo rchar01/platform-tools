@@ -24,7 +24,8 @@ def create_legacy_pki(pki: Path) -> None:
     pki.chmod(0o700)
     write_private(
         pki / "inventory/services.yml",
-        "services:\n  backup-test:\n    common_name: backup.example.internal\n"
+        "services:\n  backup-test:\n    key_custody: host-local\n"
+        "    common_name: backup.example.internal\n"
         "    dns:\n      - backup.example.internal\n",
     )
     write_private(pki / "private-state", "private state sentinel\n")
@@ -115,6 +116,17 @@ def test_backup_rejects_partial_layout(tmp_path, process_runner, isolated_enviro
 def test_backup_age_recipient_argv_is_literal_and_archive_is_private(tmp_path, process_runner, isolated_environment, executable_directory) -> None:
     pki = tmp_path / "pki"
     create_legacy_pki(pki)
+    write_private(
+        pki / "state/csr/candidates/backup-test/0123456789abcdef0123456789abcdef/candidate",
+        "schema=1\nstate=pending\n",
+    )
+    write_private(
+        pki / "state/csr/replay/requests/0123456789abcdef0123456789abcdef",
+        "schema=1\noutcome=reserved\n",
+    )
+    for directory in (path for path in (pki / "state").rglob("*") if path.is_dir()):
+        directory.chmod(0o700)
+    (pki / "state").chmod(0o700)
     fake_bin = executable_directory / "fake-bin"
     fake_age(fake_bin / "age")
     log = tmp_path / "age.log"
@@ -141,6 +153,15 @@ def test_backup_age_recipient_argv_is_literal_and_archive_is_private(tmp_path, p
     listing = process_runner(["tar", "-tzf", archive], env=isolated_environment, timeout=10)
     assert_result(listing, 0, stderr="")
     assert "pki/private-state" in listing.stdout.splitlines()
+    assert "pki/state/csr/candidates/backup-test/0123456789abcdef0123456789abcdef/candidate" in listing.stdout.splitlines()
+    assert "pki/state/csr/replay/requests/0123456789abcdef0123456789abcdef" in listing.stdout.splitlines()
+    archived_inventory = process_runner(
+        ["tar", "-xOf", archive, "pki/inventory/services.yml"],
+        env=isolated_environment,
+        timeout=10,
+    )
+    assert_result(archived_inventory, 0, stderr="")
+    assert "key_custody: host-local\n" in archived_inventory.stdout
 
 
 def test_backup_age_passphrase_argv_and_plain_mode(tmp_path, process_runner, isolated_environment, executable_directory) -> None:

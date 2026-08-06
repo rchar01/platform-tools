@@ -31,6 +31,34 @@ flags:
   validate: not_empty
 - long: --rotate-key
   help: Archive and replace an existing service private key
+- long: --csr-file
+  arg: path
+  help: Host-generated P-384 CSR
+  validate: not_empty
+- long: --request-file
+  arg: path
+  help: Canonical authenticated CSR request manifest
+  validate: not_empty
+- long: --request-signature
+  arg: path
+  help: Detached OpenSSH request signature
+  validate: not_empty
+- long: --approval-file
+  arg: path
+  help: Canonical offline approval manifest
+  validate: not_empty
+- long: --approval-signature
+  arg: path
+  help: Detached OpenSSH approval signature
+  validate: not_empty
+- long: --response-key
+  arg: path
+  help: Trusted Ed25519 response-signing private key
+  validate: not_empty
+- long: --current-cert-file
+  arg: path
+  help: Current host-local certificate (renewal only)
+  validate: not_empty
 
 examples:
 - platform-pki-service-issue platform-example
@@ -45,4 +73,7 @@ footer: |-
   platform-pki-service-renew after initial issuance. Passphrase files must be
   mode 600 or stricter and have a first line of at least 16 characters
   containing non-whitespace content.
+  Host-local issue and migration require the complete authenticated CSR,
+  request, approval, and response-signing inputs. They publish only a pending
+  certificate candidate and signed response; managed migration state remains.
   Legacy singleton CA state must be migrated before this command can run.

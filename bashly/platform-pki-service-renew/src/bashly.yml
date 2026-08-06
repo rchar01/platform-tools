@@ -31,6 +31,34 @@ flags:
   validate: not_empty
 - long: --rotate-key
   help: Archive and replace the existing service private key
+- long: --csr-file
+  arg: path
+  help: Host-generated P-384 CSR
+  validate: not_empty
+- long: --request-file
+  arg: path
+  help: Canonical authenticated CSR request manifest
+  validate: not_empty
+- long: --request-signature
+  arg: path
+  help: Detached OpenSSH request signature
+  validate: not_empty
+- long: --approval-file
+  arg: path
+  help: Canonical offline approval manifest
+  validate: not_empty
+- long: --approval-signature
+  arg: path
+  help: Detached OpenSSH approval signature
+  validate: not_empty
+- long: --response-key
+  arg: path
+  help: Trusted Ed25519 response-signing private key
+  validate: not_empty
+- long: --current-cert-file
+  arg: path
+  help: Current host-local certificate bound by the request
+  validate: not_empty
 
 examples:
 - platform-pki-service-renew platform-example
@@ -44,4 +72,7 @@ footer: |-
   is used. Previous service state is archived only when renewal and verification
   complete successfully. Passphrase files must be mode 600 or stricter and have
   a first line of at least 16 characters containing non-whitespace content.
+  Host-local renewal requires the complete authenticated CSR, current
+  certificate, request, approval, and response-signing inputs. It publishes
+  only a pending certificate candidate and signed response.
   Legacy singleton CA state must be migrated before this command can run.

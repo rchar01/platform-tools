@@ -255,6 +255,27 @@ def test_unknown_service_stops_after_active_issuer_validation(
     assert log.read_text(encoding="utf-8") == "trust\n"
 
 
+def test_host_local_service_verification_fails_closed(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    pki, fake_library, fake_bin = _workspace(tmp_path)
+    _write(
+        pki / "inventory/services.yml",
+        INVENTORY.replace(
+            "  platform-example:\n",
+            "  platform-example:\n    key_custody: host-local\n",
+        ),
+    )
+    environment, log = _environment(tmp_path, fake_library, fake_bin, "none")
+
+    result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment)
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert "Host-local signer-side candidate verification is unavailable: platform-example" in result.stderr
+    assert log.read_text(encoding="utf-8") == "trust\n"
+
+
 def test_installed_share_directory_layout(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:

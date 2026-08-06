@@ -198,6 +198,37 @@ def test_json_classifies_managed_material_without_disclosing_secrets(
         assert secret not in combined
 
 
+def test_json_classifies_host_local_candidate_and_protocol_state(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    pki = _workspace(tmp_path, leaf_keys=False, backup=False)
+    _write(
+        pki / "state/csr/candidates/external/0123456789abcdef0123456789abcdef/candidate",
+        "schema=1\nstate=pending\n",
+    )
+    _write(
+        pki / "state/csr/responses/external/0123456789abcdef0123456789abcdef/response",
+        "schema=1\ncandidate_state=pending\n",
+    )
+    for directory in (path for path in (pki / "state/csr").rglob("*") if path.is_dir()):
+        directory.chmod(0o700)
+    (pki / "state/csr").chmod(0o700)
+
+    result = _run(process_runner, pki, "--format", "json")
+
+    assert result.status == 0
+    report = json.loads(result.stdout)
+    assert _material(report, "host-local-csr-state") == {
+        "id": "host-local-csr-state",
+        "role": "certificate-only-candidates-and-protocol-evidence",
+        "encryption_evidence": "not-required",
+        "recommended_custody": "controlled-protocol-state",
+        "backup_policy": "encrypted-state-backup",
+        "status": "review",
+    }
+    assert "unexpected-keys" not in _finding_codes(report)
+
+
 def test_text_report_has_stable_sections(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:

@@ -14,6 +14,8 @@ fi
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
 
+pki_reject_repeated_options --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file
+
 require_private_dir() {
   local path=$1 label=$2 mode owner current_uid
 
@@ -388,6 +390,24 @@ pki_require_cmd openssl
 pki_require_pki_dir
 pki_prepare_control_state
 
+CSR_EXTERNAL=false
+for option in --csr-file --request-file --request-signature --approval-file --approval-signature --response-key --current-cert-file; do
+  [[ ! -v args[$option] ]] || CSR_EXTERNAL=true
+done
+if [[ $CSR_EXTERNAL == true ]]; then
+  for option in --csr-file --request-file --request-signature --approval-file --approval-signature --response-key; do
+    [[ -v args[$option] && -n ${args[$option]} ]] || pki_die "Authenticated host-local issuance requires $option"
+  done
+  [[ ! -v args[--days] ]] || pki_die '--days is unavailable for host-local CSR signing; inventory is authoritative'
+  [[ $ROTATE_KEY != true ]] || pki_die '--rotate-key conflicts with --csr-file'
+  [[ ! -v args[--current-cert-file] ]] || pki_die '--current-cert-file is available only for host-local renewal'
+  CSR_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-sign.sh
+  [[ -r $CSR_COMMON_PATH ]] || pki_die 'platform-pki-csr-sign.sh not found'
+  # shellcheck source=../../../../lib/platform-pki-csr-sign.sh disable=SC1091
+  source "$CSR_COMMON_PATH"
+  pki_csr_sign_external issue
+fi
+
 ROOT_CA_DIR=''
 INTERMEDIATE_CA_DIR=''
 SERVICES_DIR="$PKI_DIR/services"
@@ -459,10 +479,12 @@ validate_issue_state() {
   pki_require_file "$INTERMEDIATE_CA_DIR/serial"
   pki_require_file "$INTERMEDIATE_CA_DIR/crlnumber"
   process_intermediate_signing_config "$INT_CONF"
-  [[ ! -e $CERT && ! -L $CERT ]] || pki_die "Service certificate already exists; use platform-pki-service-renew: $CERT"
 
   [[ -n ${INVENTORY_CANONICAL:-} ]] || return 0
   pki_require_service_in_inventory "$SERVICE"
+  [[ $(pki_inventory_key_custody "$SERVICE") == managed ]] || \
+    pki_die "Host-local service issuance requires authenticated CSR inputs: $SERVICE"
+  [[ ! -e $CERT && ! -L $CERT ]] || pki_die "Service certificate already exists; use platform-pki-service-renew: $CERT"
   COMMON_NAME=$(pki_inventory_scalar "$SERVICE" common_name)
   [[ -n $COMMON_NAME ]] || pki_die "common_name is missing for service: $SERVICE"
   DAYS=$DAYS_OVERRIDE

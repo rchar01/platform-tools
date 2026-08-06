@@ -23,6 +23,11 @@ INVENTORY = """services:
     common_name: platform-second.internal
     dns:
       - platform-second.internal
+  platform-host-local:
+    key_custody: host-local
+    common_name: platform-host-local.internal
+    dns:
+      - platform-host-local.internal
 """
 
 
@@ -148,6 +153,35 @@ def test_export_zero_generated_services_preserves_existing_export(tmp_path, proc
     assert result.status == 1
     assert "No generated service certificates found to export" in result.stderr
     assert sentinel.read_text() == "zero sentinel\n"
+
+
+def test_all_service_export_skips_only_host_local_service_and_preserves_existing_export(tmp_path, process_runner, isolated_environment) -> None:
+    pki = create_tree(tmp_path / "host-local-only", process_runner, isolated_environment, services=())
+    write_private(
+        pki / "inventory/services.yml",
+        "services:\n  platform-host-local:\n    key_custody: host-local\n"
+        "    common_name: platform-host-local.internal\n"
+        "    dns:\n      - platform-host-local.internal\n",
+    )
+    sentinel = pki / "export/ansible/sentinel"
+    sentinel.write_text("host-local-only sentinel\n")
+
+    result = run(process_runner, isolated_environment, "--pki-dir", pki, "--force")
+
+    assert result.status == 1
+    assert "Skipping host-local service; Ansible export is managed-key-only: platform-host-local" in result.stderr
+    assert "No generated service certificates found to export" in result.stderr
+    assert sentinel.read_text() == "host-local-only sentinel\n"
+
+
+def test_export_explicit_host_local_selection_preserves_existing_export(tmp_path, process_runner, isolated_environment) -> None:
+    pki = create_tree(tmp_path / "host-local", process_runner, isolated_environment)
+    sentinel = pki / "export/ansible/sentinel"
+    sentinel.write_text("host-local sentinel\n")
+    result = run(process_runner, isolated_environment, "platform-host-local", "--pki-dir", pki, "--force")
+    assert result.status == 1
+    assert "Host-local service cannot be exported through the managed-key Ansible export: platform-host-local" in result.stderr
+    assert sentinel.read_text() == "host-local sentinel\n"
 
 
 def test_export_copy_failure_does_not_publish_private_key_or_leave_temporary(tmp_path, process_runner, isolated_environment, executable_directory) -> None:

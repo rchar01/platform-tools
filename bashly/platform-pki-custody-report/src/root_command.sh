@@ -560,6 +560,12 @@ if [[ -e $PKI_DIR/services || -L $PKI_DIR/services ]]; then
   shopt -u nullglob
 fi
 
+if [[ -e $PKI_DIR/state/csr || -L $PKI_DIR/state/csr ]]; then
+  pki_require_private_dir "$PKI_DIR/state/csr" 'Host-local CSR protocol state'
+  add_material host-local-csr-state certificate-only-candidates-and-protocol-evidence not-required \
+    controlled-protocol-state encrypted-state-backup review
+fi
+
 if [[ -e $PKI_DIR/export/ansible/services || -L $PKI_DIR/export/ansible/services ]]; then
   export_services=$PKI_DIR/export/ansible/services
   [[ -d $export_services && ! -L $export_services ]] || pki_die "Ansible service export must be a non-symlink directory: $export_services"

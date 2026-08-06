@@ -191,7 +191,7 @@ def test_process_runner_kills_child_after_parent_exits(tmp_path, process_runner)
     while True:
         try:
             state = child_state.read_text(encoding="utf-8").split()[2]
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             break
         if state == "Z":
             break
@@ -223,8 +223,12 @@ def test_process_runner_cleans_descendant_after_normal_parent_exit(
     child_pid = int(child_pid_file.read_text(encoding="utf-8"))
     state_path = Path(f"/proc/{child_pid}/stat")
     deadline = time.monotonic() + 2
-    while state_path.exists():
-        if state_path.read_text(encoding="utf-8").split()[2] == "Z":
+    while True:
+        try:
+            state = state_path.read_text(encoding="utf-8").split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            break
+        if state == "Z":
             break
         assert time.monotonic() < deadline, "normal descendant remained alive"
         time.sleep(0.01)
@@ -586,8 +590,12 @@ def test_timeout_kills_escaped_setsid_descendant_with_retained_capture_fds(
     escaped_pid = int(child_pid_file.read_text(encoding="utf-8"))
     escaped_stat = Path(f"/proc/{escaped_pid}/stat")
     deadline = time.monotonic() + 2
-    while escaped_stat.exists():
-        if escaped_stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z":
+    while True:
+        try:
+            state = escaped_stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            break
+        if state == "Z":
             break
         assert time.monotonic() < deadline, "escaped setsid descendant remained alive"
         time.sleep(0.01)
