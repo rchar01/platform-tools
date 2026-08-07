@@ -4,6 +4,9 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- CSR protocol test modules now copy one immutable per-session PKI seed instead
+  of regenerating complete root and intermediate authorities for every test.
+
 ## v2.2.0 - 2026-08-07
 
 - `platform-pki-csr-trust-install` now explicitly owns the complete lifecycle,

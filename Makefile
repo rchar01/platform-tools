@@ -93,7 +93,11 @@ test-non-rollover: $(NON_ROLLOVER_TEST_TARGETS)
 
 ## Run generic Python test-harness contract tests
 test-python-infrastructure:
-	python3 -m pytest -m infrastructure tests/test_harness.py tests/test_make_orchestration.py
+	python3 -m pytest -m infrastructure \
+		tests/test_harness.py \
+		tests/test_make_orchestration.py \
+		tests/pki/test_migration_contract.py \
+		tests/pki/test_migration_harness.py
 
 ## Run authoritative PKI rollover pytest scenarios directly
 test-python-pki-rollover:

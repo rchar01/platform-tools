@@ -269,24 +269,27 @@ def restorable_tree_snapshot(root: Path) -> dict[str, tuple[int, int, int, int, 
     return snapshot
 
 
-@pytest.fixture
-def csr_workspace(tmp_path, process_runner, isolated_environment) -> CsrWorkspace:
-    namespace = tmp_path / "namespace"
+def _create_csr_workspace(
+    root: Path,
+    runner: Callable[..., ProcessResult],
+    isolated_environment: Mapping[str, str],
+) -> CsrWorkspace:
+    namespace = root / "namespace"
     pki = namespace / "pki"
-    private = tmp_path / "platform-private"
-    artifacts = tmp_path / "artifacts"
-    keys = tmp_path / "keys"
+    private = root / "platform-private"
+    artifacts = root / "artifacts"
+    keys = root / "keys"
     for directory in (artifacts, keys):
         directory.mkdir(mode=0o700)
-    root_pass = tmp_path / "root.pass"
-    intermediate_pass = tmp_path / "intermediate.pass"
+    root_pass = root / "root.pass"
+    intermediate_pass = root / "intermediate.pass"
     write_private(root_pass, "root-test-passphrase-123\n")
     write_private(intermediate_pass, "intermediate-test-passphrase-123\n")
-    assert_result(run(process_runner, [INIT, "--namespace", namespace], isolated_environment), 0)
+    assert_result(run(runner, [INIT, "--namespace", namespace], isolated_environment), 0)
     write_private(pki / "inventory/services.yml", INVENTORY)
     assert_result(
         run(
-            process_runner,
+            runner,
             [ROOT, "--namespace", namespace, "--name", "Test Root", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass],
             isolated_environment,
         ),
@@ -294,7 +297,7 @@ def csr_workspace(tmp_path, process_runner, isolated_environment) -> CsrWorkspac
     )
     assert_result(
         run(
-            process_runner,
+            runner,
             [
                 INTERMEDIATE,
                 "--namespace",
@@ -317,9 +320,9 @@ def csr_workspace(tmp_path, process_runner, isolated_environment) -> CsrWorkspac
     requester_key = keys / "requester"
     approver_key = keys / "approver"
     response_key = keys / "response"
-    requester_public = ssh_key(process_runner, isolated_environment, requester_key)
-    approver_public = ssh_key(process_runner, isolated_environment, approver_key)
-    response_public = ssh_key(process_runner, isolated_environment, response_key)
+    requester_public = ssh_key(runner, isolated_environment, requester_key)
+    approver_public = ssh_key(runner, isolated_environment, approver_key)
+    response_public = ssh_key(runner, isolated_environment, response_key)
     trust = private / "pki/csr-trust"
     trust.mkdir(mode=0o700, parents=True)
     private.chmod(0o700)
@@ -328,16 +331,16 @@ def csr_workspace(tmp_path, process_runner, isolated_environment) -> CsrWorkspac
     write_private(trust / "requesters.allowed_signers", f"host-01 {requester_public}\n")
     write_private(trust / "approvers.allowed_signers", f"offline-approver {approver_public}\n")
     write_private(trust / "responses.allowed_signers", f"offline-response {response_public}\n")
-    assert_result(run(process_runner, [TRUST_INSTALL, "--namespace", namespace, "--private-repo", private], isolated_environment), 0)
+    assert_result(run(runner, [TRUST_INSTALL, "--namespace", namespace, "--private-repo", private], isolated_environment), 0)
     host_key = artifacts / "tls.key"
     assert_result(
-        run(process_runner, ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:secp384r1", "-out", host_key], isolated_environment),
+        run(runner, ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:secp384r1", "-out", host_key], isolated_environment),
         0,
     )
     host_key.chmod(0o600)
     assert_result(
         run(
-            process_runner,
+            runner,
             [
                 "openssl",
                 "req",
@@ -357,9 +360,65 @@ def csr_workspace(tmp_path, process_runner, isolated_environment) -> CsrWorkspac
         0,
     )
     (artifacts / "tls.csr").chmod(0o600)
-    workspace = CsrWorkspace(namespace, pki, private, artifacts, intermediate_pass, requester_key, approver_key, response_key, host_key, isolated_environment, process_runner)
+    return CsrWorkspace(namespace, pki, private, artifacts, intermediate_pass, requester_key, approver_key, response_key, host_key, isolated_environment, runner)
+
+
+@pytest.fixture
+def csr_workspace(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    csr_workspace_seed_copy: Callable[[Path], None],
+) -> CsrWorkspace:
+    root = tmp_path / "workspace"
+    csr_workspace_seed_copy(root)
+    workspace = CsrWorkspace(
+        root / "namespace",
+        root / "namespace/pki",
+        root / "platform-private",
+        root / "artifacts",
+        root / "intermediate.pass",
+        root / "keys/requester",
+        root / "keys/approver",
+        root / "keys/response",
+        root / "artifacts/tls.key",
+        isolated_environment,
+        process_runner,
+    )
     write_exchange(workspace, "issue", "0123456789abcdef0123456789abcdef", "ab" * 32, "none")
     return workspace
+
+
+def test_csr_workspace_copies_are_isolated_and_configs_are_rebased(
+    tmp_path: Path,
+    csr_workspace: CsrWorkspace,
+    csr_workspace_seed_copy: Callable[[Path], None],
+) -> None:
+    (csr_workspace.pki / "authorities/intermediates/g1-i1/serial").write_text(
+        "DEAD\n", encoding="utf-8"
+    )
+
+    second = tmp_path / "second-workspace"
+    csr_workspace_seed_copy(second)
+    seed_serial = (
+        second / "namespace/pki/authorities/intermediates/g1-i1/serial"
+    ).read_bytes()
+    assert seed_serial != b"DEAD\n"
+    for relative in (
+        "namespace/pki/authorities/roots/g1/openssl.cnf",
+        "namespace/pki/authorities/intermediates/g1-i1/openssl.cnf",
+    ):
+        content = (second / relative).read_text(encoding="utf-8")
+        assert os.fspath(second) in content
+
+    (second / "namespace/pki/authorities/intermediates/g1-i1/serial").write_text(
+        "BEEF\n", encoding="utf-8"
+    )
+    third = tmp_path / "third-workspace"
+    csr_workspace_seed_copy(third)
+    assert (
+        third / "namespace/pki/authorities/intermediates/g1-i1/serial"
+    ).read_bytes() == seed_serial
 
 
 def test_authenticated_issue_publishes_certificate_only_candidate_and_response(csr_workspace: CsrWorkspace) -> None:

@@ -7,6 +7,13 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Changed CSR signing, certificate-export, candidate, and schema-2 trust-install
+  tests to copy an immutable per-session PKI seed, rebase only its managed
+  OpenSSL paths, and refresh signed exchange timestamps, reducing focused test
+  runtime while preserving test isolation.
+
 ## [2.2.0] - 2026-08-07
 
 ### Security

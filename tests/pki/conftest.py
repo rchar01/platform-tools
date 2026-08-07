@@ -203,6 +203,38 @@ def isolated_environment(tmp_path: Path) -> Mapping[str, str]:
 
 
 @pytest.fixture(scope="session")
+def _csr_workspace_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    from .test_csr_signing import _create_csr_workspace
+
+    root = tmp_path_factory.mktemp("pki-csr") / "seed"
+    root.mkdir(mode=0o700)
+    seed_environment = _isolated_environment(root / "environment")
+    _create_csr_workspace(root, run_process, seed_environment)
+    return root
+
+
+@pytest.fixture
+def csr_workspace_seed_copy(
+    _csr_workspace_seed: Path,
+) -> Callable[[Path], None]:
+    from .migration_harness import rebase_openssl_config
+
+    def copy(destination: Path) -> None:
+        copy_tree(_csr_workspace_seed, destination)
+        for relative in (
+            "namespace/pki/authorities/roots/g1/openssl.cnf",
+            "namespace/pki/authorities/intermediates/g1-i1/openssl.cnf",
+        ):
+            rebase_openssl_config(
+                destination / relative,
+                _csr_workspace_seed,
+                destination,
+            )
+
+    return copy
+
+
+@pytest.fixture(scope="session")
 def rollover_tools() -> RolloverTools:
     bin_dir = Path(__file__).resolve().parents[2] / "bin"
     return RolloverTools(

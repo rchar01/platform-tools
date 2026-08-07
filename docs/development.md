@@ -55,6 +55,22 @@ serial non-rollover ordering diagnostics. Do not use unbounded Make jobs or
 pytest `-n auto`; the test harness supervises real process trees and the PKI
 suites perform filesystem durability operations.
 
+The CSR signing, certificate-export, candidate, and schema-2 trust-install
+suites create one immutable PKI seed per pytest process. Every test receives a
+metadata-preserving private copy with its managed OpenSSL paths rebased and
+fresh signed exchange timestamps, avoiding repeated root and intermediate
+creation while retaining per-test state and process isolation.
+
+Python-migration contracts and semantic state-copy helpers live in
+`tests/pki/migration_contract.py` and `tests/pki/migration_harness.py`. Their
+infrastructure tests preserve hard-link relationships, compare within-tree
+identity transitions without comparing raw inode numbers across copies, and
+rebase only validated managed OpenSSL `dir` assignments. Interrupted trees must
+be recovered in place because copying invalidates journal-bound identities.
+The differential runner executes separately supplied Bash and Python entry
+points on sibling copies with independent `HOME`, XDG, and temporary directories;
+each command test must explicitly declare any output or content normalization.
+
 ## Generated Bash Tools
 
 Bashly-backed command source lives under `bashly/<tool>/`. The corresponding
