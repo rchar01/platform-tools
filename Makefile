@@ -137,14 +137,17 @@ test-command-contract:
 test-installed-tools:
 	python3 -m pytest tests/test_installed_tools.py
 
-## Run deterministic Python PKI zipapp foundation tests
+## Run deterministic Python PKI foundation and primitive tests
 test-platform-pki-foundation:
 	python3 -m pytest \
 		tests/test_platform_pki_foundation.py \
 		tests/test_platform_pki_parser.py \
 		tests/test_platform_pki_records.py \
 		tests/test_platform_pki_inventory.py \
-		tests/test_platform_pki_subprocesses.py
+		tests/test_platform_pki_subprocesses.py \
+		tests/test_platform_pki_paths.py \
+		tests/test_platform_pki_filesystem.py \
+		tests/test_platform_pki_faults.py
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:

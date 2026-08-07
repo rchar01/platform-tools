@@ -234,17 +234,17 @@ commands.
 
 Tasks:
 
-- [ ] Implement descriptor-oriented opening with `O_NOFOLLOW`, `fstat`, and
+- [x] Implement descriptor-oriented opening with `O_NOFOLLOW`, `fstat`, and
   descriptor-relative APIs where supported.
-- [ ] Implement exact file and directory identity models.
-- [ ] Implement trusted-ancestor, owner, mode, file-type, symlink, and link-count
+- [x] Implement exact file and directory identity models.
+- [x] Implement trusted-ancestor, owner, mode, file-type, symlink, and link-count
   validation.
 - [ ] Implement lifecycle and operation locks as ordered context managers.
 - [ ] Implement atomic writes, guarded no-clobber publication, file `fsync`, and
   directory `fsync`.
 - [ ] Prototype atomic exchange and no-copy publication; retain reviewed GNU
   `mv` calls where Python lacks an equivalent proven primitive.
-- [ ] Preserve deterministic fault and pause barriers for race tests.
+- [x] Preserve deterministic fault and pause barriers for race tests.
 - [ ] Add the read-only `platform-pki doctor` command after the path and lock
   primitives it depends on are proven.
 - [ ] Make `doctor` report runtime prerequisites, path safety, unresolved state,
@@ -563,6 +563,7 @@ implementation.
 | 2026-08-07 | Minimum runtime raised to Python 3.14 and `doctor` moved behind secure path/lock primitives. | The pinned test image provides Python 3.14.7; the downgrade scanner must not precede the safety boundaries it assesses. |
 | 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, 24 unified help routes, installed-layout execution, and no-state parser behavior are covered in the pinned Python 3.14 test image. |
 | 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed 24-route parsing, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics pass 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remain unavailable. |
+| 2026-08-07 | Phase 2 path, filesystem, and deterministic fault primitives implemented. | Lexical path policy, full-component descriptor bindings, exact identity and policy models, checked bounded reads, trusted ancestors, file and directory synchronization, and pinned pause controls pass 91 focused real-filesystem/process tests; locking and publication remain open. |
 
 ## Decision Log
 

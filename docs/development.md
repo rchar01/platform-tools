@@ -174,10 +174,11 @@ make test-platform-pki-foundation
 ```
 
 The foundation target runs the real zipapp plus parser, ordered-record,
-inventory, and subprocess tests. It includes Bash/Python unknown-token
-normalization differentials for every retained route, source-backed comparisons
-of every parser declaration, and C-locale inventory canonical-byte
-differentials.
+inventory, subprocess, path, descriptor-oriented filesystem, and deterministic
+fault-hook tests. It includes Bash/Python unknown-token normalization
+differentials for every retained route, source-backed comparisons of every
+parser declaration, C-locale inventory canonical-byte differentials, and real
+filesystem race and policy checks.
 
 The installation check first verifies a disposable repository `.tmp` install,
 then installs and executes an isolated runtime copy from an outside-checkout

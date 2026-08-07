@@ -28,8 +28,11 @@ EXPECTED_MEMBERS = (
     "platform_pki/cli.py",
     "platform_pki/compat.py",
     "platform_pki/errors.py",
+    "platform_pki/faults.py",
+    "platform_pki/filesystem.py",
     "platform_pki/inventory.py",
     "platform_pki/parser.py",
+    "platform_pki/paths.py",
     "platform_pki/records.py",
     "platform_pki/subprocesses.py",
 )
