@@ -34,6 +34,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/locks.py",
     "platform_pki/parser.py",
     "platform_pki/paths.py",
+    "platform_pki/publication.py",
     "platform_pki/records.py",
     "platform_pki/subprocesses.py",
 )

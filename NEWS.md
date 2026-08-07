@@ -9,11 +9,15 @@ This file gives a short, release-oriented view of what changed between versions.
   frozen 24-route parser, strict ordered-record and inventory models, bounded
   exact-argv process execution, descriptor-bound filesystem and path safety
   primitives, descriptor-bound lifecycle-through-export advisory lock context
-  managers, deterministic transaction test hooks, secret-safe errors, and
+  managers, bounded Linux no-clobber publication and exact exchange, owned
+  exact-byte staging, identity-bound cleanup, source-file synchronization,
+  parent-bound immutable directory readiness, descriptor-relative tree
+  durability, deterministic transaction test hooks, secret-safe errors, and
   fail-closed unavailable-handler behavior. The Python locks interoperate with
-  util-linux `flock`, close inherited descriptors safely across fork, and
-  link validated anonymous files at absent destinations without replacement;
-  all operational `platform-pki-*` commands remain unchanged on Bash.
+  util-linux `flock`, close inherited descriptors safely across fork, and link
+  validated anonymous files at absent destinations without replacement.
+  Guarded replacement of an existing destination remains unimplemented, and all
+  operational `platform-pki-*` commands remain unchanged on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

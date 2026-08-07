@@ -152,6 +152,42 @@ For each lock name, the finite checkpoints are `after-pre-stat`,
 `after-stage-init`, `after-open`, `after-acquire`, `before-release`, and
 `after-release`, prefixed as `lock-<name>-<checkpoint>`.
 
+The bounded publication checkpoint provides owned same-parent regular-file
+staging, exact-byte absent-destination atomic writes, identity-matched regular
+file unlink, inode-preserving no-clobber file and directory publication, exact
+file-file and directory-directory exchange, and descriptor-relative `fsync_tree`
+for an already-opened root and its explicit containing parent/name binding. It
+invokes Linux `renameat2` with `RENAME_NOREPLACE` or `RENAME_EXCHANGE`, requires
+current-user ownership and non-writable-by-group-or-world stages, rejects
+hard-linked files and cross-device operations, and synchronizes rename parents
+in source-then-destination order. Regular sources are fsynced and observed by
+stable object state, modification time, and SHA-256 immediately before rename
+and at both terminal checks. Directory publication and exchange require an
+immutable `TreeReadiness` returned by `fsync_tree`; that token binds the exact
+root, containing parent/name, recursive identities, and regular-file digests.
+Generic publication and exchange results report exact final root identities,
+not independent proof of a complete tree beyond validated readiness.
+
+All operation-lifetime parent and path-chain descriptors are duplicated before
+the first mutation checkpoint and are `CLOEXEC`; callers pass
+`OpenedDirectory` objects, never raw descriptors. Closing or reusing the
+caller's descriptor after pinning does not redirect the operation. Callers must
+still avoid invoking methods concurrently on the same mutable opened-object
+wrapper while initial pin acquisition is in progress. `PUBLICATION_CHECKPOINTS`
+contains 32 finite fault/pause points. Failures after a namespace mutation,
+including post-unlink validation or parent synchronization, retain observable
+state and report an ambiguous or unconfirmed-durability result; the primitive
+never claims an automatic rollback.
+
+This checkpoint does not implement guarded replacement of an existing
+destination and is not an operational command cutover. `fsync_tree` detects
+changes at its descriptor-relative validation boundaries but does not freeze a
+writable tree against a hostile same-UID process after the final check. Python
+has no unlink-by-handle API, so exact unlink similarly has an unavoidable
+same-UID race between its last path check and `unlinkat`; cooperative replacement
+at the cleanup checkpoint is rejected and preserved. Exercise these boundaries
+in the pinned test image with `make test-platform-pki-publication`.
+
 The inventory parser implements the deterministic ASCII grammar exercised by
 the existing commands under `LC_ALL=C`. Focused differential tests compare
 status and canonical bytes against `pki_validate_inventory_file` in that locale.

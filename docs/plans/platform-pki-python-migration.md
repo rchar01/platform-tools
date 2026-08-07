@@ -241,10 +241,12 @@ Tasks:
 - [x] Implement trusted-ancestor, owner, mode, file-type, symlink, and link-count
   validation.
 - [x] Implement lifecycle and operation locks as ordered context managers.
-- [ ] Implement atomic writes, guarded no-clobber publication, file `fsync`, and
-  directory `fsync`.
-- [ ] Prototype atomic exchange and no-copy publication; retain reviewed GNU
-  `mv` calls where Python lacks an equivalent proven primitive.
+- [x] Implement absent-destination atomic writes, exact no-clobber publication,
+  file `fsync`, directory `fsync`, and identity-bound cleanup.
+- [x] Prototype atomic exchange and inode-preserving publication with Linux
+  `renameat2`; retain reviewed GNU `mv` calls as the Bash differential oracle.
+- [ ] Implement and prove guarded replacement of an existing destination; the
+  Phase 2 checkpoint intentionally rejects every existing destination.
 - [x] Preserve deterministic fault and pause barriers for race tests.
 - [ ] Add the read-only `platform-pki doctor` command after the path and lock
   primitives it depends on are proven.
@@ -254,7 +256,12 @@ Tasks:
 Validation gate:
 
 - [ ] Real symlink, hard-link, source replacement, destination replacement,
-  concurrent publication, permission, and durability tests pass.
+  concurrent publication, permission, and durability tests pass across the
+  complete publication layer, including guarded existing-destination
+  replacement.
+- [x] Equivalent validation passes for the bounded absent-destination and exact
+  exchange checkpoint, including simultaneous publishers, content/metadata
+  mutation, readiness, parent binding, process death, and durability failures.
 - [x] Lock acquisition and reverse release match the Bash implementation.
 - [ ] `doctor` creates no state and fails closed on contention, unsafe paths,
   malformed state, unknown schemas, or any unresolved state.
@@ -566,6 +573,7 @@ implementation.
 | 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed 24-route parsing, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics pass 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remain unavailable. |
 | 2026-08-07 | Phase 2 path, filesystem, and deterministic fault primitives implemented. | Lexical path policy, full-component descriptor bindings, exact identity and policy models, checked bounded reads, trusted ancestors, file and directory synchronization, and pinned pause controls pass 91 focused real-filesystem/process tests; locking and publication remain open. |
 | 2026-08-07 | Phase 2 ordered advisory-lock checkpoint implemented and independently hardened. | `acquire_pki_locks` provides descriptor-bound lifecycle-through-export prefix profiles, exact lock policy, no-state behavior, fork-safe descriptor/registry handling, validated anonymous `O_TMPFILE` no-clobber creation, thread-safe duplicate rejection, finite race hooks, primary-exception preservation, and reverse cleanup. The focused pinned-container suite passed 42 tests and the integrated foundation suite passed 562 tests across real Python/Python, Python/util-linux, fork, exec, descriptor-reuse, process-death, and replacement boundaries; general publication primitives and `doctor` remain open. |
+| 2026-08-07 | Bounded Phase 2 durable-publication checkpoint implemented and review-hardened. | Owned exact-byte stages, source-file synchronization/content observations, parent-bound immutable tree readiness, exact unlink, Linux no-clobber file/directory rename, file/directory exchange, absent-only atomic writes, operation-lifetime pins, and recursive tree synchronization have finite race hooks and retain ambiguous post-mutation state. The pinned focused suite passed 87 tests and the integrated foundation suite passed 649 tests; guarded existing-destination replacement and `doctor` remain open. |
 
 ## Decision Log
 

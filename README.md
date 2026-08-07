@@ -174,8 +174,20 @@ Run the deterministic Python PKI foundation and primitive checks:
 
 This target includes real Python/util-linux contention, replacement-race,
 fork/exec descriptor-inheritance, anonymous-publication process-death, and lock
-holder process-death checks for the Python ordered-lock primitive. The primitive
-is not yet wired into operational commands.
+holder process-death checks for the Python ordered-lock primitive. It also tests
+Linux no-clobber file/directory rename, exact file/directory exchange, owned
+same-parent staging and cleanup, source-file synchronization, immutable
+parent-bound directory readiness, and descriptor-relative tree durability.
+Publication results report exact final root identities; directory tree claims
+require readiness returned by `fsync_tree`. These primitives are not yet wired
+into operational commands, and guarded replacement of an existing destination
+remains deliberately unimplemented.
+
+Run only the durable-publication checkpoint tests:
+
+```bash
+./scripts/in-test-container make test-platform-pki-publication
+```
 
 Run the authoritative PKI rollover pytest scenarios:
 
