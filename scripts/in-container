@@ -8,8 +8,6 @@ fi
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 image=${PLATFORM_TOOLS_DEV_IMAGE:-localhost/platform-tools-dev:2.2.0}
-test_make_jobs=${TEST_MAKE_JOBS-2}
-pki_pytest_workers=${PKI_PYTEST_WORKERS-4}
 
 podman build --file "$repo_root/Containerfile.dev" --tag "$image" "$repo_root"
 
@@ -18,8 +16,6 @@ exec podman run --rm \
   --security-opt=no-new-privileges \
   --env HOME=/tmp/platform-tools-home \
   --env PLATFORM_TOOLS_DEV_CONTAINER=1 \
-  --env "TEST_MAKE_JOBS=$test_make_jobs" \
-  --env "PKI_PYTEST_WORKERS=$pki_pytest_workers" \
   --volume "$repo_root:/workspace:Z" \
   --workdir /workspace \
   "$image" \

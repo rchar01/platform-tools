@@ -26,10 +26,10 @@ class CollectedArchive:
     report: Path
 
 
-def require_development_container() -> None:
-    if os.environ.get("PLATFORM_TOOLS_DEV_CONTAINER") != "1":
+def require_test_container() -> None:
+    if os.environ.get("PLATFORM_TOOLS_TEST_CONTAINER") != "1":
         pytest.fail(
-            "archive smoke test must run in the development container",
+            "archive smoke test must run in the test container",
             pytrace=False,
         )
 
@@ -47,13 +47,13 @@ def collector_base_dir(stderr: str) -> Path | None:
     return None
 
 
-def test_development_container_guard() -> None:
-    require_development_container()
+def test_test_container_guard() -> None:
+    require_test_container()
 
 
 @pytest.fixture(scope="module")
 def collected_archive(tmp_path_factory) -> Generator[CollectedArchive, None, None]:
-    require_development_container()
+    require_test_container()
     work_dir = tmp_path_factory.mktemp("vm-env-collect-archive")
     base_dir: Path | None = None
     try:

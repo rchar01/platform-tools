@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+  printf '%s\n' 'Usage: scripts/in-test-container <command> [argument ...]' >&2
+  exit 2
+fi
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+image=${PLATFORM_TOOLS_TEST_IMAGE:-localhost/platform-tools-test:3.14.7}
+test_make_jobs=${TEST_MAKE_JOBS-2}
+pki_pytest_workers=${PKI_PYTEST_WORKERS-4}
+
+podman build --file "$repo_root/Containerfile.test" --tag "$image" "$repo_root"
+
+exec podman run --rm \
+  --userns=keep-id \
+  --security-opt=no-new-privileges \
+  --env HOME=/tmp/platform-tools-home \
+  --env PLATFORM_TOOLS_TEST_CONTAINER=1 \
+  --env "TEST_MAKE_JOBS=$test_make_jobs" \
+  --env "PKI_PYTEST_WORKERS=$pki_pytest_workers" \
+  --volume "$repo_root:/workspace:Z" \
+  --workdir /workspace \
+  "$image" \
+  /bin/sh -c 'mkdir -p "$HOME" && exec "$@"' sh "$@"

@@ -105,6 +105,39 @@ def _run_test_target(process_runner, fake: Path, env: dict[str, str], *variables
     )
 
 
+def _fake_podman(executable_directory: Path) -> tuple[Path, dict[str, str]]:
+    fake_podman = executable_directory / "podman"
+    log = executable_directory / "podman.log"
+    fake_podman.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+  printf 'arg=%s\n' "$argument" >>"$PODMAN_TEST_LOG"
+done
+printf '%s\n' 'end-call' >>"$PODMAN_TEST_LOG"
+""",
+        encoding="utf-8",
+    )
+    fake_podman.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("PLATFORM_TOOLS_DEV_IMAGE", None)
+    env.pop("PLATFORM_TOOLS_TEST_IMAGE", None)
+    env["PATH"] = f"{executable_directory}{os.pathsep}{env['PATH']}"
+    env["PODMAN_TEST_LOG"] = str(log)
+    return log, env
+
+
+def _podman_calls(log: Path) -> list[list[str]]:
+    calls: list[list[str]] = [[]]
+    for line in log.read_text(encoding="utf-8").splitlines():
+        if line == "end-call":
+            calls.append([])
+        else:
+            calls[-1].append(line.removeprefix("arg="))
+    assert calls[-1] == []
+    return calls[:-1]
+
+
 def test_non_rollover_target_inventory_is_exact() -> None:
     assignment = next(
         line
@@ -211,32 +244,39 @@ def test_standalone_rollover_rejects_invalid_workers_before_xdist(
         ({"TEST_MAKE_JOBS": "", "PKI_PYTEST_WORKERS": ""}, "", ""),
     ],
 )
-def test_container_wrapper_preserves_worker_values(
+def test_test_container_wrapper_preserves_worker_values(
     executable_directory: Path,
     process_runner,
     worker_env: dict[str, str],
     expected_jobs: str,
     expected_workers: str,
 ) -> None:
-    fake_podman = executable_directory / "podman"
-    log = executable_directory / "podman.log"
-    fake_podman.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-for argument in "$@"; do
-  printf 'arg=%s\n' "$argument" >>"$PODMAN_TEST_LOG"
-done
-printf '%s\n' 'end-call' >>"$PODMAN_TEST_LOG"
-""",
-        encoding="utf-8",
-    )
-    fake_podman.chmod(0o755)
-    env = os.environ.copy()
+    log, env = _fake_podman(executable_directory)
     env.pop("TEST_MAKE_JOBS", None)
     env.pop("PKI_PYTEST_WORKERS", None)
     env.update(worker_env)
-    env["PATH"] = f"{executable_directory}{os.pathsep}{env['PATH']}"
-    env["PODMAN_TEST_LOG"] = str(log)
+
+    result = process_runner(
+        ["bash", str(REPO_ROOT / "scripts/in-test-container"), "true"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.status == 0, result.stderr
+    build, run = _podman_calls(log)
+    assert f"TEST_MAKE_JOBS={expected_jobs}" in run
+    assert f"PKI_PYTEST_WORKERS={expected_workers}" in run
+    assert "PLATFORM_TOOLS_TEST_CONTAINER=1" in run
+    assert "PLATFORM_TOOLS_DEV_CONTAINER=1" not in run
+    assert str(REPO_ROOT / "Containerfile.test") in build
+    assert "localhost/platform-tools-test:3.14.7" in build
+    assert "localhost/platform-tools-test:3.14.7" in run
+
+
+def test_development_container_wrapper_uses_bashly_image(
+    executable_directory: Path, process_runner
+) -> None:
+    log, env = _fake_podman(executable_directory)
 
     result = process_runner(
         ["bash", str(REPO_ROOT / "scripts/in-container"), "true"],
@@ -245,7 +285,60 @@ printf '%s\n' 'end-call' >>"$PODMAN_TEST_LOG"
     )
 
     assert result.status == 0, result.stderr
-    arguments = log.read_text(encoding="utf-8").splitlines()
-    assert arguments.count(f"arg=TEST_MAKE_JOBS={expected_jobs}") == 1
-    assert arguments.count(f"arg=PKI_PYTEST_WORKERS={expected_workers}") == 1
-    assert arguments.count("end-call") == 2
+    build, run = _podman_calls(log)
+    assert "PLATFORM_TOOLS_DEV_CONTAINER=1" in run
+    assert "PLATFORM_TOOLS_TEST_CONTAINER=1" not in run
+    assert str(REPO_ROOT / "Containerfile.dev") in build
+    assert "localhost/platform-tools-dev:2.2.0" in build
+    assert "localhost/platform-tools-dev:2.2.0" in run
+    assert not any("TEST_MAKE_JOBS=" in argument for argument in run)
+    assert not any("PKI_PYTEST_WORKERS=" in argument for argument in run)
+
+
+def test_container_check_runs_bashly_phase_before_test_phase(
+    executable_directory: Path, process_runner
+) -> None:
+    log, env = _fake_podman(executable_directory)
+
+    result = process_runner(
+        ["make", "--no-print-directory", "container-check"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.status == 0, result.stderr
+    calls = _podman_calls(log)
+    assert len(calls) == 4
+    assert str(REPO_ROOT / "Containerfile.dev") in calls[0]
+    assert calls[1][-3:] == ["make", "verify-generated", "shellcheck"]
+    assert str(REPO_ROOT / "Containerfile.test") in calls[2]
+    assert calls[3][-1] == "./scripts/check"
+
+
+def test_check_script_runs_test_image_phases_once_in_order(
+    executable_directory: Path, process_runner
+) -> None:
+    fake_make = executable_directory / "make"
+    log = executable_directory / "make.log"
+    fake_make.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$MAKE_TEST_LOG"
+""",
+        encoding="utf-8",
+    )
+    fake_make.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{executable_directory}{os.pathsep}{env['PATH']}"
+    env["MAKE_TEST_LOG"] = str(log)
+
+    result = process_runner(
+        ["bash", str(REPO_ROOT / "scripts/check")], cwd=REPO_ROOT, env=env
+    )
+
+    assert result.status == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "verify",
+        "test",
+        "test-vm-env-collect-archive",
+    ]
