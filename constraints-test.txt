@@ -1,2 +1,6 @@
-# Keep pytest's transitive plugin boundary deterministic.
+# Keep the resolved Python test dependency graph deterministic.
+execnet==2.1.2
+iniconfig==2.3.0
+packaging==26.3
 pluggy==1.6.0
+Pygments==2.20.0

@@ -58,7 +58,11 @@ RUN test "$(python3 --version)" = 'Python 3.14.7' \
   && test "$(python3 -m pytest --version)" = 'pytest 9.1.1' \
   && test "$(python3 -c 'from importlib.metadata import version; print(version("pytest-xdist"))')" = '3.8.0' \
   && test "$(python3 -c 'from importlib.metadata import version; print(version("PyYAML"))')" = '6.0.3' \
+  && test "$(python3 -c 'from importlib.metadata import version; print(version("execnet"))')" = '2.1.2' \
+  && test "$(python3 -c 'from importlib.metadata import version; print(version("iniconfig"))')" = '2.3.0' \
+  && test "$(python3 -c 'from importlib.metadata import version; print(version("packaging"))')" = '26.3' \
   && test "$(python3 -c 'from importlib.metadata import version; print(version("pluggy"))')" = '1.6.0' \
+  && test "$(python3 -c 'from importlib.metadata import version; print(version("Pygments"))')" = '2.20.0' \
   && python3 -c 'import importlib.util; assert all(importlib.util.find_spec(name) is None for name in ("anyio", "typeguard"))' \
   && python3 -m pip check
 

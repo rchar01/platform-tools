@@ -237,8 +237,8 @@ ShellCheck and shfmt binaries, and the Bashly dependency graph locked in
 
 The test image uses a digest-pinned Python 3.14 Debian 13 base, its matching
 immutable Debian snapshot, exact direct system packages, and pinned pytest,
-pytest-xdist, PyYAML, and pluggy versions. It intentionally excludes Ruby,
-Bashly, ShellCheck, shfmt, anyio, and typeguard.
+pytest-xdist, PyYAML, and transitive dependency versions. It intentionally
+excludes Ruby, Bashly, ShellCheck, shfmt, anyio, and typeguard.
 
 Update each base digest with its matching snapshot and package pins, inspect
 upstream release notes, regenerate all Bashly-backed tools when generator inputs
