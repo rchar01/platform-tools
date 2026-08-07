@@ -394,9 +394,13 @@ automation must enforce an empty-pending-state gate before rotation. A pending
 run fails if any target/controller snapshot changes. Rotation publishes and
 reviews new public trust, installs it atomically only after that gate, updates
 target/controller pins, and begins only new requests. No exchange-provided key
-becomes trusted. The current `platform-pki-csr-trust-install` does not implement
-the empty-pending-state gate, so schema-2 trust rotation remains blocked until
-that enforcement and its lifecycle tests are added.
+becomes trusted. `platform-pki-csr-trust-install` now enforces the signer-side
+gate under the lifecycle lock: an actual schema-2 change requires every retained
+candidate to have a fully authenticated immutable finalized or abandoned
+outcome, while malformed, conflicting, or recovery-required state fails closed.
+It cannot discover a request that remains only on external transport or a
+target/controller, so end-to-end rotation remains blocked until lifecycle
+automation proves that external pending-request state is also empty.
 
 Select exactly one reviewed transport profile without changing these local
 workspace or PKI rules:

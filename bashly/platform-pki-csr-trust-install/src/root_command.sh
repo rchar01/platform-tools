@@ -10,6 +10,13 @@ fi
 [[ -r $COMMON_PATH ]] || { printf '[ERROR] platform-pki-common.sh not found\n' >&2; exit 1; }
 # shellcheck source=../../../../lib/platform-pki-common.sh disable=SC1091
 source "$COMMON_PATH"
+CSR_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-sign.sh
+CANDIDATE_COMMON_PATH=$(dirname -- "$COMMON_PATH")/platform-pki-csr-candidate.sh
+[[ -r $CSR_COMMON_PATH && -r $CANDIDATE_COMMON_PATH ]] || { printf '[ERROR] PKI CSR shared libraries not found\n' >&2; exit 1; }
+# shellcheck source=../../../../lib/platform-pki-csr-sign.sh disable=SC1091
+source "$CSR_COMMON_PATH"
+# shellcheck source=../../../../lib/platform-pki-csr-candidate.sh disable=SC1091
+source "$CANDIDATE_COMMON_PATH"
 
 pki_reject_repeated_options --private-repo --namespace --pki-dir
 NAMESPACE=${args[--namespace]:-$(pki_default_namespace)}
@@ -159,6 +166,26 @@ recheck_source_tree() {
   done
 }
 
+snapshot_staged_tree() {
+  local name value
+  unset -v STAGED_IDENTITIES
+  declare -gA STAGED_IDENTITIES=()
+  for name in "${STAGED_TRUST_FILES[@]}"; do
+    value=$(pki_file_identity "$STAGE/$name") || pki_die "Cannot snapshot staged CSR trust: $name"
+    STAGED_IDENTITIES[$name]=$value
+  done
+}
+
+recheck_staged_tree() {
+  local name
+  [[ -d $STAGE && ! -L $STAGE && $(pki_dir_identity "$STAGE") == "$STAGE_IDENTITY" ]] || pki_die 'Staged CSR trust directory changed before publication'
+  validate_trust_tree "$STAGE"
+  [[ $TRUST_SCHEMA == "$STAGED_TRUST_SCHEMA" && ${TRUST_FILES[*]} == "${STAGED_TRUST_FILES[*]}" ]] || pki_die 'Staged CSR trust schema changed before publication'
+  for name in "${STAGED_TRUST_FILES[@]}"; do
+    [[ -f $STAGE/$name && ! -L $STAGE/$name && $(pki_file_identity "$STAGE/$name") == "${STAGED_IDENTITIES[$name]}" ]] || pki_die "Staged CSR trust changed before publication: $name"
+  done
+}
+
 validate_installed_trust() {
   local name
   pki_require_private_dir "$DESTINATION" 'Installed CSR trust directory'
@@ -166,6 +193,28 @@ validate_installed_trust() {
   for name in "${TRUST_FILES[@]}"; do
     [[ -f $DESTINATION/$name && ! -L $DESTINATION/$name && $(stat -c '%u:%a:%h' "$DESTINATION/$name") == "$(id -u):600:1" ]] || \
       pki_die "Installed CSR trust file is unsafe: $DESTINATION/$name"
+  done
+}
+
+snapshot_installed_tree() {
+  local name value
+  INSTALLED_TRUST_SCHEMA=$TRUST_SCHEMA
+  INSTALLED_TRUST_FILES=("${TRUST_FILES[@]}")
+  unset -v INSTALLED_IDENTITIES
+  declare -gA INSTALLED_IDENTITIES=()
+  for name in "${INSTALLED_TRUST_FILES[@]}"; do
+    value=$(pki_file_identity "$DESTINATION/$name") || pki_die "Cannot snapshot installed CSR trust: $name"
+    INSTALLED_IDENTITIES[$name]=$value
+  done
+}
+
+recheck_installed_tree() {
+  local name
+  [[ -n $DESTINATION_IDENTITY && -d $DESTINATION && ! -L $DESTINATION && $(pki_dir_identity "$DESTINATION") == "$DESTINATION_IDENTITY" ]] || pki_die 'Installed CSR trust changed before publication'
+  validate_installed_trust
+  [[ $TRUST_SCHEMA == "$INSTALLED_TRUST_SCHEMA" && ${TRUST_FILES[*]} == "${INSTALLED_TRUST_FILES[*]}" ]] || pki_die 'Installed CSR trust schema changed before publication'
+  for name in "${INSTALLED_TRUST_FILES[@]}"; do
+    [[ -f $DESTINATION/$name && ! -L $DESTINATION/$name && $(pki_file_identity "$DESTINATION/$name") == "${INSTALLED_IDENTITIES[$name]}" ]] || pki_die "Installed CSR trust changed before publication: $name"
   done
 }
 
@@ -178,12 +227,16 @@ finish_trust_install() {
   [[ ${INVENTORY_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INVENTORY_LOCK" 2>/dev/null || status=1
   [[ ${INTERMEDIATE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$INTERMEDIATE_LOCK" 2>/dev/null || status=1
   [[ ${ROOT_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$ROOT_LOCK" 2>/dev/null || status=1
+  [[ ${LIFECYCLE_LOCK_HELD:-false} != true ]] || pki_release_operation_lock "$LIFECYCLE_LOCK" 2>/dev/null || status=1
   exit "$status"
 }
 
 pki_require_cmd ssh-keygen
 pki_require_cmd python3
 pki_require_cmd mv
+pki_require_cmd openssl
+pki_require_cmd sha256sum
+pki_require_cmd cmp
 pki_require_no_symlink_path_components "$PRIVATE_REPO" 'Private repository'
 require_trusted_ancestors "$PRIVATE_REPO" 'Private repository'
 PRIVATE_REPO=$(cd -- "$PRIVATE_REPO" && pwd -P) || pki_die "Private repository does not exist: $PRIVATE_REPO"
@@ -191,6 +244,7 @@ SOURCE=$PRIVATE_REPO/pki/csr-trust
 [[ -d $SOURCE && ! -L $SOURCE ]] || pki_die "CSR trust source directory is missing or unsafe: $SOURCE"
 require_trusted_ancestors "$SOURCE" 'CSR trust source'
 validate_trust_tree "$SOURCE"
+SOURCE_TRUST_SCHEMA=$TRUST_SCHEMA
 snapshot_source_tree
 pki_require_no_symlink_path_components "$PKI_DIR" 'PKI directory'
 pki_require_pki_dir
@@ -199,12 +253,14 @@ pki_require_private_dir "$PKI_DIR/inventory" 'Inventory directory'
 PKI_REAL=$(cd -- "$PKI_DIR" && pwd -P) || pki_die "Cannot resolve PKI directory: $PKI_DIR"
 [[ $PRIVATE_REPO != "$PKI_REAL" && $PRIVATE_REPO != "$PKI_REAL"/* ]] || pki_die 'Private repository must not be inside the PKI destination tree'
 
+LIFECYCLE_LOCK=$(pki_lifecycle_operation_lock)
 ROOT_LOCK=$(pki_root_operation_lock)
 INTERMEDIATE_LOCK=$(pki_intermediate_operation_lock)
 INVENTORY_LOCK=$(pki_inventory_operation_lock)
-ROOT_LOCK_HELD=false; INTERMEDIATE_LOCK_HELD=false; INVENTORY_LOCK_HELD=false
+LIFECYCLE_LOCK_HELD=false; ROOT_LOCK_HELD=false; INTERMEDIATE_LOCK_HELD=false; INVENTORY_LOCK_HELD=false
 trap finish_trust_install EXIT
 umask 077
+pki_acquire_operation_lock "$LIFECYCLE_LOCK" 'PKI lifecycle operation'; LIFECYCLE_LOCK_HELD=true
 pki_acquire_operation_lock "$ROOT_LOCK" 'root CA operation'; ROOT_LOCK_HELD=true
 pki_acquire_operation_lock "$INTERMEDIATE_LOCK" 'intermediate CA operation'; INTERMEDIATE_LOCK_HELD=true
 pki_acquire_operation_lock "$INVENTORY_LOCK" 'inventory operation'; INVENTORY_LOCK_HELD=true
@@ -220,11 +276,16 @@ done
 recheck_source_tree
 validate_trust_tree "$STAGE"
 STAGED_TRUST_FILES=("${TRUST_FILES[@]}")
+STAGED_TRUST_SCHEMA=$TRUST_SCHEMA
+[[ $STAGED_TRUST_SCHEMA == "$SOURCE_TRUST_SCHEMA" ]] || pki_die 'CSR trust source schema changed during staging'
 pki_fsync_tree "$STAGE"
+snapshot_staged_tree
 
+INSTALLED_TRUST_SCHEMA=''
 if [[ -e $DESTINATION || -L $DESTINATION ]]; then
   validate_installed_trust
   DESTINATION_IDENTITY=$(pki_dir_identity "$DESTINATION") || pki_die 'Cannot snapshot installed CSR trust identity'
+  snapshot_installed_tree
 fi
 TRUST_FILES=("${STAGED_TRUST_FILES[@]}")
 same=true
@@ -234,14 +295,21 @@ else
   same=false
 fi
 if [[ $same == true ]]; then
-  [[ $(pki_dir_identity "$DESTINATION") == "$DESTINATION_IDENTITY" ]] || pki_die 'Installed CSR trust changed during comparison'
+  recheck_installed_tree
   pki_ok "CSR trust already current: $DESTINATION"
   exit 0
 fi
 
+if [[ $STAGED_TRUST_SCHEMA == 2 || $INSTALLED_TRUST_SCHEMA == 2 ]]; then
+  CANDIDATE_STATE_DIGEST=$(pki_candidate_require_no_pending_outcomes) || pki_die 'CSR candidate and outcome state validation failed'
+  recheck_source_tree
+fi
+recheck_staged_tree
+
 if [[ -e $DESTINATION || -L $DESTINATION ]]; then
-  [[ -n $DESTINATION_IDENTITY && $(pki_dir_identity "$DESTINATION") == "$DESTINATION_IDENTITY" ]] || \
-    pki_die 'Installed CSR trust changed before publication'
+  recheck_installed_tree
+  [[ -z ${CANDIDATE_STATE_DIGEST:-} ]] || pki_candidate_require_historical_state_digest "$CANDIDATE_STATE_DIGEST"
+  recheck_installed_tree
   old_identity=$DESTINATION_IDENTITY
   new_identity=$STAGE_IDENTITY
   mv --exchange --no-copy -T -- "$STAGE" "$DESTINATION" || pki_die 'Cannot atomically exchange installed CSR trust'
@@ -253,6 +321,7 @@ if [[ -e $DESTINATION || -L $DESTINATION ]]; then
   status=updated
 else
   new_identity=$STAGE_IDENTITY
+  [[ -z ${CANDIDATE_STATE_DIGEST:-} ]] || pki_candidate_require_historical_state_digest "$CANDIDATE_STATE_DIGEST"
   mv --no-copy --update=none-fail -T -- "$STAGE" "$DESTINATION" || pki_die 'CSR trust destination appeared before publication'
   [[ $(pki_dir_identity "$DESTINATION") == "$new_identity" ]] || pki_die 'Published CSR trust identity is invalid'
   STAGE=''

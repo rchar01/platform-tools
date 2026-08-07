@@ -27,4 +27,8 @@ footer: |-
   responses.allowed_signers. Schema 2 adds exactly deployers.allowed_signers
   and is required for candidate finalization or abandonment. The complete
   validated snapshot is atomically installed under
-  <pki-dir>/inventory/csr-trust. No private key is installed.
+  <pki-dir>/inventory/csr-trust while holding the lifecycle, root, intermediate,
+  and inventory locks. Initial schema-2 installation is allowed when no
+  candidate is pending, and identical content remains a no-op. Any actual change
+  involving schema 2 is rejected while a retained candidate lacks an
+  authenticated finalized or abandoned outcome. No private key is installed.

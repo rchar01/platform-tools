@@ -7,6 +7,19 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Added an installer-enforced, lifecycle-locked schema-2 CSR trust replacement
+  gate. Initial installation remains allowed only when retained state passes the
+  gate, and exact protected no-ops remain allowed, while actual schema-2 changes
+  reject pending candidates, unauthenticated or
+  conflicting outcomes, duplicate or orphan state, source races, and unresolved
+  recovery. Fully authenticated finalized, abandoned, and superseded historical
+  outcomes remain terminal when they continue to authenticate against current
+  inventory and required preserved migration state. The installer now explicitly
+  releases the lifecycle lock after successful and failed operations, including
+  root-lock contention.
+
 ## [2.1.0] - 2026-08-06
 
 ### Added

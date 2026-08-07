@@ -155,8 +155,12 @@ or digest; evidence handling rejects changed deployment trust. The signer does
 not technically bind request-time deployer trust until decision acceptance, so
 schema-2 trust installation is prohibited while any request/candidate is
 pending. Rotation starts only new requests after an empty-pending-state gate; it
-never silently changes an in-flight request. The current trust installer lacks
-that gate, so no schema-2 rotation is permitted under this design.
+never silently changes an in-flight request. The trust installer now rejects an
+actual schema-2 change unless every retained signer candidate has an
+authenticated finalized or abandoned outcome. This signer-side lifecycle-locked
+gate cannot detect requests that remain only in this external workspace, so no
+end-to-end rotation is permitted until the manual or automated lifecycle also
+proves that external pending-request state is empty.
 
 ## Host Workspace
 Use an owner-only mode-`700` root outside Git, the PKI tree, `/tmp`, and shared

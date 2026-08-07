@@ -484,8 +484,10 @@ digest checks, and comparison with independent canonical state.
   deployer trust, and fresh evidence repeats strict target and client validation.
 - [ ] No fuzzy/newest selection exists; every stage receives its exact package
   version and all prior approval/evidence attempts remain retained.
-- [ ] Schema-2 trust rotation is blocked while any request/candidate is pending;
-  the installer-side empty-state gate is implemented and lifecycle-tested.
+- [ ] Schema-2 trust rotation is blocked while any request/candidate is pending.
+  The installer now lifecycle-locks and authenticates persisted candidate/outcome
+  state; transport automation must still prove that no external request remains
+  pending before rotation.
 - [ ] Normal activation and local break-glass import use the same exact helper,
   artifact pin, trust digest, durable target state, rollback, and validation.
 - [ ] Read-only recovery media and the GitLab-certificate circular-dependency

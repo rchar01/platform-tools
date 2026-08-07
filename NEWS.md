@@ -4,6 +4,13 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- `platform-pki-csr-trust-install` now explicitly owns the complete lifecycle,
+  root, intermediate, and inventory lock boundary and fails closed before an
+  actual schema-2 trust change unless every retained signer candidate has an
+  authenticated finalized or abandoned outcome. Exact no-ops and authenticated
+  terminal history remain allowed; external pending requests still require a
+  separate lifecycle gate.
+
 ## v2.1.0 - 2026-08-06
 
 - The maintained test aggregate now runs non-rollover modules with two bounded

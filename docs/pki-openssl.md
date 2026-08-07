@@ -487,6 +487,22 @@ installed. Temporary files used to validate public keys are removed only while
 their exact created identity remains current; replacements are retained and
 make installation fail.
 
+Any actual trust-tree change involving schema 2 runs a lifecycle-locked,
+fail-closed scan of retained signer candidate and outcome state. Initial schema-2
+installation succeeds when no candidate is pending, and identical protected
+content remains a no-op. A candidate is terminal only when its complete retained
+sources and immutable finalized or abandoned outcome authenticate under the
+response trust snapshotted by its signing transaction and the deployer trust
+retained with its decision. Retained candidate directories and superseded
+history do not by themselves make terminal history pending, but every terminal
+outcome must still authenticate against current inventory and any required
+preserved managed migration state. Missing outcomes, malformed or unsafe trees,
+duplicate request IDs, orphan outcomes, conflicting evidence, inventory drift,
+source races, and recovery-required state block replacement. This gate covers
+candidates persisted by the signer; request
+transport and target/controller automation must separately prevent rotation
+while an external request has not yet reached signer candidate state.
+
 This trust snapshot freezes OpenSSH `ssh-keygen -Y` detached Ed25519 signature
 namespaces and timing limits. Installing it performs no signing. Authenticated
 host-local issue, migration, and renewal consume schema 1 or schema 2. Candidate

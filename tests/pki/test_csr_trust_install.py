@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
 from collections.abc import Callable, Mapping
@@ -9,6 +10,16 @@ import pytest
 
 from ..harness import ProcessResult
 from .support import BIN, assert_result, digest, environment, executable, executable_directory, mode, write_executable, write_private
+from .test_csr_candidate import POLICY2, REQUEST_ID, configure_deployer_trust, decide, prepare, publish_request
+from .test_csr_signing import (
+    EXPORT as ANSIBLE_EXPORT,
+    INVENTORY,
+    ISSUE,
+    CsrWorkspace,
+    RENEW,
+    csr_workspace,
+    write_exchange,
+)
 
 
 pytestmark = pytest.mark.pki
@@ -93,6 +104,102 @@ def test_install_noop_and_atomic_update(tmp_path, process_runner, isolated_envir
     assert "CSR trust updated:" in result.stdout
     assert destination.stat().st_ino != inode
     assert replacement in (destination / "requesters.allowed_signers").read_text()
+
+
+def test_noop_rechecks_each_installed_trust_file(
+    tmp_path, process_runner, isolated_environment, executable_directory
+) -> None:
+    namespace, private, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    installed = namespace / "pki/inventory/csr-trust/responses.allowed_signers"
+    fake_bin = executable_directory / "noop-installed-race"
+    marker = tmp_path / "noop-installed-race.marker"
+    write_executable(
+        fake_bin / "cmp",
+        """#!/usr/bin/env bash
+set -u
+"$REAL_CMP" "$@"
+status=$?
+if (( status == 0 )) && [[ ${!#} == "$RACE_INSTALLED" && ! -e $RACE_MARKER ]]; then
+  printf '\n' >>"$RACE_INSTALLED"
+  : >"$RACE_MARKER"
+fi
+exit "$status"
+""",
+    )
+
+    result = run(
+        process_runner,
+        environment(
+            isolated_environment,
+            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
+            REAL_CMP=executable("cmp"),
+            RACE_INSTALLED=os.fspath(installed),
+            RACE_MARKER=os.fspath(marker),
+        ),
+        namespace,
+        private,
+    )
+
+    assert result.status == 1
+    assert marker.is_file()
+    assert "CSR trust already current:" not in result.stdout
+
+
+def test_update_rechecks_installed_trust_after_final_state_digest(
+    csr_workspace: CsrWorkspace, executable_directory, tmp_path
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    destination = workspace.pki / "inventory/csr-trust"
+    destination_inode = destination.stat().st_ino
+    deployer_before = digest(destination / "deployers.allowed_signers")
+    installed = destination / "responses.allowed_signers"
+    replace_deployer_trust(workspace)
+    fake_bin = executable_directory / "update-installed-race"
+    marker = tmp_path / "update-installed-race.marker"
+    write_executable(
+        fake_bin / "sha256sum",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if (( $# == 0 )) && [[ ! -e $RACE_MARKER ]]; then
+  printf '\n' >>"$RACE_INSTALLED"
+  : >"$RACE_MARKER"
+fi
+exec "$REAL_SHA256SUM" "$@"
+""",
+    )
+
+    result = run(
+        workspace.runner,
+        environment(
+            workspace.env,
+            PATH=f"{fake_bin}:{workspace.env['PATH']}",
+            REAL_SHA256SUM=executable("sha256sum"),
+            RACE_INSTALLED=os.fspath(installed),
+            RACE_MARKER=os.fspath(marker),
+        ),
+        workspace.namespace,
+        workspace.private,
+    )
+
+    assert result.status == 1
+    assert marker.is_file()
+    assert destination.stat().st_ino == destination_inode
+    assert digest(destination / "deployers.allowed_signers") == deployer_before
 
 
 @pytest.mark.parametrize(
@@ -576,3 +683,634 @@ def test_unsafe_installed_trust_is_not_replaced(tmp_path, process_runner, isolat
     assert f"Installed CSR trust file is unsafe: {installed}" in result.stderr
     assert digest(installed) == before
     assert mode(installed) == 0o644
+
+
+@pytest.mark.parametrize(
+    ("name", "label"),
+    (
+        pytest.param("lifecycle", "PKI lifecycle operation", id="lifecycle"),
+        pytest.param("root", "root CA operation", id="root"),
+        pytest.param("intermediate", "intermediate CA operation", id="intermediate"),
+        pytest.param("inventory", "inventory operation", id="inventory"),
+    ),
+)
+def test_each_operation_lock_blocks_installation(
+    tmp_path, process_runner, isolated_environment, name: str, label: str
+) -> None:
+    namespace, private, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    lock_path = namespace / f"pki/locks/{name}"
+    with lock_path.open("a+") as lock:
+        lock_path.chmod(0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = run(
+            process_runner, isolated_environment, namespace, private
+        )
+
+    assert result.status == 1
+    assert f"Another {label} is in progress: {lock_path}" in result.stderr
+    assert not (namespace / "pki/inventory/csr-trust").exists()
+
+
+@pytest.mark.parametrize("case", ("success", "failure"))
+def test_operation_locks_are_released_in_reverse_order(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    executable_directory,
+    case: str,
+) -> None:
+    namespace, private, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    if case == "failure":
+        assert_result(
+            run(process_runner, isolated_environment, namespace, private), 0
+        )
+        (namespace / "pki/inventory/csr-trust/policy").chmod(0o644)
+    fake_bin = executable_directory / f"flock-release-{case}"
+    log = tmp_path / f"flock-release-{case}.log"
+    write_executable(
+        fake_bin / "flock",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FLOCK_LOG"
+exec "$REAL_FLOCK" "$@"
+""",
+    )
+    result = run(
+        process_runner,
+        environment(
+            isolated_environment,
+            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
+            FLOCK_LOG=os.fspath(log),
+            REAL_FLOCK=executable("flock"),
+        ),
+        namespace,
+        private,
+    )
+
+    assert result.status == (0 if case == "success" else 1)
+    calls = log.read_text().splitlines()
+    acquired = [call.removeprefix("-n ") for call in calls if call.startswith("-n ")]
+    released = [call.removeprefix("-u ") for call in calls if call.startswith("-u ")]
+    assert len(acquired) == 4
+    assert released == list(reversed(acquired))
+
+
+def test_root_contention_explicitly_releases_lifecycle_lock(
+    tmp_path, process_runner, isolated_environment, executable_directory
+) -> None:
+    namespace, private, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    root_lock = namespace / "pki/locks/root"
+    fake_bin = executable_directory / "flock-root-contention"
+    log = tmp_path / "flock-root-contention.log"
+    write_executable(
+        fake_bin / "flock",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FLOCK_LOG"
+exec "$REAL_FLOCK" "$@"
+""",
+    )
+    with root_lock.open("a+") as lock:
+        root_lock.chmod(0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = run(
+            process_runner,
+            environment(
+                isolated_environment,
+                PATH=f"{fake_bin}:{isolated_environment['PATH']}",
+                FLOCK_LOG=os.fspath(log),
+                REAL_FLOCK=executable("flock"),
+            ),
+            namespace,
+            private,
+        )
+
+    assert result.status == 1
+    calls = log.read_text().splitlines()
+    acquired = [call.removeprefix("-n ") for call in calls if call.startswith("-n ")]
+    released = [call.removeprefix("-u ") for call in calls if call.startswith("-u ")]
+    assert len(acquired) == 2
+    assert released == [acquired[0]]
+
+
+def replace_deployer_trust(workspace: CsrWorkspace) -> None:
+    fields = workspace.response_key.with_suffix(".pub").read_text().split()
+    write_private(
+        workspace.private / "pki/csr-trust/deployers.allowed_signers",
+        f"host-01 {fields[0]} {fields[1]}\n",
+    )
+
+
+def test_initial_schema_two_install_succeeds_without_candidate_state(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    namespace, private, keys = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    trust = private / "pki/csr-trust"
+    fields = (keys / "requester.pub").read_text().split()
+    write_private(trust / "policy", POLICY2)
+    write_private(
+        trust / "deployers.allowed_signers",
+        f"host-01 {fields[0]} {fields[1]}\n",
+    )
+
+    result = run(process_runner, isolated_environment, namespace, private)
+
+    assert_result(result, 0)
+    assert "CSR trust installed:" in result.stdout
+
+
+def test_initial_schema_two_install_and_pending_exact_noop(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    configure_deployer_trust(workspace)
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+    assert_result(result, 0)
+    assert "CSR trust updated:" in result.stdout
+    assert_result(workspace.issue(), 0)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert_result(result, 0)
+    assert "CSR trust already current:" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "transition", ("schema-one-to-two", "schema-two-update", "schema-two-to-one")
+)
+def test_pending_candidate_blocks_actual_schema_two_trust_change(
+    csr_workspace: CsrWorkspace, transition: str
+) -> None:
+    workspace = csr_workspace
+    if transition != "schema-one-to-two":
+        configure_deployer_trust(workspace)
+        assert_result(
+            run(
+                workspace.runner,
+                workspace.env,
+                workspace.namespace,
+                workspace.private,
+            ),
+            0,
+        )
+    assert_result(workspace.issue(), 0)
+    if transition == "schema-one-to-two":
+        configure_deployer_trust(workspace)
+    elif transition == "schema-two-update":
+        replace_deployer_trust(workspace)
+    else:
+        trust = workspace.private / "pki/csr-trust"
+        (trust / "deployers.allowed_signers").unlink()
+        write_private(trust / "policy", POLICY)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert result.status == 1
+    assert f"pending candidate: external/{REQUEST_ID}" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("action", "result_name"),
+    (
+        pytest.param("finalize", "activated", id="finalized"),
+        pytest.param("abandon", "not-activated", id="abandoned"),
+    ),
+)
+def test_authenticated_terminal_history_allows_schema_two_rotation(
+    csr_workspace: CsrWorkspace,
+    action: str,
+    result_name: str,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action=action,
+            result=result_name,
+        ),
+        0,
+    )
+    replace_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert_result(result, 0)
+    assert "CSR trust updated:" in result.stdout
+
+
+def test_terminal_history_fails_closed_without_current_inventory_binding(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    write_private(
+        workspace.pki / "inventory/services.yml",
+        "services:\n"
+        "  other:\n"
+        "    common_name: other.example.internal\n"
+        "    dns:\n"
+        "      - other.example.internal\n",
+    )
+    replace_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert result.status == 1
+    assert "is not defined" in result.stderr
+
+
+def test_superseded_terminal_history_allows_schema_two_rotation(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    first_artifact, first_manifest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            first_artifact,
+            first_manifest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    renewal_id = "2123456789abcdef0123456789abcdef"
+    current = first_artifact / "tls.crt"
+    write_exchange(workspace, "renew", renewal_id, "cd" * 32, digest(current))
+    assert_result(workspace.sign(RENEW, current_cert=current), 0)
+    renewal_artifact, renewal_manifest = publish_request(workspace, renewal_id)
+    assert_result(
+        decide(
+            workspace,
+            renewal_id,
+            renewal_artifact,
+            renewal_manifest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    replace_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert_result(result, 0)
+    assert "CSR trust updated:" in result.stdout
+
+
+def prepare_terminal_migration(workspace: CsrWorkspace) -> None:
+    managed_inventory = INVENTORY.replace(
+        "    key_custody: host-local\n"
+        "    target: host-01\n"
+        "    validation_boundary_sha256: " + "0" * 64 + "\n"
+        "    rollback_hold_seconds: 3600\n",
+        "",
+    )
+    write_private(workspace.pki / "inventory/services.yml", managed_inventory)
+    assert_result(
+        workspace.runner(
+            [
+                ISSUE,
+                "external",
+                "--namespace",
+                workspace.namespace,
+                "--intermediate-pass-file",
+                workspace.intermediate_pass,
+            ],
+            env=workspace.env,
+            timeout=120,
+        ),
+        0,
+    )
+    certificate = workspace.pki / "services/external/certs/tls.crt"
+    assert_result(
+        workspace.runner(
+            [
+                ANSIBLE_EXPORT,
+                "external",
+                "--namespace",
+                workspace.namespace,
+                "--force",
+            ],
+            env=workspace.env,
+            timeout=120,
+        ),
+        0,
+    )
+    write_private(workspace.pki / "inventory/services.yml", INVENTORY)
+    migration_id = "1123456789abcdef0123456789abcdef"
+    write_exchange(
+        workspace, "migrate", migration_id, "bc" * 32, digest(certificate)
+    )
+    configure_deployer_trust(workspace)
+    assert_result(
+        run(
+            workspace.runner,
+            workspace.env,
+            workspace.namespace,
+            workspace.private,
+        ),
+        0,
+    )
+    assert_result(workspace.issue(), 0)
+    artifact, manifest_digest = publish_request(workspace, migration_id)
+    assert_result(
+        decide(
+            workspace,
+            migration_id,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+
+
+def test_terminal_migration_history_allows_rotation_with_preserved_state(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    prepare_terminal_migration(workspace)
+    replace_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert_result(result, 0)
+    assert "CSR trust updated:" in result.stdout
+
+
+def test_migration_history_is_rechecked_at_publication_boundary(
+    csr_workspace: CsrWorkspace,
+    executable_directory,
+    tmp_path,
+) -> None:
+    workspace = csr_workspace
+    prepare_terminal_migration(workspace)
+    destination = workspace.pki / "inventory/csr-trust"
+    before = digest(destination / "deployers.allowed_signers")
+    replace_deployer_trust(workspace)
+    fake_bin = executable_directory / "migration-history-race"
+    gate_marker = tmp_path / "migration-history-race.gate"
+    marker = tmp_path / "migration-history-race.marker"
+    write_executable(
+        fake_bin / "ssh-keygen",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $* == *platform-pki-csr-deployment-v1* && ! -e $RACE_GATE_MARKER ]]; then
+  : >"$RACE_GATE_MARKER"
+elif [[ -e $RACE_GATE_MARKER && ! -e $RACE_MARKER ]]; then
+  printf '\n' >>"$RACE_MANAGED_CERTIFICATE"
+  : >"$RACE_MARKER"
+fi
+exec "$REAL_SSH_KEYGEN" "$@"
+""",
+    )
+
+    result = run(
+        workspace.runner,
+        environment(
+            workspace.env,
+            PATH=f"{fake_bin}:{workspace.env['PATH']}",
+            REAL_SSH_KEYGEN=executable("ssh-keygen"),
+            RACE_GATE_MARKER=os.fspath(gate_marker),
+            RACE_MARKER=os.fspath(marker),
+            RACE_MANAGED_CERTIFICATE=os.fspath(
+                workspace.pki / "services/external/certs/tls.crt"
+            ),
+        ),
+        workspace.namespace,
+        workspace.private,
+    )
+
+    assert result.status == 1
+    assert marker.is_file()
+    assert digest(destination / "deployers.allowed_signers") == before
+
+
+@pytest.mark.parametrize("tamper", ("outcome", "active-pointer"))
+def test_tampered_terminal_state_blocks_schema_two_rotation(
+    csr_workspace: CsrWorkspace, tamper: str
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    if tamper == "outcome":
+        decision = workspace.pki / f"state/csr/outcomes/external/{REQUEST_ID}/decision"
+        decision.write_text(
+            decision.read_text().replace("state=finalized\n", "state=abandoned\n")
+        )
+    else:
+        active = workspace.pki / "state/csr/active/external"
+        active.write_text(
+            active.read_text().replace(
+                f"request_id={REQUEST_ID}\n", "request_id=" + "f" * 32 + "\n"
+            )
+        )
+    replace_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert result.status == 1
+    assert "CSR trust updated:" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "race",
+    (
+        "staged-trust",
+        "retained-request",
+        "post-gate-state",
+        "post-gate-inventory",
+    ),
+)
+def test_candidate_gate_rechecks_staged_trust_and_retained_history(
+    csr_workspace: CsrWorkspace,
+    executable_directory,
+    tmp_path,
+    race: str,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    destination = workspace.pki / "inventory/csr-trust"
+    before = digest(destination / "deployers.allowed_signers")
+    replace_deployer_trust(workspace)
+    fake_bin = executable_directory / f"candidate-gate-race-{race}"
+    marker = tmp_path / f"candidate-gate-race-{race}.marker"
+    gate_marker = tmp_path / f"candidate-gate-race-{race}.gate"
+    write_executable(
+        fake_bin / "ssh-keygen",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $RACE_KIND == post-gate-* && $* == *platform-pki-csr-deployment-v1* && ! -e $RACE_GATE_MARKER ]]; then
+  : >"$RACE_GATE_MARKER"
+elif [[ $RACE_KIND == post-gate-* && -e $RACE_GATE_MARKER && ! -e $RACE_MARKER ]]; then
+  if [[ $RACE_KIND == post-gate-state ]]; then
+    mkdir -m 700 -- "$RACE_PKI/state/csr/outcomes/external/ffffffffffffffffffffffffffffffff"
+  else
+    printf '\n' >>"$RACE_INVENTORY_FILE"
+  fi
+  : >"$RACE_MARKER"
+elif [[ $* == *platform-pki-csr-deployment-v1* && ! -e $RACE_MARKER ]]; then
+  if [[ $RACE_KIND == staged-trust ]]; then
+    for path in "$RACE_INVENTORY"/.platform-pki-csr-trust.*/deployers.allowed_signers; do
+      [[ -f $path ]] || continue
+      printf '\n' >>"$path"
+      break
+    done
+  else
+    printf '\n' >>"$RACE_RETAINED_REQUEST"
+  fi
+  : >"$RACE_MARKER"
+fi
+exec "$REAL_SSH_KEYGEN" "$@"
+""",
+    )
+
+    result = run(
+        workspace.runner,
+        environment(
+            workspace.env,
+            PATH=f"{fake_bin}:{workspace.env['PATH']}",
+            REAL_SSH_KEYGEN=executable("ssh-keygen"),
+            RACE_KIND=race,
+            RACE_MARKER=os.fspath(marker),
+            RACE_GATE_MARKER=os.fspath(gate_marker),
+            RACE_INVENTORY=os.fspath(workspace.pki / "inventory"),
+            RACE_INVENTORY_FILE=os.fspath(
+                workspace.pki / "inventory/services.yml"
+            ),
+            RACE_PKI=os.fspath(workspace.pki),
+            RACE_RETAINED_REQUEST=os.fspath(
+                workspace.pki / f"state/csr/transactions/csr-{REQUEST_ID}/request"
+            ),
+        ),
+        workspace.namespace,
+        workspace.private,
+    )
+
+    assert result.status == 1
+    assert marker.is_file()
+    assert digest(destination / "deployers.allowed_signers") == before
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "malformed-outcome",
+        "orphan-outcome",
+        "duplicate-request",
+        "empty-candidate-service",
+        "empty-outcome-service",
+        "malformed-active",
+        "recovery",
+    ),
+)
+def test_ambiguous_or_recovery_required_candidate_state_blocks_rotation(
+    csr_workspace: CsrWorkspace, case: str
+) -> None:
+    workspace = csr_workspace
+    if case in {"malformed-outcome", "duplicate-request"}:
+        assert_result(workspace.issue(), 0)
+    if case == "malformed-outcome":
+        outcome = workspace.pki / f"state/csr/outcomes/external/{REQUEST_ID}"
+        outcome.mkdir(mode=0o700, parents=True)
+        outcome.parent.chmod(0o700)
+        outcome.parent.parent.chmod(0o700)
+    elif case == "orphan-outcome":
+        outcome = workspace.pki / "state/csr/outcomes/external/1123456789abcdef0123456789abcdef"
+        outcome.mkdir(mode=0o700, parents=True)
+        outcome.parent.chmod(0o700)
+        outcome.parent.parent.chmod(0o700)
+    elif case == "duplicate-request":
+        candidates = workspace.pki / "state/csr/candidates"
+        duplicate = candidates / f"other/{REQUEST_ID}"
+        duplicate.parent.mkdir(mode=0o700)
+        shutil.copytree(candidates / f"external/{REQUEST_ID}", duplicate)
+    elif case == "empty-candidate-service":
+        service = workspace.pki / "state/csr/candidates/external"
+        service.mkdir(mode=0o700, parents=True)
+        service.parent.chmod(0o700)
+    elif case == "empty-outcome-service":
+        service = workspace.pki / "state/csr/outcomes/external"
+        service.mkdir(mode=0o700, parents=True)
+        service.parent.chmod(0o700)
+    elif case == "malformed-active":
+        active = workspace.pki / "state/csr/active"
+        active.mkdir(mode=0o700, parents=True)
+        active.parent.chmod(0o700)
+        write_private(active / "external", "malformed active pointer\n")
+    else:
+        write_private(
+            workspace.pki / "state/csr/finalization-recovery-journal",
+            "recovery required\n",
+        )
+    configure_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert result.status == 1
+    assert "CSR trust updated:" not in result.stdout

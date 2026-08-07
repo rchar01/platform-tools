@@ -52,6 +52,7 @@ def run(workspace: CsrWorkspace, *arguments: object):
 
 
 def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
+    install_deployer_trust(workspace)
     assert_result(workspace.issue(), 0)
     assert_result(
         workspace.runner(
@@ -69,27 +70,6 @@ def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
         ),
         0,
     )
-    trust = workspace.private / "pki/csr-trust"
-    write_private(trust / "policy", POLICY2)
-    requester = workspace.requester_key.with_suffix(".pub").read_text().split()
-    write_private(
-        trust / "deployers.allowed_signers",
-        f"host-01 {requester[0]} {requester[1]}\n",
-    )
-    assert_result(
-        workspace.runner(
-            [
-                TRUST_INSTALL,
-                "--namespace",
-                workspace.namespace,
-                "--private-repo",
-                workspace.private,
-            ],
-            env=workspace.env,
-            timeout=120,
-        ),
-        0,
-    )
     artifact = (
         workspace.pki
         / f"export/certificates/v1/artifacts/external/{REQUEST_ID}"
@@ -98,13 +78,7 @@ def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
 
 
 def install_deployer_trust(workspace: CsrWorkspace) -> None:
-    trust = workspace.private / "pki/csr-trust"
-    write_private(trust / "policy", POLICY2)
-    requester = workspace.requester_key.with_suffix(".pub").read_text().split()
-    write_private(
-        trust / "deployers.allowed_signers",
-        f"host-01 {requester[0]} {requester[1]}\n",
-    )
+    configure_deployer_trust(workspace)
     assert_result(
         workspace.runner(
             [
@@ -118,6 +92,16 @@ def install_deployer_trust(workspace: CsrWorkspace) -> None:
             timeout=120,
         ),
         0,
+    )
+
+
+def configure_deployer_trust(workspace: CsrWorkspace) -> None:
+    trust = workspace.private / "pki/csr-trust"
+    write_private(trust / "policy", POLICY2)
+    requester = workspace.requester_key.with_suffix(".pub").read_text().split()
+    write_private(
+        trust / "deployers.allowed_signers",
+        f"host-01 {requester[0]} {requester[1]}\n",
     )
 
 
@@ -698,8 +682,8 @@ def test_migration_finalization_preserves_managed_state(
     write_exchange(
         workspace, "migrate", migration_id, "bc" * 32, digest(certificate)
     )
-    assert_result(workspace.issue(), 0)
     install_deployer_trust(workspace)
+    assert_result(workspace.issue(), 0)
     artifact, manifest_digest = publish_request(workspace, migration_id)
     assert_result(decide(
         workspace,

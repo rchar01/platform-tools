@@ -413,7 +413,12 @@ The command accepts the exact four-file schema-1 signing/export trust set or
 the exact five-file schema-2 set that adds `deployers.allowed_signers` under
 `<private-repo>/pki/csr-trust` and atomically installs a protected snapshot at
 `<pki-dir>/inventory/csr-trust`. It installs no private key and performs no
-signing itself. See
+signing itself. Installation holds the lifecycle, root, intermediate, and
+inventory locks. Initial schema-2 installation and identical protected content
+are allowed, but any actual change involving schema 2 fails closed while a
+retained candidate lacks an authenticated immutable finalized or abandoned
+outcome. Malformed, conflicting, or recovery-required candidate/outcome state
+also blocks replacement; retained terminal history alone does not. See
 [`docs/pki-openssl.md`](docs/pki-openssl.md#host-local-csr-trust) for the exact
 policy, manifest, signing, response, and recovery contracts.
 
