@@ -51,7 +51,7 @@ additional interface.
   unresolved.
 - Build the maintained Python source into a deterministic standard-library
   zipapp for checkout and installed execution.
-- Require Python 3.12 or newer.
+- Require Python 3.14 or newer.
 - Use shallow unified command names that directly mirror the existing
   `platform-pki-*` executable suffixes.
 - Migrate commands incrementally, with rollover and other recovery-critical
@@ -149,7 +149,7 @@ Tasks:
 - [x] Freeze the first migration tranche's output/status semantics,
   migration-sensitive runtime boundaries, and common installed asset.
 - [x] Define and review the complete unified `platform-pki` command hierarchy.
-- [x] Establish Python 3.12 as the minimum supported runtime; target-host
+- [x] Establish Python 3.14 as the minimum supported runtime; target-host
   availability remains a release-readiness check.
 - [x] Inventory every persisted record, policy, manifest, pointer, journal,
   checkpoint, and schema.
@@ -173,7 +173,8 @@ Validation gate:
   the migration inventory.
 - [ ] Every persisted record's exact field order, schema value, and final
   newline is source-backed by an executable contract test.
-- [ ] The downgrade procedure fails closed when any unresolved state exists.
+- [x] Every fail-closed clean-downgrade condition is represented in the contract
+  inventory; executable enforcement is a Phase 2 validation gate.
 
 ### Bash Oracle Retention
 
@@ -210,9 +211,6 @@ Tasks:
   language or changing canonical bytes.
 - [ ] Implement common errors that redact secret-bearing argv, descriptors, and
   child diagnostics.
-- [ ] Add the read-only `platform-pki doctor` command.
-- [ ] Make `doctor` report runtime prerequisites, path safety, unresolved state,
-  and clean-downgrade eligibility.
 - [ ] Build a deterministic zipapp from `src/platform_pki/` as
   `bin/platform-pki`.
 - [ ] Run the zipapp with isolated Python startup so `PYTHONPATH`, user site
@@ -222,8 +220,8 @@ Tasks:
 
 Validation gate:
 
-- [ ] `platform-pki --help`, `--version`, parser failures, and `doctor` create no
-  PKI state.
+- [ ] `platform-pki --help`, `--version`, and parser failures create no PKI
+  state.
 - [ ] Installed execution ignores `PYTHONPATH`, user site packages, checkout
   imports, shell startup hooks, and unsupported source overrides.
 - [ ] No existing `platform-pki-*` command has changed implementation.
@@ -246,12 +244,18 @@ Tasks:
 - [ ] Prototype atomic exchange and no-copy publication; retain reviewed GNU
   `mv` calls where Python lacks an equivalent proven primitive.
 - [ ] Preserve deterministic fault and pause barriers for race tests.
+- [ ] Add the read-only `platform-pki doctor` command after the path and lock
+  primitives it depends on are proven.
+- [ ] Make `doctor` report runtime prerequisites, path safety, unresolved state,
+  and clean-downgrade eligibility.
 
 Validation gate:
 
 - [ ] Real symlink, hard-link, source replacement, destination replacement,
   concurrent publication, permission, and durability tests pass.
 - [ ] Lock acquisition and reverse release match the Bash implementation.
+- [ ] `doctor` creates no state and fails closed on contention, unsafe paths,
+  malformed state, unknown schemas, or any unresolved state.
 - [ ] Unit tests supplement rather than replace subprocess-backed tests.
 
 ## Phase 3: Migrate Read-Oriented Commands
@@ -469,7 +473,8 @@ Use independently deployable releases rather than one large cutover:
 
 | Release tranche | Scope |
 | --- | --- |
-| Foundation | Python package, unified CLI, and `doctor`; no command replacement |
+| Foundation | Python package and unified CLI; no command replacement |
+| Safety | Filesystem/locking primitives and `doctor`; no command replacement |
 | Pilot | Print, expiry, and service verification commands |
 | Publication | Init, inventory installation, and Ansible export |
 | Utilities | Custody report, passphrase verification, and backup |
@@ -529,11 +534,11 @@ implementation.
   loading.
 - Forward-only recovery requires an enforced clean-state downgrade gate and
   operator documentation.
-- The minimum Python version and target-host availability are not yet known.
+- Target-host Python 3.14 availability remains a release-readiness check.
 
 ## Open Questions
 
-- [ ] Which supported target hosts need Python 3.12 provisioned before the first
+- [ ] Which supported target hosts need Python 3.14 provisioned before the first
   Python-backed release?
 - [ ] How long should the final Bash implementation remain in the repository as
   a differential oracle after each command migrates?
@@ -554,6 +559,7 @@ implementation.
 | 2026-08-07 | Differential execution foundation and Bash-oracle retention policy completed. | `run_differential_case` executes real commands on isolated private copies and compares normalized process observations, semantic trees, and identity-sensitive transitions; focused harness run: 16 passed. Per-command oracle commits are recorded at cutover. |
 | 2026-08-07 | Shared parser-edge behavior was frozen across all retained PKI leaves. | `tests/test_command_contract.py` drives help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the 24-route source-backed inventory. |
 | 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | Source- and test-backed inventories cover `print-cert`, `list-expiry`, and `service-verify`; exhaustive expansion to the remaining routes stays open. |
+| 2026-08-07 | Minimum runtime raised to Python 3.14 and `doctor` moved behind secure path/lock primitives. | The pinned test image provides Python 3.14.7; the downgrade scanner must not precede the safety boundaries it assesses. |
 
 ## Decision Log
 
@@ -566,3 +572,4 @@ implementation.
 | 2026-08-07 | Require Python 3.12 or newer. | Use a modern standard-library baseline while retaining a clear target-host provisioning contract. |
 | 2026-08-07 | Use shallow unified command names. | Mirror existing executable suffixes and minimize parser and documentation divergence. |
 | 2026-08-07 | Retain the final Bash source through migration acceptance and record each command's pre-cutover commit. | Keep differential evidence reproducible without shipping a production runtime language switch or duplicate oracle installation. |
+| 2026-08-07 | Raise the minimum from Python 3.12 to 3.14. | Align the application contract with the pinned Python 3.14.7 test environment instead of maintaining an unverified older-runtime claim. |

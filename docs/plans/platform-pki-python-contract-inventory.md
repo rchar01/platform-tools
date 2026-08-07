@@ -8,7 +8,7 @@ the authoritative oracle until each command is cut over.
 
 ## Runtime and Interfaces
 
-- Minimum Python version: 3.12.
+- Minimum Python version: 3.14.
 - Application artifact: deterministic standard-library zipapp.
 - Existing `platform-pki-*` executable names remain supported.
 - The new `platform-pki` CLI uses shallow command names.
@@ -409,7 +409,7 @@ of the ordinary non-rollover Make pool.
 
 ## Open Items
 
-- Determine which target hosts require Python 3.12 provisioning.
+- Determine which target hosts require Python 3.14 provisioning.
 - Define the exact installation representation for compatibility aliases to the
   zipapp.
 - Record each command's exact final-Bash commit immediately before cutover and
