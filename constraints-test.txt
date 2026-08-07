@@ -1,0 +1,2 @@
+# Keep pytest's transitive plugin boundary deterministic.
+pluggy==1.6.0

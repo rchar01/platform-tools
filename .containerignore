@@ -1,4 +1,7 @@
 *
 !Containerfile.dev
+!Containerfile.test
 !Gemfile
 !Gemfile.lock
+!requirements-test.txt
+!constraints-test.txt

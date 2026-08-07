@@ -96,27 +96,12 @@ ARG SHFMT_VERSION
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      age=1.2.1-1+b5 \
       bash=5.2.37-2+b9 \
-      ca-certificates=20250419 \
       coreutils=9.7-3 \
-      file=1:5.46-5 \
-      findutils=4.10.0-3 \
-      git=1:2.47.3-0+deb13u1 \
-      grep=3.11-4 \
-      gzip=1.13-1 \
-      jq=1.7.1-6+deb13u2 \
+      diffutils=1:3.10-4 \
       make=4.4.1-2 \
-      openssh-client=1:10.0p1-7+deb13u4 \
-      openssl=3.5.6-1~deb13u2 \
-      procps=2:4.0.4-9 \
-      python3=3.13.5-1 \
-      python3-pytest=8.3.5-2 \
-      python3-pytest-xdist=3.6.1-1 \
-      python3-yaml=6.0.2-1+b2 \
+      mawk=1.3.4.20250131-1 \
       sed=4.9-2+deb13u1 \
-      tar=1.35+dfsg-3.1 \
-      util-linux=2.41-5 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=bashly-builder /usr/local/bundle /usr/local/bundle
@@ -125,9 +110,7 @@ COPY --from=asset-builder /shfmt /usr/local/bin/shfmt
 
 RUN test "$(bashly --version)" = '1.4.0' \
   && test "$(shellcheck --version | sed -n 's/^version: //p')" = "$SHELLCHECK_VERSION" \
-  && test "$(shfmt --version)" = "v$SHFMT_VERSION" \
-  && test "$(python3 -m pytest --version)" = 'pytest 8.3.5' \
-  && test "$(python3 -c 'from importlib.metadata import version; print(version("pytest-xdist"))')" = '3.6.1'
+  && test "$(shfmt --version)" = "v$SHFMT_VERSION"
 
 WORKDIR /workspace
 
