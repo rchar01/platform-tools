@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from .harness import ProcessResult, run_process
+from .pki.migration_contract import PKI_PARSER_ROUTES, ParserRouteContract
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +91,18 @@ def assert_parser_error(result: ProcessResult) -> None:
     assert result.stderr
 
 
+def pki_route_argv(route: ParserRouteContract) -> tuple[Path | str, ...]:
+    return (
+        ROOT / "bin" / route.compatibility_executable,
+        *route.unified_route[1:],
+    )
+
+
+PKI_ROUTE_IDS = tuple("-".join(route.unified_route) for route in PKI_PARSER_ROUTES)
+PKI_NESTED_ROUTES = tuple(route for route in PKI_PARSER_ROUTES if len(route.unified_route) > 1)
+PKI_NESTED_ROUTE_IDS = tuple("-".join(route.unified_route) for route in PKI_NESTED_ROUTES)
+
+
 @pytest.mark.parametrize("tool", SHELL_TOOLS, ids=SHELL_TOOLS)
 def test_shell_tool_is_bashly_generated(tool: str) -> None:
     assert tool in BASHLY_TOOLS
@@ -151,6 +164,71 @@ def test_root_parser_error(
     assert_parser_error(
         run(process_runner, clean_env, ROOT / "bin" / tool, "--contract-invalid-option", *suffix)
     )
+
+
+@pytest.mark.parametrize("route", PKI_NESTED_ROUTES, ids=PKI_NESTED_ROUTE_IDS)
+@pytest.mark.parametrize("flag", ("--help", "-h"), ids=("long", "short"))
+def test_pki_nested_leaf_help(
+    process_runner: Callable[..., ProcessResult],
+    clean_env: dict[str, str],
+    route: ParserRouteContract,
+    flag: str,
+) -> None:
+    result = run(process_runner, clean_env, *pki_route_argv(route), flag)
+    assert_success_stdout(result)
+    assert "\x1b" not in result.stdout
+
+
+@pytest.mark.parametrize("route", PKI_PARSER_ROUTES, ids=PKI_ROUTE_IDS)
+@pytest.mark.parametrize(
+    ("arguments", "expected_stderr"),
+    (
+        (("--namespace", "{namespace}", "--help"), "invalid option: --help"),
+        (("--namespace=", "--help"), None),
+        (("--namesp={namespace}", "--help"), None),
+    ),
+    ids=(
+        "valid-option-before-help",
+        "empty-equals-before-help",
+        "abbreviation-before-help",
+    ),
+)
+def test_pki_leaf_parser_edges(
+    process_runner: Callable[..., ProcessResult],
+    clean_env: dict[str, str],
+    route: ParserRouteContract,
+    arguments: tuple[str, ...],
+    expected_stderr: str | None,
+) -> None:
+    namespace = Path(clean_env["HOME"]).parent / "explicit-namespace"
+    expanded = tuple(
+        argument.replace("{namespace}", os.fspath(namespace)) for argument in arguments
+    )
+    result = run(process_runner, clean_env, *pki_route_argv(route), *expanded)
+    assert_parser_error(result)
+    if expected_stderr is not None:
+        assert result.stderr == f"{expected_stderr}\n"
+    assert not namespace.exists()
+
+
+@pytest.mark.parametrize("route", PKI_NESTED_ROUTES, ids=PKI_NESTED_ROUTE_IDS)
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    (
+        (("--contract-invalid-option", "--help"), "error"),
+        (("--help", "--contract-invalid-option"), "success"),
+    ),
+    ids=("invalid-before-help", "help-before-invalid"),
+)
+def test_pki_nested_leaf_action_order(
+    process_runner: Callable[..., ProcessResult],
+    clean_env: dict[str, str],
+    route: ParserRouteContract,
+    arguments: tuple[str, ...],
+    expected: str,
+) -> None:
+    result = run(process_runner, clean_env, *pki_route_argv(route), *arguments)
+    (assert_success_stdout if expected == "success" else assert_parser_error)(result)
 
 
 @pytest.mark.parametrize("tool", SHELL_TOOLS, ids=SHELL_TOOLS)

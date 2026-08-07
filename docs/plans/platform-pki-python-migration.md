@@ -144,6 +144,8 @@ Tasks:
   runtime-only option relationships and duplicate rejection fields.
 - [ ] Inventory remaining output, status, parser edge-case, runtime dependency,
   and installed-asset contracts.
+- [x] Execute shared help precedence, equals-form, abbreviation, stream/status,
+  and no-state parser edges across all 24 retained leaf routes.
 - [x] Define and review the complete unified `platform-pki` command hierarchy.
 - [x] Establish Python 3.12 as the minimum supported runtime; target-host
   availability remains a release-readiness check.
@@ -548,6 +550,7 @@ implementation.
 | 2026-08-07 | Phase 0 harness foundation hardened and integrated. | `make test-python-infrastructure`: 95 passed; focused CSR copy/issuance checks: 2 passed; final patch review found no concrete issue. |
 | 2026-08-07 | Exhaustive Phase 0 parser-route and recovery-checkpoint inventories completed. | `tests/pki/test_migration_contract.py` source-normalizes 24 Bashly leaves, runtime option guards, literal and finite fault domains, and maintained pytest domains; focused infrastructure run: 18 passed. Differential execution and Bash-oracle retention remain open. |
 | 2026-08-07 | Differential execution foundation and Bash-oracle retention policy completed. | `run_differential_case` executes real commands on isolated private copies and compares normalized process observations, semantic trees, and identity-sensitive transitions; focused harness run: 16 passed. Per-command oracle commits are recorded at cutover. |
+| 2026-08-07 | Shared parser-edge behavior was frozen across all retained PKI leaves. | `tests/test_command_contract.py` drives help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the 24-route source-backed inventory. |
 
 ## Decision Log
 

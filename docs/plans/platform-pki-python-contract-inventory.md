@@ -57,6 +57,11 @@ the authoritative oracle until each command is cut over.
 - Application log messages remain uncolored.
 - Duplicate-option behavior is command- and option-specific; Python must follow
   the existing explicit rejection lists rather than applying one global rule.
+- Every retained leaf route accepts leading long and short help without state,
+  rejects non-leading help after a previously parsed option, rejects empty
+  equals values and long option abbreviations before help, rejects an unknown
+  option before help, and gives leading help precedence over a later unknown
+  option.
 
 Authoritative evidence:
 
@@ -64,6 +69,14 @@ Authoritative evidence:
 - `tests/pki/test_ca_rollover_parser.py`
 - `bashly/platform-pki-*/src/bashly.yml`
 - `lib/platform-pki-common.sh`
+
+`tests/pki/test_migration_contract.py` separately normalizes the committed
+`PKI_PARSER_ROUTES` inventory against all Bashly sources.
+`tests/test_command_contract.py` then drives parser-edge probes through all 24
+retained routes, combining existing root-command checks with nested-leaf checks.
+The clean environment fixture rejects state creation under `HOME`,
+`XDG_CONFIG_HOME`, and `XDG_DATA_HOME`; probes supplying an explicit namespace
+also require that path to remain absent.
 
 ## Shared Path and Validation Contract
 
