@@ -14,6 +14,7 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-python-infrastructure",
     "test-command-contract",
     "test-installed-tools",
+    "test-platform-pki-foundation",
     "test-platform-config-init",
     "test-platform-ssh-init",
     "test-vm-env-collect-cli",

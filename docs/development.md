@@ -79,7 +79,7 @@ The differential runner executes separately supplied Bash and Python entry
 points on sibling copies with independent `HOME`, XDG, and temporary directories;
 each command test must explicitly declare any output or content normalization.
 
-## Generated Bash Tools
+## Generated CLI Artifacts
 
 Bashly-backed command source lives under `bashly/<tool>/`. The corresponding
 `bin/<tool>` file is generated, committed, installed, and must not be edited by
@@ -105,6 +105,29 @@ with the committed executable. It does not rewrite the working tree.
 executables so installed commands do not need Ruby, Bashly, or repository
 source files at runtime.
 
+The unified Python PKI source lives under `src/platform_pki/`. Its committed
+`bin/platform-pki` artifact is a standard-library-only zipapp and must not be
+edited by hand. Generate and verify it in the pinned Python 3.14 test image:
+
+```bash
+./scripts/in-test-container make generate-python
+./scripts/in-test-container make verify-python-generated
+```
+
+The builder uses sorted stored members, mode `644` member metadata, and the
+fixed ZIP timestamp `1980-01-01 00:00:00`. It embeds `VERSION`, writes the
+archive executable with mode `755`, and verification compares two fresh builds
+byte for byte with the committed artifact. `make install` performs this
+verification before copying any command. The executable uses isolated Python
+startup (`-I -S`) so checkout modules, `PYTHONPATH`, and user or system site
+packages cannot alter application imports.
+
+During the foundation stage, `platform-pki` provides the unified hierarchy,
+help, version, parser dispatch, and a fail-closed unavailable-handler result.
+The existing `platform-pki-*` commands remain Bashly-generated and continue to
+provide all operational behavior; temporary copied zipapps prove
+compatibility-name dispatch without changing installed compatibility commands.
+
 Every maintained shell command is Bashly-backed. The generated parsers treat
 `--help`/`-h` and `--version`/`-v` as global options when they appear before
 command-specific options. These actions write to stdout and exit 0; parser and
@@ -129,6 +152,7 @@ the command inventory, installation, or parser contract:
 ```bash
 make test-command-contract
 make test-installed-tools
+make test-platform-pki-foundation
 ```
 
 The installation check first verifies a disposable repository `.tmp` install,

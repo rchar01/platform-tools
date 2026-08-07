@@ -7,6 +7,14 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added the deterministic `platform-pki` Python 3.14 zipapp with isolated
+  startup, embedded version metadata, unified command hierarchy, copied-name
+  compatibility dispatch, no-state parser behavior, and installed-layout
+  verification. Existing operational `platform-pki-*` commands remain on their
+  Bash implementations during the migration foundation stage.
+
 ### Changed
 
 - Separated the Bashly development image from a pinned Python 3.14 test image.

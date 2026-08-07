@@ -7,14 +7,17 @@ TEST_MAKE_JOBS ?= 2
 PKI_PYTEST_WORKERS ?= 4
 export TEST_MAKE_JOBS PKI_PYTEST_WORKERS
 SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot platform-pki-init platform-pki-inventory-install platform-pki-csr-trust-install platform-pki-csr-recover platform-pki-certificate-export platform-pki-csr-candidate platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-service-verify platform-pki-list-expiry platform-pki-print-cert platform-pki-export-ansible platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-ca-rollover
-PYTHON_TOOLS := platform-bastion-policy
+PYTHON_SOURCE_TOOLS := platform-bastion-policy
+PYTHON_ZIPAPPS := platform-pki
+PYTHON_TOOLS := $(PYTHON_SOURCE_TOOLS) $(PYTHON_ZIPAPPS)
+PYTHON_SOURCES := scripts/build-platform-pki-zipapp.py $(wildcard src/platform_pki/*.py)
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 LIBS := lib/platform-pki-common.sh lib/platform-pki-csr-sign.sh lib/platform-pki-csr-candidate.sh
 MAINTAINED_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/in-test-container scripts/verify-generated
 BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-init platform-pki-inventory-install platform-pki-csr-trust-install platform-pki-csr-recover platform-pki-certificate-export platform-pki-csr-candidate platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-export-ansible platform-pki-root-create platform-pki-intermediate-create platform-pki-service-issue platform-pki-service-renew platform-pki-ca-rollover platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
-NON_ROLLOVER_TEST_TARGETS := test-python-infrastructure test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing
+NON_ROLLOVER_TEST_TARGETS := test-python-infrastructure test-command-contract test-installed-tools test-platform-pki-foundation test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing
 
-.PHONY: help shell container-check generate verify-generated install verify test test-non-rollover test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover test-pki-ca-rollover-parser shellcheck
+.PHONY: help shell container-check generate generate-python verify-generated verify-python-generated install verify test test-non-rollover test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-pki-foundation test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-renew test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover test-pki-ca-rollover-parser shellcheck
 
 ## Show available commands
 help:
@@ -44,12 +47,20 @@ container-check:
 generate:
 	./scripts/generate $(BASHLY_TOOLS)
 
+## Generate the committed Python PKI zipapp
+generate-python:
+	python3 scripts/build-platform-pki-zipapp.py
+
 ## Verify committed Bash CLI artifacts are current
 verify-generated:
 	./scripts/verify-generated $(BASHLY_TOOLS)
 
+## Verify the committed Python PKI zipapp is deterministic and current
+verify-python-generated:
+	python3 scripts/build-platform-pki-zipapp.py --verify
+
 ## Install platform tools into INSTALL_DIR
-install:
+install: verify-python-generated
 	mkdir -p "$(INSTALL_DIR)"
 	mkdir -p "$(SHARE_DIR)/lib" "$(SHARE_DIR)/templates/pki"
 	@for tool in $(TOOLS); do \
@@ -63,7 +74,7 @@ install:
 	@printf '%s\n' "Installed shared assets to $(SHARE_DIR)"
 
 ## Run syntax checks for maintained tool scripts
-verify:
+verify: verify-python-generated
 	@for tool in $(SHELL_TOOLS); do \
 		bash -n "bin/$$tool"; \
 	done
@@ -73,9 +84,10 @@ verify:
 	@for script in $(MAINTAINED_SCRIPTS); do \
 		bash -n "$$script"; \
 	done
-	@for tool in $(PYTHON_TOOLS); do \
+	@for tool in $(PYTHON_SOURCE_TOOLS); do \
 		python3 -m py_compile "bin/$$tool"; \
 	done
+	python3 -m py_compile $(PYTHON_SOURCES)
 
 ## Run maintained tests
 test:
@@ -124,6 +136,10 @@ test-command-contract:
 ## Smoke test all commands and PKI assets from a disposable install
 test-installed-tools:
 	python3 -m pytest tests/test_installed_tools.py
+
+## Run deterministic Python PKI zipapp foundation tests
+test-platform-pki-foundation:
+	python3 -m pytest tests/test_platform_pki_foundation.py
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:

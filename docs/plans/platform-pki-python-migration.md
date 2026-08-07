@@ -200,7 +200,7 @@ commands.
 
 Tasks:
 
-- [ ] Add a standard-library-only `platform_pki` package.
+- [x] Add a standard-library-only `platform_pki` package.
 - [ ] Implement parser compatibility, leading help/version precedence, TTY help
   color, `NO_COLOR`, diagnostics, and status mapping.
 - [ ] Implement exact-argv subprocess execution with `shell=False`, bounded
@@ -211,20 +211,20 @@ Tasks:
   language or changing canonical bytes.
 - [ ] Implement common errors that redact secret-bearing argv, descriptors, and
   child diagnostics.
-- [ ] Build a deterministic zipapp from `src/platform_pki/` as
+- [x] Build a deterministic zipapp from `src/platform_pki/` as
   `bin/platform-pki`.
-- [ ] Run the zipapp with isolated Python startup so `PYTHONPATH`, user site
+- [x] Run the zipapp with isolated Python startup so `PYTHONPATH`, user site
   packages, and checkout imports cannot affect execution.
-- [ ] Prove direct unified-command execution and compatibility-name dispatch
+- [x] Prove direct unified-command execution and compatibility-name dispatch
   outside the checkout.
 
 Validation gate:
 
-- [ ] `platform-pki --help`, `--version`, and parser failures create no PKI
+- [x] `platform-pki --help`, `--version`, and parser failures create no PKI
   state.
-- [ ] Installed execution ignores `PYTHONPATH`, user site packages, checkout
+- [x] Installed execution ignores `PYTHONPATH`, user site packages, checkout
   imports, shell startup hooks, and unsupported source overrides.
-- [ ] No existing `platform-pki-*` command has changed implementation.
+- [x] No existing `platform-pki-*` command has changed implementation.
 
 ## Phase 2: Implement Filesystem and Locking Primitives
 
@@ -560,6 +560,7 @@ implementation.
 | 2026-08-07 | Shared parser-edge behavior was frozen across all retained PKI leaves. | `tests/test_command_contract.py` drives help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the 24-route source-backed inventory. |
 | 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | Source- and test-backed inventories cover `print-cert`, `list-expiry`, and `service-verify`; exhaustive expansion to the remaining routes stays open. |
 | 2026-08-07 | Minimum runtime raised to Python 3.14 and `doctor` moved behind secure path/lock primitives. | The pinned test image provides Python 3.14.7; the downgrade scanner must not precede the safety boundaries it assesses. |
+| 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, 24 unified help routes, installed-layout execution, and no-state parser behavior are covered in the pinned Python 3.14 test image. |
 
 ## Decision Log
 

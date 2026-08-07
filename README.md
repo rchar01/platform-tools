@@ -36,6 +36,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
+| `platform-pki` | Unified Python PKI interface; the foundation build currently provides help, version, parser dispatch, and migration-safe unavailable-handler errors. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
@@ -94,6 +95,7 @@ PKI helpers require:
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 - `python3` for byte-bounded `platform-pki-custody-report` header and receipt inspection
+- Python 3.14 or newer for the unified `platform-pki` zipapp; operational PKI commands remain on their existing Bash executables during the migration foundation stage
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
 SSH and Proxmox helpers require:
@@ -161,6 +163,12 @@ Run only the generic pytest harness contract tests:
 
 ```bash
 make test-python-infrastructure
+```
+
+Run the deterministic Python PKI zipapp foundation checks:
+
+```bash
+./scripts/in-test-container make test-platform-pki-foundation
 ```
 
 Run the authoritative PKI rollover pytest scenarios:

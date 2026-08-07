@@ -716,6 +716,10 @@ PILOT_INSTALLED_ASSET_CONTRACTS = (
 )
 
 
+ROOT_DB_KEYS = (
+    "index", "index_attr", "serial", "crlnumber", "index_old",
+    "index_attr_old", "serial_old", "crlnumber_old", "newcert",
+)
 CSR_DB_KEYS = ("index", "index_attr", "serial", "index_old", "index_attr_old", "serial_old", "newcert")
 
 
@@ -831,17 +835,195 @@ outcome_deployers_identity outcome_decision_identity
     for suffix in ("identity", "sha256")
 )
 
+ACTIVE_ISSUER_FIELDS = ("root", "intermediate")
+GENERATION_RESERVATION_TRANSACTION_FIELDS = (
+    "generation", "kind", "status", "transaction",
+)
+GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS = (
+    "generation", "kind", "status", "fingerprint_sha256", "transaction",
+)
+GENERATION_RESERVATION_MIGRATION_FIELDS = (
+    "generation", "kind", "status", "fingerprint_sha256", "source_identity",
+)
+BACKUP_RECEIPT_FIELDS = _fields("""
+schema layout session backup_path backup_device backup_inode backup_size
+backup_mode backup_owner archive_sha256 created_at created_epoch
+state_manifest_sha256 private_metadata_sha256
+""")
+ROOT_BOOTSTRAP_JOURNAL_FIELDS = _fields("""
+schema operation transaction phase generation authority_dir authority_identity
+stage_dir stage_identity transaction_dir transaction_identity reservation
+reservation_identity reservation_reserved_identity reservation_consumed_identity
+reservation_abandoned_identity bootstrap_identity recovery_action recovery_step
+committed
+""")
+ROOT_BOOTSTRAP_RECOVERY_FIELDS = tuple(sorted(ROOT_BOOTSTRAP_JOURNAL_FIELDS))
+INTERMEDIATE_BOOTSTRAP_PREFIX_FIELDS = _fields("""
+schema operation transaction phase root_generation intermediate_generation
+root_dir intermediate_dir intermediate_identity stage_dir stage_identity
+root_stage root_stage_identity transaction_dir transaction_identity
+bootstrap_fingerprint issued_serial reservation reservation_identity
+reservation_reserved_identity reservation_consumed_identity
+reservation_abandoned_identity active_identity bootstrap_identity
+bootstrap_rollback_identity root_mutated recovery_action recovery_step
+""")
+INTERMEDIATE_BOOTSTRAP_DB_FIELDS = tuple(
+    f"root_{key}_{suffix}"
+    for key in ROOT_DB_KEYS
+    for suffix in ("pre_identity", "post_identity", "backup_identity")
+)
+INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS = (
+    INTERMEDIATE_BOOTSTRAP_PREFIX_FIELDS
+    + INTERMEDIATE_BOOTSTRAP_DB_FIELDS
+    + ("committed",)
+)
+INTERMEDIATE_BOOTSTRAP_RECOVERY_FIELDS = tuple(
+    sorted(INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS)
+)
+LEGACY_MIGRATION_JOURNAL_FIELDS = _fields("""
+schema operation transaction phase legacy_root legacy_intermediate new_root
+new_intermediate root_source_identity intermediate_source_identity root_sha256
+intermediate_sha256 transaction_dir transaction_identity provenance_stage
+provenance_dir provenance_identity provenance_manifest
+provenance_manifest_identity provenance_manifest_sha256 receipt_identity
+services_sha256 services_identity backup_receipt private_repo backup_session
+backup_session_original_identity backup_session_published_identity
+root_reservation root_reservation_original_identity
+root_reservation_reserved_identity root_reservation_consumed_identity
+root_reservation_rollback_identity intermediate_reservation
+intermediate_reservation_original_identity
+intermediate_reservation_reserved_identity
+intermediate_reservation_consumed_identity
+intermediate_reservation_rollback_identity root_config_original_identity
+root_config_published_identity root_config_rollback_identity
+root_config_backup_identity intermediate_config_original_identity
+intermediate_config_published_identity intermediate_config_rollback_identity
+intermediate_config_backup_identity issuer_ledger issuer_ledger_identity
+issuer_ledger_sha256 quarantine_ledger quarantine_ledger_identity
+quarantine_ledger_sha256 active_manifest active_original_identity
+active_published_identity committed
+""")
+LEGACY_MIGRATION_RECOVERY_FIELDS = tuple(sorted(LEGACY_MIGRATION_JOURNAL_FIELDS))
+LEGACY_MIGRATION_CHECKPOINT_FIELDS = tuple(
+    sorted((*LEGACY_MIGRATION_JOURNAL_FIELDS, "recovery_action", "recovery_step"))
+)
+ROLLOVER_PREPARE_BASE_FIELDS = _fields("""
+schema operation transaction type phase committed recovery_action recovery_step
+terminal_outcome active_root active_intermediate active_manifest active_identity
+candidate_root candidate_intermediate candidate_root_dir
+candidate_intermediate_dir candidate_root_identity
+candidate_intermediate_identity candidate_root_key_identity
+candidate_root_cert_identity candidate_root_cert_sha256
+candidate_intermediate_key_identity candidate_intermediate_csr_identity
+candidate_intermediate_cert_identity candidate_intermediate_cert_sha256
+candidate_chain_identity candidate_chain_sha256 candidate_root_tree_manifest
+candidate_root_tree_manifest_identity candidate_root_tree_manifest_sha256
+candidate_intermediate_tree_manifest candidate_intermediate_tree_manifest_identity
+candidate_intermediate_tree_manifest_sha256 root_stage_tree_manifest
+root_stage_tree_manifest_identity root_stage_tree_manifest_sha256
+stage_tree_manifest stage_tree_manifest_identity stage_tree_manifest_sha256
+transaction_tree_manifest transaction_tree_manifest_identity
+transaction_tree_manifest_sha256 transaction_tree_manifest_sequence
+transaction_tree_manifest_pending transaction_tree_manifest_pending_destination
+transaction_tree_manifest_pending_identity transaction_tree_manifest_pending_sha256
+transaction_dir transaction_identity stage_dir stage_identity root_stage
+root_stage_identity root_stage_private_identity root_stage_key_identity
+intermediate_stage_identity intermediate_stage_private_identity long_stage
+long_dir long_identity long_manifest_identity long_manifest_sha256
+long_tree_manifest long_tree_manifest_identity long_tree_manifest_sha256
+trust_snapshot_identity pointer pointer_identity backup_receipt receipt_identity
+backup_session backup_session_original_identity backup_session_identity
+root_reservation root_reservation_reserved_identity
+root_reservation_consumed_identity root_reservation_abandoned_identity
+intermediate_reservation intermediate_reservation_reserved_identity
+intermediate_reservation_consumed_identity
+intermediate_reservation_abandoned_identity root_fingerprint
+intermediate_fingerprint root_expiry intermediate_expiry trust_bundle_sha256
+trust_snapshot_sha256 trust_source trust_source_identity issued_serial root_mutated
+""")
+ROLLOVER_PREPARE_ROOT_DB_FIELDS = tuple(
+    field
+    for key in ROOT_DB_KEYS
+    for field in (
+        f"root_{key}_pre_identity",
+        f"root_{key}_post_identity",
+        f"root_{key}_backup_identity",
+        f"root_{key}_rollback_identity",
+        f"root_{key}_source_identity",
+        f"signing_{key}_pre_identity",
+        f"signing_{key}_partial_identity",
+        f"signing_{key}_was_absent",
+    )
+)
+ROLLOVER_PREPARE_PREPARTIAL_NAMES = _fields("""
+trust_snapshot root_stage_key root_stage_cert root_stage_index
+root_stage_index_backup root_stage_index_attr root_stage_index_attr_backup
+root_stage_serial root_stage_serial_backup root_stage_crlnumber
+root_stage_crlnumber_backup root_stage_index_old_backup
+root_stage_index_attr_old_backup root_stage_serial_old_backup
+root_stage_crlnumber_old_backup candidate_root_key candidate_root_cert
+candidate_intermediate_key candidate_intermediate_csr
+candidate_intermediate_cert candidate_chain
+""")
+ROLLOVER_PREPARE_PREPARTIAL_FIELDS = tuple(
+    f"{name}_{suffix}"
+    for name in ROLLOVER_PREPARE_PREPARTIAL_NAMES
+    for suffix in ("pre_identity", "partial_identity")
+)
+ROLLOVER_PREPARE_JOURNAL_FIELDS = tuple(sorted(
+    ROLLOVER_PREPARE_BASE_FIELDS
+    + ROLLOVER_PREPARE_ROOT_DB_FIELDS
+    + ROLLOVER_PREPARE_PREPARTIAL_FIELDS
+))
+ROLLOVER_PREPARED_MANIFEST_FIELDS = _fields("""
+schema transaction type phase created_at old_root old_intermediate candidate_root
+candidate_intermediate old_root_fingerprint old_intermediate_fingerprint
+candidate_root_fingerprint candidate_intermediate_fingerprint
+candidate_root_expiry candidate_intermediate_expiry trust_bundle_sha256
+trust_snapshot_sha256 candidate_root_tree_sha256
+candidate_intermediate_tree_sha256 backup_state_sha256
+""")
+
 
 PERSISTED_RECORD_CONTRACTS = (
-    RecordContract("active issuer", None, "root, intermediate", "lib/platform-pki-common.sh"),
-    RecordContract("generation reservation", None, "exact record bytes", "lib/platform-pki-common.sh"),
-    RecordContract("backup receipt", 2, "14 fixed fields", "bashly/platform-pki-backup/src/root_command.sh"),
-    RecordContract("root bootstrap journal", 3, "fixed fields", "bashly/platform-pki-root-create/src/root_command.sh"),
+    RecordContract("active and service issuer", None, "literal issuer pair", "lib/platform-pki-common.sh", ACTIVE_ISSUER_FIELDS),
+    RecordContract(
+        "generation reservation transaction-bound",
+        None,
+        "literal transaction reservation",
+        "bashly/platform-pki-ca-rollover/src/prepare_command.sh",
+        GENERATION_RESERVATION_TRANSACTION_FIELDS,
+    ),
+    RecordContract(
+        "generation reservation bootstrap consumed",
+        None,
+        "literal bootstrap consumed reservation",
+        "bashly/platform-pki-root-create/src/root_command.sh",
+        GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS,
+    ),
+    RecordContract(
+        "generation reservation legacy migration",
+        None,
+        "literal migration reservation",
+        "bashly/platform-pki-ca-rollover/src/migrate_command.sh",
+        GENERATION_RESERVATION_MIGRATION_FIELDS,
+    ),
+    RecordContract("backup receipt", 2, "literal backup receipt", "bashly/platform-pki-backup/src/root_command.sh", BACKUP_RECEIPT_FIELDS),
+    RecordContract("root bootstrap journal", 3, "literal root bootstrap journal", "bashly/platform-pki-root-create/src/root_command.sh", ROOT_BOOTSTRAP_JOURNAL_FIELDS),
+    RecordContract("root bootstrap recovery journal", 3, "C-locale recovery journal", "bashly/platform-pki-ca-rollover/src/recover_command.sh", ROOT_BOOTSTRAP_RECOVERY_FIELDS),
     RecordContract(
         "intermediate bootstrap journal",
         3,
-        "fixed prefix, database groups, committed",
+        "literal intermediate bootstrap journal",
         "bashly/platform-pki-intermediate-create/src/root_command.sh",
+        INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS,
+    ),
+    RecordContract(
+        "intermediate bootstrap recovery journal",
+        3,
+        "C-locale recovery journal",
+        "bashly/platform-pki-ca-rollover/src/recover_command.sh",
+        INTERMEDIATE_BOOTSTRAP_RECOVERY_FIELDS,
     ),
     RecordContract("CSR request", 1, "PKI_CSR_REQUEST_FIELDS", "lib/platform-pki-csr-sign.sh", CSR_REQUEST_FIELDS),
     RecordContract("CSR approval", 1, "PKI_CSR_APPROVAL_FIELDS", "lib/platform-pki-csr-sign.sh", CSR_APPROVAL_FIELDS),
@@ -865,9 +1047,11 @@ PERSISTED_RECORD_CONTRACTS = (
         "lib/platform-pki-csr-candidate.sh",
         CANDIDATE_JOURNAL_FIELDS,
     ),
-    RecordContract("legacy migration journal", 2, "writer or recovery order", "bashly/platform-pki-ca-rollover/src/migrate_command.sh"),
-    RecordContract("rollover preparation journal", 5, "C-locale key order", "bashly/platform-pki-ca-rollover/src/prepare_command.sh"),
-    RecordContract("rollover prepared-state manifest", 1, "canonical key order", "bashly/platform-pki-ca-rollover/src/prepare_command.sh"),
+    RecordContract("legacy migration journal", 2, "literal migration journal", "bashly/platform-pki-ca-rollover/src/migrate_command.sh", LEGACY_MIGRATION_JOURNAL_FIELDS),
+    RecordContract("legacy migration recovery journal", 2, "C-locale recovery journal", "bashly/platform-pki-ca-rollover/src/recover_command.sh", LEGACY_MIGRATION_RECOVERY_FIELDS),
+    RecordContract("legacy migration checkpoint journal", 2, "C-locale recovery checkpoint", "bashly/platform-pki-ca-rollover/src/recover_command.sh", LEGACY_MIGRATION_CHECKPOINT_FIELDS),
+    RecordContract("rollover preparation journal", 5, "C-locale preparation journal", "bashly/platform-pki-ca-rollover/src/prepare_command.sh", ROLLOVER_PREPARE_JOURNAL_FIELDS),
+    RecordContract("rollover prepared-state manifest", 1, "literal prepared-state manifest", "bashly/platform-pki-ca-rollover/src/prepare_command.sh", ROLLOVER_PREPARED_MANIFEST_FIELDS),
 )
 
 
@@ -954,7 +1138,6 @@ RECOVERY_CONTRACTS = (
 )
 
 
-ROOT_DB_KEYS = ("index", "index_attr", "serial", "crlnumber", "index_old", "index_attr_old", "serial_old", "crlnumber_old", "newcert")
 MIGRATION_QUARANTINE_NAMES = ("pki.env", "openssl-root.cnf.tpl", "openssl-intermediate.cnf.tpl", "openssl-service.cnf.tpl")
 
 _PREPARE_DIRECT = (
