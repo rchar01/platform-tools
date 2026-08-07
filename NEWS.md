@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v2.2.0 - 2026-08-07
+
 - `platform-pki-csr-trust-install` now explicitly owns the complete lifecycle,
   root, intermediate, and inventory lock boundary and fails closed before an
   actual schema-2 trust change unless every retained signer candidate has an
