@@ -4,10 +4,14 @@ from collections.abc import Sequence
 
 from ._version import VERSION  # type: ignore[import-not-found]
 from .compat import COMMANDS, COMPATIBILITY_COMMANDS, invocation_name
-
-
-_HELP_FLAGS = {"-h", "--help"}
-_VERSION_FLAGS = {"-v", "--version"}
+from .errors import ApplicationError, render_error
+from .parser import (
+    ROUTE_SPECS,
+    ParserError,
+    leading_action,
+    parse_route,
+    render_route_help,
+)
 
 
 def _color(text: str, code: str) -> str:
@@ -27,28 +31,49 @@ def _root_help(name: str) -> str:
     )
 
 
-def _command_help(name: str, route: tuple[str, ...], *, has_subcommands: bool = False) -> str:
+def _command_help(
+    name: str,
+    route: tuple[str, ...],
+    *,
+    subcommands: tuple[str, ...] = (),
+) -> str:
     route_text = " ".join(route)
     invocation = f"{name} {route_text}" if route_text else name
-    if has_subcommands:
+    if subcommands:
         invocation += " COMMAND"
-    return (
+    help_text = (
         f"{_color('Usage:', '1;33')} {invocation} [OPTIONS]\n\n"
-        f"{_color('Options:', '1;33')}\n"
-        "  -h, --help  Show this help\n"
     )
+    if subcommands:
+        help_text += f"{_color('Commands:', '1;33')}\n"
+        help_text += "\n".join(f"  {subcommand}" for subcommand in subcommands)
+        help_text += "\n\n"
+    return help_text + f"{_color('Options:', '1;33')}\n  -h, --help  Show this help\n"
 
 
 def _error(message: str) -> int:
-    print(f"[ERROR] {message}", file=sys.stderr)
+    error = ApplicationError(message)
+    print(render_error(error), file=sys.stderr, end="")
+    return error.status
+
+
+def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> None:
+    text = render_route_help(name, ROUTE_SPECS[route], compatibility=not unified)
+    text = text.replace("Usage:", _color("Usage:", "1;33"), 1)
+    text = text.replace("Options:", _color("Options:", "1;33"), 1)
+    print(text, end="")
+
+
+def _parser_error(error: ParserError) -> int:
+    print(error.render(), file=sys.stderr, end="")
     return 1
 
 
 def _dispatch(name: str, command: str, arguments: list[str], *, unified: bool) -> int:
     nested = COMMANDS[command]
-    if arguments and arguments[0] in _HELP_FLAGS:
+    if nested and arguments and leading_action(arguments[0], version=False) == "help":
         route = (command,) if unified else ()
-        print(_command_help(name, route, has_subcommands=bool(nested)), end="")
+        print(_command_help(name, route, subcommands=nested), end="")
         return 0
 
     route = (command,)
@@ -59,13 +84,21 @@ def _dispatch(name: str, command: str, arguments: list[str], *, unified: bool) -
         if leaf not in nested:
             return _error(f"Unknown {command} subcommand: {leaf}")
         route = (command, leaf)
-        if arguments and arguments[0] in _HELP_FLAGS:
-            display_route = route if unified else (leaf,)
-            print(_command_help(name, display_route), end="")
+        if arguments and leading_action(arguments[0], version=False) == "help":
+            _print_route_help(name, route, unified=unified)
             return 0
 
-    if arguments:
-        return _error(f"Unsupported argument: {arguments[0]}")
+    if not nested and arguments and leading_action(arguments[0], version=False) == "help":
+        _print_route_help(name, route, unified=unified)
+        return 0
+    try:
+        parse_route(
+            route,
+            arguments,
+            interactive=sys.stdin.isatty() and sys.stdout.isatty(),
+        )
+    except ParserError as error:
+        return _parser_error(error)
     return _error(f"Command is not available in the Python foundation: {' '.join(route)}")
 
 
@@ -77,21 +110,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not unified and compatibility_command is None:
         return _error(f"Unsupported invocation name: {name}")
 
-    if arguments and arguments[0] in _HELP_FLAGS:
+    action = leading_action(arguments[0], version=True) if arguments else None
+    if action == "help":
         if unified:
             print(_root_help(name), end="")
         else:
             assert compatibility_command is not None
-            print(
-                _command_help(
-                    name,
-                    (),
-                    has_subcommands=bool(COMMANDS[compatibility_command]),
-                ),
-                end="",
-            )
+            nested = COMMANDS[compatibility_command]
+            if nested:
+                print(
+                    _command_help(name, (), subcommands=nested),
+                    end="",
+                )
+            else:
+                _print_route_help(name, (compatibility_command,), unified=False)
         return 0
-    if arguments and arguments[0] in _VERSION_FLAGS:
+    if action == "version":
         print(f"{name} {VERSION}")
         return 0
 

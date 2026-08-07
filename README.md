@@ -36,7 +36,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
-| `platform-pki` | Unified Python PKI interface; the foundation build currently provides help, version, parser dispatch, and migration-safe unavailable-handler errors. |
+| `platform-pki` | Unified Python PKI interface; the foundation build provides exact frozen option parsing, shared record/inventory/process primitives, and migration-safe unavailable-handler errors. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |

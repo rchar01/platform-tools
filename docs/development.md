@@ -123,10 +123,28 @@ startup (`-I -S`) so checkout modules, `PYTHONPATH`, and user or system site
 packages cannot alter application imports.
 
 During the foundation stage, `platform-pki` provides the unified hierarchy,
-help, version, parser dispatch, and a fail-closed unavailable-handler result.
-The existing `platform-pki-*` commands remain Bashly-generated and continue to
-provide all operational behavior; temporary copied zipapps prove
-compatibility-name dispatch without changing installed compatibility commands.
+help, version, the frozen 24-route parser contract, and a fail-closed
+unavailable-handler result. Shared modules provide safe diagnostics, strict
+ordered `key=value` records, strict inventory parsing, and bounded exact-argv
+subprocess execution. The existing `platform-pki-*` commands remain
+Bashly-generated and continue to provide all operational behavior; temporary
+copied zipapps prove compatibility-name dispatch without changing installed
+compatibility commands.
+
+The inventory parser implements the deterministic ASCII grammar exercised by
+the existing commands under `LC_ALL=C`. Focused differential tests compare
+status and canonical bytes against `pki_validate_inventory_file` in that locale.
+Do not replace it with a general YAML parser or locale-dependent character
+classes: inherited Unicode locales can broaden Bash character ranges beyond the
+documented inventory language.
+
+The production subprocess helper accepts only an explicit argv sequence and
+environment mapping. Callers must supply per-stream byte limits, timeout and
+termination grace values, and retain ownership of any explicitly passed file
+descriptors until the child is spawned. Output overflow and timeout terminate
+the isolated process group and return only generic public errors; captured
+argv, environment, descriptors, and output are omitted from exception text and
+object representations.
 
 Every maintained shell command is Bashly-backed. The generated parsers treat
 `--help`/`-h` and `--version`/`-v` as global options when they appear before
@@ -154,6 +172,12 @@ make test-command-contract
 make test-installed-tools
 make test-platform-pki-foundation
 ```
+
+The foundation target runs the real zipapp plus parser, ordered-record,
+inventory, and subprocess tests. It includes Bash/Python unknown-token
+normalization differentials for every retained route, source-backed comparisons
+of every parser declaration, and C-locale inventory canonical-byte
+differentials.
 
 The installation check first verifies a disposable repository `.tmp` install,
 then installs and executes an isolated runtime copy from an outside-checkout

@@ -12,6 +12,8 @@ import pytest
 
 from .harness import ProcessResult
 from .pki.migration_contract import PKI_COMMAND_CONTRACTS, PKI_PARSER_ROUTES
+from .test_platform_pki_parser import MINIMAL_ARGUMENTS
+from src.platform_pki.parser import ROUTE_SPECS, render_usage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,11 @@ EXPECTED_MEMBERS = (
     "platform_pki/_version.py",
     "platform_pki/cli.py",
     "platform_pki/compat.py",
+    "platform_pki/errors.py",
+    "platform_pki/inventory.py",
+    "platform_pki/parser.py",
+    "platform_pki/records.py",
+    "platform_pki/subprocesses.py",
 )
 
 
@@ -211,6 +218,108 @@ def test_every_frozen_unified_route_has_state_free_help(
     )
     _assert_success(result)
     assert "\033" not in result.stdout
+    for option in route.long_flags:
+        assert option in result.stdout
+
+
+@pytest.mark.parametrize(
+    "route",
+    PKI_PARSER_ROUTES,
+    ids=("-".join(route.unified_route) for route in PKI_PARSER_ROUTES),
+)
+def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
+    process_runner: Callable[..., ProcessResult],
+    clean_environment: dict[str, str],
+    route,
+) -> None:
+    result = _run(
+        process_runner,
+        clean_environment,
+        ARTIFACT,
+        *route.unified_route,
+        *MINIMAL_ARGUMENTS[route.unified_route],
+    )
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] Command is not available in the Python foundation: "
+        f"{' '.join(route.unified_route)}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    PKI_PARSER_ROUTES,
+    ids=("-".join(route.unified_route) for route in PKI_PARSER_ROUTES),
+)
+def test_every_frozen_unified_route_rejects_abbreviations_without_state(
+    process_runner: Callable[..., ProcessResult],
+    clean_environment: dict[str, str],
+    route,
+) -> None:
+    result = _run(
+        process_runner,
+        clean_environment,
+        ARTIFACT,
+        *route.unified_route,
+        *MINIMAL_ARGUMENTS[route.unified_route],
+        "--namesp=/tmp/unsupported",
+    )
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == "invalid option: --namesp\n"
+
+
+@pytest.mark.parametrize(
+    "route",
+    PKI_PARSER_ROUTES,
+    ids=("-".join(route.unified_route) for route in PKI_PARSER_ROUTES),
+)
+@pytest.mark.parametrize(
+    "probe",
+    (
+        "--namesp=/tmp/unsupported",
+        "--help=x",
+        "-hfoo",
+        "--bad.name=x",
+        "-h/",
+        "-h\N{LATIN SMALL LETTER E WITH ACUTE}",
+    ),
+)
+def test_every_route_matches_bashly_unknown_token_normalization(
+    process_runner: Callable[..., ProcessResult],
+    clean_environment: dict[str, str],
+    route,
+    probe: str,
+) -> None:
+    nested = route.unified_route[1:]
+    minimal = MINIMAL_ARGUMENTS[route.unified_route]
+    bash = _run(
+        process_runner,
+        clean_environment,
+        ROOT / "bin" / route.compatibility_executable,
+        *nested,
+        *minimal,
+        probe,
+    )
+    python = _run(
+        process_runner,
+        clean_environment,
+        ARTIFACT,
+        *route.unified_route,
+        *minimal,
+        probe,
+    )
+    if bash.status == python.status == 0:
+        assert bash.stdout and python.stdout
+        assert "Usage:" in bash.stdout and "Usage:" in python.stdout
+        assert bash.stderr == python.stderr == ""
+    else:
+        assert (python.status, python.stdout, python.stderr) == (
+            bash.status,
+            bash.stdout,
+            bash.stderr,
+        )
 
 
 @pytest.mark.parametrize(
@@ -233,17 +342,32 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
 
     help_result = _run(process_runner, clean_environment, copied, "--help", cwd=tmp_path)
     _assert_success(help_result)
-    command_suffix = " COMMAND" if contract.nested_commands else ""
-    assert help_result.stdout.startswith(
-        f"Usage: {contract.compatibility_name}{command_suffix} [OPTIONS]\n"
-    )
+    if contract.nested_commands:
+        expected_usage = f"Usage: {contract.compatibility_name} COMMAND [OPTIONS]\n"
+    else:
+        expected_usage = render_usage(
+            contract.compatibility_name,
+            ROUTE_SPECS[(contract.unified_route,)],
+            compatibility=True,
+        )
+    assert help_result.stdout.startswith(expected_usage)
 
     invalid = _run(process_runner, clean_environment, copied, "--invalid", cwd=tmp_path)
     assert invalid.status == 1
     assert invalid.stdout == ""
-    assert invalid.stderr.startswith("[ERROR] ")
+    if contract.nested_commands:
+        assert invalid.stderr.startswith("[ERROR] Unknown ")
+    else:
+        assert invalid.stderr == "invalid option: --invalid\n"
 
-    operational_arguments = contract.nested_commands[:1]
+    route = (
+        (contract.unified_route, contract.nested_commands[0])
+        if contract.nested_commands
+        else (contract.unified_route,)
+    )
+    operational_arguments = (
+        (*contract.nested_commands[:1], *MINIMAL_ARGUMENTS[route])
+    )
     unavailable = _run(
         process_runner,
         clean_environment,
@@ -266,7 +390,11 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
         )
         _assert_success(nested_help)
         assert nested_help.stdout.startswith(
-            f"Usage: {contract.compatibility_name} {nested} [OPTIONS]\n"
+            render_usage(
+                contract.compatibility_name,
+                ROUTE_SPECS[(contract.unified_route, nested)],
+                compatibility=True,
+            )
         )
 
 

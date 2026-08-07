@@ -2,7 +2,8 @@
 
 ## Status
 
-Phase 0 in progress. Python command implementation has not started.
+Phase 0 contract expansion remains in progress. Phase 1 shared Python
+infrastructure is implemented; operational command handlers have not started.
 
 ## Goal
 
@@ -153,7 +154,7 @@ Tasks:
   availability remains a release-readiness check.
 - [x] Inventory every persisted record, policy, manifest, pointer, journal,
   checkpoint, and schema.
-- [ ] Freeze exact ordered fields, schema values, and final-newline rules for
+- [x] Freeze exact ordered fields, schema values, and final-newline rules for
   persisted records written from literal or dynamically assembled shell text.
 - [x] Define the forward-only upgrade and clean-state downgrade procedure.
 - [x] Define metadata-aware state-tree comparison that excludes raw inode values
@@ -171,7 +172,7 @@ Validation gate:
   option field, runtime relationship, and duplicate rejection list.
 - [x] Every persisted schema family and recovery checkpoint is represented in
   the migration inventory.
-- [ ] Every persisted record's exact field order, schema value, and final
+- [x] Every persisted record's exact field order, schema value, and final
   newline is source-backed by an executable contract test.
 - [x] Every fail-closed clean-downgrade condition is represented in the contract
   inventory; executable enforcement is a Phase 2 validation gate.
@@ -201,15 +202,15 @@ commands.
 Tasks:
 
 - [x] Add a standard-library-only `platform_pki` package.
-- [ ] Implement parser compatibility, leading help/version precedence, TTY help
+- [x] Implement parser compatibility, leading help/version precedence, TTY help
   color, `NO_COLOR`, diagnostics, and status mapping.
-- [ ] Implement exact-argv subprocess execution with `shell=False`, bounded
+- [x] Implement exact-argv subprocess execution with `shell=False`, bounded
   output, minimal environments, process-group cleanup, and protected inherited
   descriptors.
-- [ ] Implement strict ordered-record parsing and serialization.
-- [ ] Implement inventory parsing without broadening the accepted input
+- [x] Implement strict ordered-record parsing and serialization.
+- [x] Implement inventory parsing without broadening the accepted input
   language or changing canonical bytes.
-- [ ] Implement common errors that redact secret-bearing argv, descriptors, and
+- [x] Implement common errors that redact secret-bearing argv, descriptors, and
   child diagnostics.
 - [x] Build a deterministic zipapp from `src/platform_pki/` as
   `bin/platform-pki`.
@@ -561,6 +562,7 @@ implementation.
 | 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | Source- and test-backed inventories cover `print-cert`, `list-expiry`, and `service-verify`; exhaustive expansion to the remaining routes stays open. |
 | 2026-08-07 | Minimum runtime raised to Python 3.14 and `doctor` moved behind secure path/lock primitives. | The pinned test image provides Python 3.14.7; the downgrade scanner must not precede the safety boundaries it assesses. |
 | 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, 24 unified help routes, installed-layout execution, and no-state parser behavior are covered in the pinned Python 3.14 test image. |
+| 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed 24-route parsing, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics pass 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remain unavailable. |
 
 ## Decision Log
 

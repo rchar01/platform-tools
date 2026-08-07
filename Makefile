@@ -139,7 +139,12 @@ test-installed-tools:
 
 ## Run deterministic Python PKI zipapp foundation tests
 test-platform-pki-foundation:
-	python3 -m pytest tests/test_platform_pki_foundation.py
+	python3 -m pytest \
+		tests/test_platform_pki_foundation.py \
+		tests/test_platform_pki_parser.py \
+		tests/test_platform_pki_records.py \
+		tests/test_platform_pki_inventory.py \
+		tests/test_platform_pki_subprocesses.py
 
 ## Run platform config initializer behavior tests
 test-platform-config-init:

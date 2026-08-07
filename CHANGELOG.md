@@ -10,10 +10,12 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Added the deterministic `platform-pki` Python 3.14 zipapp with isolated
-  startup, embedded version metadata, unified command hierarchy, copied-name
-  compatibility dispatch, no-state parser behavior, and installed-layout
-  verification. Existing operational `platform-pki-*` commands remain on their
-  Bash implementations during the migration foundation stage.
+  startup, embedded version metadata, unified command hierarchy, exact frozen
+  option parsing, copied-name compatibility dispatch, strict ordered-record and
+  inventory models, bounded exact-argv process execution, secret-safe errors,
+  no-state parser behavior, and installed-layout verification. Existing
+  operational `platform-pki-*` commands remain on their Bash implementations
+  during the migration foundation stage.
 
 ### Changed
 
