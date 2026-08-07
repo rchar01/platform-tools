@@ -94,6 +94,48 @@ class FaultHookContract:
     allowed_recovery_actions: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class StatusContract:
+    code: int
+    category: str
+    meaning: str
+
+
+@dataclass(frozen=True)
+class OutputStatusContract:
+    route: tuple[str, ...]
+    scenario: str
+    statuses: tuple[StatusContract, ...]
+    stdout_kind: str
+    stderr_kind: str
+    stdout_final_newline: bool | None
+    stderr_final_newline: bool | None
+    evidence: tuple[tuple[str, str], ...]
+    focused_tests: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class RuntimeDependencyContract:
+    route: tuple[str, ...]
+    program: str
+    requirement: str
+    condition: str
+    capability: str
+    source: str
+    source_fragment: str
+
+
+@dataclass(frozen=True)
+class InstalledAssetContract:
+    path: str
+    mode: int
+    consumers: tuple[tuple[str, ...], ...]
+    lookup_order: tuple[str, ...]
+    required_phase: str
+    evidence: tuple[tuple[str, str], ...]
+    focused_tests: tuple[tuple[str, str], ...]
+
+
 def _locks(*profiles: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
     return profiles
 
@@ -518,6 +560,159 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("ca-rollover", "status"), ("--namespace", "--pki-dir", "--format"), "bashly/platform-pki-ca-rollover/src/status_command.sh"),
     DuplicateOptionContract(("ca-rollover", "prepare"), ("--namespace", "--pki-dir", "--type", "--backup-receipt", "--root-name", "--intermediate-name", "--org", "--country", "--root-days", "--intermediate-days", "--root-pass-file", "--intermediate-pass-file", "--issuer-safety-days", "--private-repo"), "bashly/platform-pki-ca-rollover/src/prepare_command.sh"),
     DuplicateOptionContract(("ca-rollover", "recover"), ("--namespace", "--pki-dir", "--transaction", "--action", "--yes"), "bashly/platform-pki-ca-rollover/src/recover_command.sh"),
+)
+
+
+PILOT_OUTPUT_STATUS_CONTRACTS = (
+    OutputStatusContract(
+        ("print-cert",),
+        "certificate-details",
+        (StatusContract(0, "success", "certificate details were rendered"),),
+        "service-prefix-plus-openssl-owned-lines",
+        "empty",
+        True,
+        None,
+        (
+            ("bashly/platform-pki-print-cert/src/root_command.sh", "printf 'Service: %s\\n' \"$SERVICE\""),
+            ("bashly/platform-pki-print-cert/src/root_command.sh", "openssl x509 -in \"$CERT\" -noout"),
+        ),
+        (("tests/pki/test_print_cert.py", "test_prints_certificate_details_in_command_order"),),
+    ),
+    OutputStatusContract(
+        ("print-cert",),
+        "optional-extension-missing",
+        (StatusContract(0, "success", "required details were rendered"),),
+        "service-prefix-plus-partial-openssl-owned-lines",
+        "openssl-owned-optional-extension-diagnostics",
+        True,
+        None,
+        (("bashly/platform-pki-print-cert/src/root_command.sh", "openssl x509 -in \"$CERT\" -noout -ext keyUsage || true"),),
+        (("tests/pki/test_print_cert.py", "test_missing_optional_extension_preserves_openssl_diagnostic"),),
+    ),
+    OutputStatusContract(
+        ("list-expiry",),
+        "expiry-report",
+        (
+            StatusContract(0, "success", "all certificates are outside warning thresholds"),
+            StatusContract(1, "semantic", "at least one certificate is within the warning threshold"),
+            StatusContract(2, "semantic", "at least one certificate is within the critical threshold"),
+            StatusContract(3, "semantic", "at least one inventory certificate is missing"),
+        ),
+        "fixed-width-ordered-table",
+        "empty",
+        True,
+        None,
+        (
+            ("bashly/platform-pki-list-expiry/src/root_command.sh", "printf '%-24s %-22s %-10s %s\\n' 'SERVICE' 'EXPIRES' 'DAYS_LEFT' 'STATUS'"),
+            ("bashly/platform-pki-list-expiry/src/root_command.sh", "EXIT_CODE=3"),
+            ("bashly/platform-pki-list-expiry/src/root_command.sh", "EXIT_CODE=2"),
+            ("bashly/platform-pki-list-expiry/src/root_command.sh", "EXIT_CODE=1"),
+        ),
+        (
+            ("tests/pki/test_list_expiry.py", "test_real_certificate_lifetime_classification"),
+            ("tests/pki/test_list_expiry.py", "test_missing_certificate_status"),
+            ("tests/pki/test_list_expiry.py", "test_missing_status_dominates_regardless_of_inventory_order"),
+        ),
+    ),
+    OutputStatusContract(
+        ("service-verify",),
+        "verified",
+        (StatusContract(0, "success", "all ordered certificate checks passed"),),
+        "exact-ok-line",
+        "empty",
+        True,
+        None,
+        (("bashly/platform-pki-service-verify/src/root_command.sh", "pki_ok \"Verified service certificate: $SERVICE\""),),
+        (("tests/pki/test_service_verify.py", "test_successful_verification_order"),),
+    ),
+    OutputStatusContract(
+        ("service-verify",),
+        "verification-failed",
+        (StatusContract(1, "validation", "an ordered certificate check failed"),),
+        "empty",
+        "optional-openssl-diagnostics-then-application-error-line",
+        None,
+        True,
+        (
+            ("bashly/platform-pki-service-verify/src/root_command.sh", "pki_verify_service_certificate \"$SERVICE\" \"$MIN_DAYS\""),
+            ("lib/platform-pki-common.sh", "openssl x509 -in \"$1\" -noout -ext basicConstraints"),
+            ("lib/platform-pki-common.sh", "pki_die() { printf '[ERROR] %s\\n' \"$*\" >&2; exit 1; }"),
+        ),
+        (("tests/pki/test_service_verify.py", "test_application_verification_failure_stops_in_order"),),
+    ),
+    OutputStatusContract(
+        ("service-verify",),
+        "trust-verification-failed",
+        (StatusContract(1, "child-failure", "OpenSSL rejected the certificate chain"),),
+        "empty",
+        "openssl-owned-diagnostics",
+        None,
+        None,
+        (("lib/platform-pki-common.sh", "openssl verify -CAfile \"$root_cert\" -untrusted \"$int_cert\" \"$cert\" >/dev/null"),),
+        (("tests/pki/test_service_verify.py", "test_openssl_trust_failure_preserves_child_stderr"),),
+    ),
+)
+
+
+PILOT_RUNTIME_DEPENDENCY_CONTRACTS = (
+    *(
+        RuntimeDependencyContract(
+            (route,), "openssl", "required", "operational execution",
+            "OpenSSL certificate inspection and verification",
+            f"bashly/platform-pki-{route}/src/root_command.sh", "pki_require_cmd openssl",
+        )
+        for route in ("print-cert", "list-expiry", "service-verify")
+    ),
+    *(
+        RuntimeDependencyContract(
+            (route,), "flock", "required", "first operation lock acquisition",
+            "nonblocking advisory locks over persistent lock files",
+            "lib/platform-pki-common.sh", "pki_require_cmd flock",
+        )
+        for route in ("print-cert", "list-expiry", "service-verify")
+    ),
+    RuntimeDependencyContract(
+        ("list-expiry",), "date", "required", "certificate expiry conversion",
+        "GNU date UTC parsing with -d", "lib/platform-pki-common.sh",
+        "date -u -d \"$not_after\" '+%Y-%m-%dT%H:%M:%SZ'",
+    ),
+    RuntimeDependencyContract(
+        ("service-verify",), "cmp", "required", "managed key/certificate comparison",
+        "quiet byte comparison", "lib/platform-pki-common.sh", "cmp -s \"$tmpdir/cert.pub\" \"$tmpdir/key.pub\"",
+    ),
+    RuntimeDependencyContract(
+        ("service-verify",), "grep", "required", "inventory and extension validation",
+        "fixed-string exact and substring matching", "lib/platform-pki-common.sh",
+        "grep -F 'TLS Web Server Authentication'",
+    ),
+)
+
+
+PILOT_INSTALLED_ASSET_CONTRACTS = (
+    InstalledAssetContract(
+        "lib/platform-pki-common.sh",
+        0o644,
+        (("print-cert",), ("list-expiry",), ("service-verify",)),
+        (
+            "PLATFORM_TOOLS_LIB_DIR",
+            "checkout-relative",
+            "PLATFORM_TOOLS_SHARE_DIR-or-XDG-user-share",
+        ),
+        "operational-only",
+        (
+            ("Makefile", "LIBS := lib/platform-pki-common.sh"),
+            ("Makefile", "chmod 644 \"$(SHARE_DIR)/lib/platform-pki-common.sh\""),
+            *(
+                (f"bashly/platform-pki-{route}/src/root_command.sh", "PLATFORM_TOOLS_SHARE_DIR")
+                for route in ("print-cert", "list-expiry", "service-verify")
+            ),
+        ),
+        (
+            ("tests/pki/test_print_cert.py", "test_installed_share_directory_layout"),
+            ("tests/pki/test_list_expiry.py", "test_installed_share_directory_layout"),
+            ("tests/pki/test_service_verify.py", "test_installed_share_directory_layout"),
+        ),
+    ),
 )
 
 

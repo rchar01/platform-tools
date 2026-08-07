@@ -36,7 +36,7 @@ set -euo pipefail
 case $1 in
   verify)
     printf '%s\\n' trust >>"$VERIFY_LOG"
-    if [[ ${VERIFY_FAILURE:-} == trust ]]; then
+    if [[ ${VERIFY_FAILURE:-} == trust && " $* " == *' -untrusted '* ]]; then
       printf '%s\\n' 'certificate chain verification failed' >&2
       exit 1
     fi
@@ -193,9 +193,6 @@ def test_successful_verification_order(
     ("failure", "message", "order"),
     [
         pytest.param(
-            "trust", "certificate chain verification failed", "trust\n", id="trust"
-        ),
-        pytest.param(
             "key", "Private key does not match certificate", "trust\ntrust\nkey\n", id="key"
         ),
         pytest.param(
@@ -219,7 +216,7 @@ def test_successful_verification_order(
         ),
     ],
 )
-def test_verification_failure_stops_in_order(
+def test_application_verification_failure_stops_in_order(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
     failure: str,
@@ -238,7 +235,28 @@ def test_verification_failure_stops_in_order(
     assert result.status == 1
     assert result.stdout == ""
     assert message in result.stderr
+    assert result.stderr.startswith("[ERROR] ")
+    assert result.stderr.endswith("\n")
+    assert result.stderr.count("\n") == 1
     assert log.read_text(encoding="utf-8") == order
+
+
+def test_openssl_trust_failure_preserves_child_stderr(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    pki, fake_library, fake_bin = _workspace(tmp_path)
+    environment, log = _environment(tmp_path, fake_library, fake_bin, "trust")
+
+    result = _run(
+        process_runner,
+        ["platform-example", "--pki-dir", pki, "--min-days", "30"],
+        environment,
+    )
+
+    assert result == ProcessResult(
+        result.args, 1, "", "certificate chain verification failed\n"
+    )
+    assert log.read_text(encoding="utf-8") == "trust\ntrust\n"
 
 
 def test_unknown_service_stops_after_active_issuer_validation(

@@ -146,6 +146,8 @@ Tasks:
   and installed-asset contracts.
 - [x] Execute shared help precedence, equals-form, abbreviation, stream/status,
   and no-state parser edges across all 24 retained leaf routes.
+- [x] Freeze the first migration tranche's output/status semantics,
+  migration-sensitive runtime boundaries, and common installed asset.
 - [x] Define and review the complete unified `platform-pki` command hierarchy.
 - [x] Establish Python 3.12 as the minimum supported runtime; target-host
   availability remains a release-readiness check.
@@ -551,6 +553,7 @@ implementation.
 | 2026-08-07 | Exhaustive Phase 0 parser-route and recovery-checkpoint inventories completed. | `tests/pki/test_migration_contract.py` source-normalizes 24 Bashly leaves, runtime option guards, literal and finite fault domains, and maintained pytest domains; focused infrastructure run: 18 passed. Differential execution and Bash-oracle retention remain open. |
 | 2026-08-07 | Differential execution foundation and Bash-oracle retention policy completed. | `run_differential_case` executes real commands on isolated private copies and compares normalized process observations, semantic trees, and identity-sensitive transitions; focused harness run: 16 passed. Per-command oracle commits are recorded at cutover. |
 | 2026-08-07 | Shared parser-edge behavior was frozen across all retained PKI leaves. | `tests/test_command_contract.py` drives help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the 24-route source-backed inventory. |
+| 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | Source- and test-backed inventories cover `print-cert`, `list-expiry`, and `service-verify`; exhaustive expansion to the remaining routes stays open. |
 
 ## Decision Log
 

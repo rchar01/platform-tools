@@ -131,6 +131,36 @@ inventories record runtime-only conditional requirements, conflicts, explicit
 empty-value rejection, confirmations, and exact duplicate-option rejection
 fields.
 
+## Pilot Output, Status, Dependency, and Asset Contracts
+
+The first migration tranche has machine-readable contracts for
+`print-cert`, `list-expiry`, and `service-verify`:
+
+- `print-cert` owns the leading `Service:` line and ordering of its OpenSSL
+  invocations; the remaining detail lines are OpenSSL-owned output. Missing
+  optional extensions do not fail the command and may leave OpenSSL-owned
+  diagnostics on stderr.
+- `list-expiry` owns a fixed-width ordered table and semantic statuses 0 for
+  OK, 1 for warning, 2 for critical, and 3 for any missing certificate. Missing
+  status dominates independently of inventory order.
+- `service-verify` emits one exact success line only after all checks pass.
+  Application validation failures return 1 with empty stdout and end with a
+  newline-terminated application error, but may first preserve OpenSSL-owned
+  diagnostics. The direct trust check emits only OpenSSL-owned stderr.
+- All three require OpenSSL and nonblocking `flock` behavior during operational
+  execution. The pilot inventory additionally records GNU `date -d` for expiry
+  conversion and `cmp`/`grep` behavior for managed certificate verification.
+- All three load `lib/platform-pki-common.sh` only after parser dispatch. The
+  installed asset is a regular mode-644 file resolved through
+  `PLATFORM_TOOLS_LIB_DIR`, checkout-relative `../lib`, then
+  `PLATFORM_TOOLS_SHARE_DIR` or the XDG/default user share.
+
+Infrastructure tests prove that every pilot contract references a retained
+route, authoritative source fragment, and maintained focused test function.
+The runtime dependencies listed here are migration-sensitive external
+boundaries, not yet an exhaustive inventory of every core utility used by the
+shared shell implementation.
+
 ## External Runtime Boundaries
 
 The initial Python implementation retains explicit argv-only subprocess calls
@@ -386,3 +416,5 @@ of the ordinary non-rollover Make pool.
   add its command-specific differential cases.
 - Freeze exact ordered fields, schema values, and final-newline behavior for the
   remaining literal and dynamically assembled persisted-record writers.
+- Extend output/status, runtime-boundary, and installed-asset contracts from the
+  three pilot commands to the remaining PKI routes.

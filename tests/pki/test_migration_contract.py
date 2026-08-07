@@ -11,6 +11,9 @@ from .migration_contract import (
     FAULT_HOOK_CONTRACTS,
     LOCK_ORDER,
     MIGRATION_QUARANTINE_NAMES,
+    PILOT_INSTALLED_ASSET_CONTRACTS,
+    PILOT_OUTPUT_STATUS_CONTRACTS,
+    PILOT_RUNTIME_DEPENDENCY_CONTRACTS,
     PERSISTED_RECORD_CONTRACTS,
     PKI_COMMAND_CONTRACTS,
     PKI_DUPLICATE_OPTION_CONTRACTS,
@@ -159,6 +162,15 @@ def _make_targets() -> set[str]:
     return set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", makefile))
 
 
+def _function_names(path: str) -> set[str]:
+    tree = ast.parse(_source(path))
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 def _shell_array(source: str, symbol: str) -> tuple[str, ...]:
     match = re.search(rf"(?ms)^{re.escape(symbol)}=\((.*?)\)", source)
     assert match is not None, symbol
@@ -292,6 +304,70 @@ def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
         if contract.function == "pki_reject_repeated_options"
     }
     assert set(all_calls) == expected_calls
+
+
+def test_pilot_output_status_contracts_are_source_and_test_backed() -> None:
+    routes = {route.unified_route for route in PKI_PARSER_ROUTES}
+    scenarios = set()
+    for contract in PILOT_OUTPUT_STATUS_CONTRACTS:
+        assert contract.route in routes
+        assert (contract.route, contract.scenario) not in scenarios
+        scenarios.add((contract.route, contract.scenario))
+        assert contract.stdout_kind
+        assert contract.stderr_kind
+        assert len({status.code for status in contract.statuses}) == len(contract.statuses)
+        assert all(
+            status.category in {"success", "semantic", "validation", "child-failure"}
+            for status in contract.statuses
+        )
+        if contract.stdout_kind == "empty":
+            assert contract.stdout_final_newline is None
+        else:
+            assert contract.stdout_final_newline is True
+        if contract.stderr_kind == "optional-openssl-diagnostics-then-application-error-line":
+            assert contract.stderr_final_newline is True
+        else:
+            assert contract.stderr_final_newline is None
+        for path, fragment in contract.evidence:
+            assert fragment in _source(path)
+        for path, function in contract.focused_tests:
+            assert function in _function_names(path)
+    assert {contract.route for contract in PILOT_OUTPUT_STATUS_CONTRACTS} == {
+        ("print-cert",), ("list-expiry",), ("service-verify",)
+    }
+
+
+def test_pilot_runtime_dependencies_are_unique_and_source_backed() -> None:
+    routes = {route.unified_route for route in PKI_PARSER_ROUTES}
+    keys = []
+    for contract in PILOT_RUNTIME_DEPENDENCY_CONTRACTS:
+        assert contract.route in routes
+        assert contract.requirement in {"required", "conditional", "optional-evidence"}
+        assert contract.condition
+        assert contract.capability
+        assert contract.source_fragment in _source(contract.source)
+        keys.append((contract.route, contract.program))
+    assert len(keys) == len(set(keys))
+
+
+def test_pilot_installed_assets_are_source_and_test_backed() -> None:
+    pilot_routes = {("print-cert",), ("list-expiry",), ("service-verify",)}
+    paths = []
+    for contract in PILOT_INSTALLED_ASSET_CONTRACTS:
+        paths.append(contract.path)
+        assert contract.mode == 0o644
+        assert set(contract.consumers) == pilot_routes
+        assert contract.required_phase == "operational-only"
+        assert contract.lookup_order == (
+            "PLATFORM_TOOLS_LIB_DIR",
+            "checkout-relative",
+            "PLATFORM_TOOLS_SHARE_DIR-or-XDG-user-share",
+        )
+        for path, fragment in contract.evidence:
+            assert fragment in _source(path)
+        for path, function in contract.focused_tests:
+            assert function in _function_names(path)
+    assert paths == ["lib/platform-pki-common.sh"]
 
 
 def test_every_command_has_focused_verification() -> None:

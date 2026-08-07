@@ -26,7 +26,13 @@ printf '%s\\n' "$*" >>"$OPENSSL_LOG"
 case $* in
   *'-ext subjectAltName') printf '%s\\n' 'X509v3 Subject Alternative Name:' '    DNS:platform.example.internal' ;;
   *'-ext extendedKeyUsage') printf '%s\\n' 'X509v3 Extended Key Usage:' '    TLS Web Server Authentication' ;;
-  *'-ext keyUsage') printf '%s\\n' 'X509v3 Key Usage:' '    Digital Signature' ;;
+  *'-ext keyUsage')
+    if [[ ${OPENSSL_MISSING_EXTENSION:-} == keyUsage ]]; then
+      printf '%s\\n' 'No extensions in certificate' >&2
+      exit 1
+    fi
+    printf '%s\\n' 'X509v3 Key Usage:' '    Digital Signature'
+    ;;
   *) printf '%s\\n' \\
     'subject=CN=platform.example.internal' \\
     'issuer=CN=Platform Intermediate CA' \\
@@ -198,6 +204,22 @@ def test_prints_certificate_details_in_command_order(
         "    TLS Web Server Authentication\n"
     )
     assert len(log.read_text(encoding="utf-8").splitlines()) == 5
+
+
+def test_missing_optional_extension_preserves_openssl_diagnostic(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    pki = _pki_tree(tmp_path)
+    environment, _ = _fake_environment(tmp_path, "missing-extension-openssl.log")
+    environment = dict(environment, OPENSSL_MISSING_EXTENSION="keyUsage")
+
+    result = _run(process_runner, ["--pki-dir", pki, "platform-example"], environment)
+
+    assert result.status == 0
+    assert result.stdout.startswith("Service: platform-example\nsubject=")
+    assert "X509v3 Key Usage:" not in result.stdout
+    assert result.stdout.endswith("    TLS Web Server Authentication\n")
+    assert result.stderr == "No extensions in certificate\n"
 
 
 def test_explicit_library_directory_layout(
