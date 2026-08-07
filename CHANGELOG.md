@@ -14,10 +14,13 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   option parsing, copied-name compatibility dispatch, strict ordered-record and
   inventory models, bounded exact-argv process execution, lexical path policy,
   descriptor-bound filesystem identity and checked reads, trusted-ancestor and
-  durability primitives, deterministic transaction test hooks, secret-safe
-  errors, no-state parser behavior, and installed-layout verification. Existing
-  operational `platform-pki-*` commands remain on their Bash implementations
-  during migration.
+  durability primitives, ordered lifecycle-through-export `fcntl.flock`
+  context managers with fork-safe descriptor/registry handling, validated
+  anonymous `O_TMPFILE` no-clobber lazy creation, no-state and deterministic
+  race-hook support, primary-exception-preserving cleanup, deterministic
+  transaction test hooks, secret-safe errors, no-state parser behavior, and
+  installed-layout verification. Existing operational `platform-pki-*` commands
+  remain on their Bash implementations during migration.
 
 ### Changed
 

@@ -3,7 +3,8 @@
 ## Status
 
 Phase 0 contract expansion remains in progress. Phase 1 shared Python
-infrastructure is implemented; operational command handlers have not started.
+infrastructure and the Phase 2 path, filesystem, fault, and ordered-lock
+checkpoints are implemented; operational command handlers have not started.
 
 ## Goal
 
@@ -239,7 +240,7 @@ Tasks:
 - [x] Implement exact file and directory identity models.
 - [x] Implement trusted-ancestor, owner, mode, file-type, symlink, and link-count
   validation.
-- [ ] Implement lifecycle and operation locks as ordered context managers.
+- [x] Implement lifecycle and operation locks as ordered context managers.
 - [ ] Implement atomic writes, guarded no-clobber publication, file `fsync`, and
   directory `fsync`.
 - [ ] Prototype atomic exchange and no-copy publication; retain reviewed GNU
@@ -254,7 +255,7 @@ Validation gate:
 
 - [ ] Real symlink, hard-link, source replacement, destination replacement,
   concurrent publication, permission, and durability tests pass.
-- [ ] Lock acquisition and reverse release match the Bash implementation.
+- [x] Lock acquisition and reverse release match the Bash implementation.
 - [ ] `doctor` creates no state and fails closed on contention, unsafe paths,
   malformed state, unknown schemas, or any unresolved state.
 - [ ] Unit tests supplement rather than replace subprocess-backed tests.
@@ -564,6 +565,7 @@ implementation.
 | 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, 24 unified help routes, installed-layout execution, and no-state parser behavior are covered in the pinned Python 3.14 test image. |
 | 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed 24-route parsing, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics pass 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remain unavailable. |
 | 2026-08-07 | Phase 2 path, filesystem, and deterministic fault primitives implemented. | Lexical path policy, full-component descriptor bindings, exact identity and policy models, checked bounded reads, trusted ancestors, file and directory synchronization, and pinned pause controls pass 91 focused real-filesystem/process tests; locking and publication remain open. |
+| 2026-08-07 | Phase 2 ordered advisory-lock checkpoint implemented and independently hardened. | `acquire_pki_locks` provides descriptor-bound lifecycle-through-export prefix profiles, exact lock policy, no-state behavior, fork-safe descriptor/registry handling, validated anonymous `O_TMPFILE` no-clobber creation, thread-safe duplicate rejection, finite race hooks, primary-exception preservation, and reverse cleanup. The focused pinned-container suite passed 42 tests and the integrated foundation suite passed 562 tests across real Python/Python, Python/util-linux, fork, exec, descriptor-reuse, process-death, and replacement boundaries; general publication primitives and `doctor` remain open. |
 
 ## Decision Log
 

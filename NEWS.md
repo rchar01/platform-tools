@@ -8,9 +8,12 @@ This file gives a short, release-oriented view of what changed between versions.
   zipapp as the unified migration interface. The foundation build provides the
   frozen 24-route parser, strict ordered-record and inventory models, bounded
   exact-argv process execution, descriptor-bound filesystem and path safety
-  primitives, deterministic transaction test hooks, secret-safe errors, and
-  fail-closed unavailable-handler behavior; all operational `platform-pki-*`
-  commands remain unchanged on Bash.
+  primitives, descriptor-bound lifecycle-through-export advisory lock context
+  managers, deterministic transaction test hooks, secret-safe errors, and
+  fail-closed unavailable-handler behavior. The Python locks interoperate with
+  util-linux `flock`, close inherited descriptors safely across fork, and
+  link validated anonymous files at absent destinations without replacement;
+  all operational `platform-pki-*` commands remain unchanged on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

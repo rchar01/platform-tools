@@ -147,6 +147,7 @@ test-platform-pki-foundation:
 		tests/test_platform_pki_subprocesses.py \
 		tests/test_platform_pki_paths.py \
 		tests/test_platform_pki_filesystem.py \
+		tests/test_platform_pki_locks.py \
 		tests/test_platform_pki_faults.py
 
 ## Run platform config initializer behavior tests

@@ -36,7 +36,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
-| `platform-pki` | Unified Python PKI interface; the migration build provides exact parsing plus shared record, inventory, process, path, filesystem, and fault-test primitives while operational handlers remain unavailable. |
+| `platform-pki` | Unified Python PKI interface; the migration build provides exact parsing plus shared record, inventory, process, path, filesystem, ordered-lock, and fault-test primitives while operational handlers remain unavailable. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
@@ -96,6 +96,7 @@ PKI helpers require:
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 - `python3` for byte-bounded `platform-pki-custody-report` header and receipt inspection
 - Python 3.14 or newer for the unified `platform-pki` zipapp; operational PKI commands remain on their existing Bash executables during the migration
+- Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for the currently disconnected Python ordered-lock primitive
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
 SSH and Proxmox helpers require:
@@ -170,6 +171,11 @@ Run the deterministic Python PKI foundation and primitive checks:
 ```bash
 ./scripts/in-test-container make test-platform-pki-foundation
 ```
+
+This target includes real Python/util-linux contention, replacement-race,
+fork/exec descriptor-inheritance, anonymous-publication process-death, and lock
+holder process-death checks for the Python ordered-lock primitive. The primitive
+is not yet wired into operational commands.
 
 Run the authoritative PKI rollover pytest scenarios:
 

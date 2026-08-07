@@ -131,6 +131,27 @@ Bashly-generated and continue to provide all operational behavior; temporary
 copied zipapps prove compatibility-name dispatch without changing installed
 compatibility commands.
 
+The foundation also provides `acquire_pki_locks`, a standard-library
+`fcntl.flock` context manager for the fixed lifecycle-through-export prefix
+profiles. It validates the canonical lock directory and persistent files through
+descriptor-relative no-follow operations, creates missing files only outside
+no-state mode, rejects process-local duplicates, and always releases in reverse
+order. Lazy creation validates an anonymous mode-`600` `O_TMPFILE` inode before
+atomically linking its protected descriptor at the canonical name with no
+overwrite fallback. Registered fork handlers close inherited lock and directory
+descriptors without unlocking the parent's locks and reset child-local
+reservations. Its finite race hooks, including the post-initialization and
+pre-publication boundary, are listed by `LOCK_CHECKPOINTS`; operational handlers
+remain deliberately disconnected from this primitive.
+
+This lazy-creation path fails closed unless the Linux PKI filesystem supports
+linkable `O_TMPFILE` inodes and `/proc/self/fd` is mounted and usable as a link
+source. It does not fall back to a path-reopened or overwrite-capable sequence.
+
+For each lock name, the finite checkpoints are `after-pre-stat`,
+`after-stage-init`, `after-open`, `after-acquire`, `before-release`, and
+`after-release`, prefixed as `lock-<name>-<checkpoint>`.
+
 The inventory parser implements the deterministic ASCII grammar exercised by
 the existing commands under `LC_ALL=C`. Focused differential tests compare
 status and canonical bytes against `pki_validate_inventory_file` in that locale.
@@ -174,11 +195,13 @@ make test-platform-pki-foundation
 ```
 
 The foundation target runs the real zipapp plus parser, ordered-record,
-inventory, subprocess, path, descriptor-oriented filesystem, and deterministic
-fault-hook tests. It includes Bash/Python unknown-token normalization
-differentials for every retained route, source-backed comparisons of every
-parser declaration, C-locale inventory canonical-byte differentials, and real
-filesystem race and policy checks.
+inventory, subprocess, path, descriptor-oriented filesystem, ordered advisory
+lock, and deterministic fault-hook tests. It includes Bash/Python unknown-token
+normalization differentials for every retained route, source-backed comparisons
+of every parser declaration, C-locale inventory canonical-byte differentials,
+and real filesystem race and policy checks. Lock tests cross real Python
+processes and util-linux `flock`, fork, exec, descriptor-reuse, and SIGKILL
+boundaries.
 
 The installation check first verifies a disposable repository `.tmp` install,
 then installs and executes an isolated runtime copy from an outside-checkout

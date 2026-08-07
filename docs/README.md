@@ -56,7 +56,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-proxmox-token-init`](../bin/platform-proxmox-token-init): Proxmox API token bootstrap helper.
 - [`../bin/platform-proxmox-vm-cleanup`](../bin/platform-proxmox-vm-cleanup): Safe single-VM Proxmox cleanup helper.
 - [`../bin/platform-proxmox-vm-snapshot`](../bin/platform-proxmox-vm-snapshot): Safe Proxmox VE 9 development snapshot helper.
-- [`../bin/platform-pki`](../bin/platform-pki): Unified Python PKI migration interface with shared runtime and filesystem primitives; operational handlers remain on the compatibility commands during migration.
+- [`../bin/platform-pki`](../bin/platform-pki): Unified Python PKI migration interface with shared runtime, filesystem, and fork-safe ordered advisory-lock primitives; operational handlers remain on the compatibility commands during migration.
 - [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
 - [`../bin/platform-pki-csr-trust-install`](../bin/platform-pki-csr-trust-install): Strict public-trust installer for authenticated host-local CSR signing.
 - [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Deterministic recovery for interrupted host-local CSR signing.
