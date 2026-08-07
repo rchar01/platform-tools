@@ -155,18 +155,28 @@ For each lock name, the finite checkpoints are `after-pre-stat`,
 The bounded publication checkpoint provides owned same-parent regular-file
 staging, exact-byte absent-destination atomic writes, identity-matched regular
 file unlink, inode-preserving no-clobber file and directory publication, exact
-file-file and directory-directory exchange, and descriptor-relative `fsync_tree`
-for an already-opened root and its explicit containing parent/name binding. It
-invokes Linux `renameat2` with `RENAME_NOREPLACE` or `RENAME_EXCHANGE`, requires
+file-file and directory-directory exchange, guarded exact replacement, and
+descriptor-relative `fsync_tree` for an already-opened root and its explicit
+containing parent/name binding. It invokes Linux `renameat2` with
+`RENAME_NOREPLACE` or `RENAME_EXCHANGE`, requires
 current-user ownership and non-writable-by-group-or-world stages, rejects
 hard-linked files and cross-device operations, and synchronizes rename parents
 in source-then-destination order. Regular sources are fsynced and observed by
 stable object state, modification time, and SHA-256 immediately before rename
-and at both terminal checks. Directory publication and exchange require an
-immutable `TreeReadiness` returned by `fsync_tree`; that token binds the exact
-root, containing parent/name, recursive identities, and regular-file digests.
+and at both terminal checks. Directory publication, exchange, and replacement
+require an immutable `TreeReadiness` returned by `fsync_tree`; that token binds
+the exact root, containing parent/name, recursive identities, and regular-file
+digests.
 Generic publication and exchange results report exact final root identities,
 not independent proof of a complete tree beyond validated readiness.
+`ReplacementResult` additionally records the exact displaced destination and
+its terminal disposition. Displaced regular files are exact-unlinked and report
+`REMOVED`. Displaced directories are never traversed or removed here: the
+complete old tree remains at the source name, reports `RETAINED`, and carries
+the exact original `TreeReadiness` for later caller-journaled cleanup.
+`atomic_write_bytes` remains absent-only by default and replaces only when the
+caller supplies an exact `expected_destination`; it never infers current
+destination state.
 
 All operation-lifetime parent and path-chain descriptors are duplicated before
 the first mutation checkpoint and are `CLOEXEC`; callers pass
@@ -174,19 +184,31 @@ the first mutation checkpoint and are `CLOEXEC`; callers pass
 caller's descriptor after pinning does not redirect the operation. Callers must
 still avoid invoking methods concurrently on the same mutable opened-object
 wrapper while initial pin acquisition is in progress. `PUBLICATION_CHECKPOINTS`
-contains 32 finite fault/pause points. Failures after a namespace mutation,
-including post-unlink validation or parent synchronization, retain observable
-state and report an ambiguous or unconfirmed-durability result; the primitive
-never claims an automatic rollback.
+contains 38 finite fault/pause points. The replacement-only inventory is
+`replacement-before-exchange`, `replacement-after-exchange`,
+`replacement-after-exchange-durability`, `replacement-before-old-disposition`,
+`replacement-after-old-disposition`, and `replacement-terminal-validation`; it
+does not emit the generic exchange or cleanup domains. Failures after a namespace
+mutation, including post-unlink validation or parent synchronization, retain
+observable state and report an ambiguous or unconfirmed-durability result; the
+primitive never claims an automatic rollback.
 
-This checkpoint does not implement guarded replacement of an existing
-destination and is not an operational command cutover. `fsync_tree` detects
-changes at its descriptor-relative validation boundaries but does not freeze a
-writable tree against a hostile same-UID process after the final check. Python
-has no unlink-by-handle API, so exact unlink similarly has an unavoidable
-same-UID race between its last path check and `unlinkat`; cooperative replacement
-at the cleanup checkpoint is rejected and preserved. Exercise these boundaries
-in the pinned test image with `make test-platform-pki-publication`.
+Replacement atomically exchanges exact same-kind, same-filesystem operands,
+syncs and validates both names, then either exact-unlinks a displaced regular
+file and syncs its parent or retains a complete displaced directory. Pre-exchange
+failures leave both names untouched. Post-exchange failures retain observable
+state and are always ambiguous; there is no rollback path.
+
+This is a cooperative same-UID contract. Callers must hold every required
+lifecycle/operation lock and own stage names exclusively. Linux has no
+identity-conditional compare-and-swap exchange, so a noncooperating writer can
+replace either operand between the final checks and `RENAME_EXCHANGE`; terminal
+validation detects the mismatch and preserves every unexpected displaced object
+but cannot undo the exchange. `fsync_tree` likewise does not freeze a writable
+tree after validation. Python has no unlink-by-handle API, so regular cleanup has
+an unavoidable same-UID race between its last path check and `unlinkat`.
+Exercise these boundaries in the pinned test image with
+`make test-platform-pki-publication`.
 
 The inventory parser implements the deterministic ASCII grammar exercised by
 the existing commands under `LC_ALL=C`. Focused differential tests compare

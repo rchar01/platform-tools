@@ -245,8 +245,9 @@ Tasks:
   file `fsync`, directory `fsync`, and identity-bound cleanup.
 - [x] Prototype atomic exchange and inode-preserving publication with Linux
   `renameat2`; retain reviewed GNU `mv` calls as the Bash differential oracle.
-- [ ] Implement and prove guarded replacement of an existing destination; the
-  Phase 2 checkpoint intentionally rejects every existing destination.
+- [x] Implement and prove guarded replacement of an exact existing file or
+  directory with forward-only exchange, durability, exact regular cleanup, and
+  complete retained-directory readiness evidence.
 - [x] Preserve deterministic fault and pause barriers for race tests.
 - [ ] Add the read-only `platform-pki doctor` command after the path and lock
   primitives it depends on are proven.
@@ -255,17 +256,17 @@ Tasks:
 
 Validation gate:
 
-- [ ] Real symlink, hard-link, source replacement, destination replacement,
-  concurrent publication, permission, and durability tests pass across the
-  complete publication layer, including guarded existing-destination
-  replacement.
+- [x] Under cooperative locks and exclusive stage ownership, real symlink,
+  hard-link, source/destination race, concurrent publication, permission, and
+  durability tests pass across the primitive publication layer. Syscall-bound
+  same-UID races produce explicit ambiguity without deleting unexpected state.
 - [x] Equivalent validation passes for the bounded absent-destination and exact
   exchange checkpoint, including simultaneous publishers, content/metadata
   mutation, readiness, parent binding, process death, and durability failures.
 - [x] Lock acquisition and reverse release match the Bash implementation.
 - [ ] `doctor` creates no state and fails closed on contention, unsafe paths,
   malformed state, unknown schemas, or any unresolved state.
-- [ ] Unit tests supplement rather than replace subprocess-backed tests.
+- [x] Unit tests supplement rather than replace subprocess-backed tests.
 
 ## Phase 3: Migrate Read-Oriented Commands
 
@@ -519,6 +520,10 @@ Every command cutover must include:
 
 Transaction cutovers must additionally include:
 
+These are later command-specific operational integration gates. Phase 2
+primitive completion does not satisfy them or provide a generic recovery
+protocol.
+
 - [ ] Bash interrupted state recovered by Python.
 - [ ] Python interrupted state recovered by Python.
 - [ ] Source and destination replacement races.
@@ -574,6 +579,7 @@ implementation.
 | 2026-08-07 | Phase 2 path, filesystem, and deterministic fault primitives implemented. | Lexical path policy, full-component descriptor bindings, exact identity and policy models, checked bounded reads, trusted ancestors, file and directory synchronization, and pinned pause controls pass 91 focused real-filesystem/process tests; locking and publication remain open. |
 | 2026-08-07 | Phase 2 ordered advisory-lock checkpoint implemented and independently hardened. | `acquire_pki_locks` provides descriptor-bound lifecycle-through-export prefix profiles, exact lock policy, no-state behavior, fork-safe descriptor/registry handling, validated anonymous `O_TMPFILE` no-clobber creation, thread-safe duplicate rejection, finite race hooks, primary-exception preservation, and reverse cleanup. The focused pinned-container suite passed 42 tests and the integrated foundation suite passed 562 tests across real Python/Python, Python/util-linux, fork, exec, descriptor-reuse, process-death, and replacement boundaries; general publication primitives and `doctor` remain open. |
 | 2026-08-07 | Bounded Phase 2 durable-publication checkpoint implemented and review-hardened. | Owned exact-byte stages, source-file synchronization/content observations, parent-bound immutable tree readiness, exact unlink, Linux no-clobber file/directory rename, file/directory exchange, absent-only atomic writes, operation-lifetime pins, and recursive tree synchronization have finite race hooks and retain ambiguous post-mutation state. The pinned focused suite passed 87 tests and the integrated foundation suite passed 649 tests; guarded existing-destination replacement and `doctor` remain open. |
+| 2026-08-07 | Guarded existing-destination replacement completed the next Phase 2 publication checkpoint and was narrowed after review. | Exact file/directory replacement uses forward-only `RENAME_EXCHANGE`, synchronized content/tree observations, six finite replacement checkpoints, exact regular-file cleanup, complete retained-directory readiness evidence, static ambiguity classes, and a documented cooperative same-UID boundary. The pinned focused suite passed 160 tests, 20 dedicated concurrent cases passed, the integrated foundation suite passed 722 tests, and infrastructure passed 139 tests; command-specific recovery and `doctor` remain open. |
 
 ## Decision Log
 

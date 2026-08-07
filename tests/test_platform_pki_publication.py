@@ -18,7 +18,13 @@ import pytest
 from src.platform_pki import publication
 from src.platform_pki.errors import ApplicationError, render_error, shell_status
 from src.platform_pki.faults import FaultHook, InjectedFaultError, PauseHook
-from src.platform_pki.filesystem import FileIdentity, OpenedDirectory, OpenedFile, identity_at
+from src.platform_pki.filesystem import (
+    ABSENT,
+    FileIdentity,
+    OpenedDirectory,
+    OpenedFile,
+    identity_at,
+)
 from src.platform_pki.publication import (
     PUBLICATION_CHECKPOINTS,
     ExchangeResult,
@@ -31,14 +37,19 @@ from src.platform_pki.publication import (
     PublicationError,
     PublicationIdentityError,
     PublicationPolicyError,
+    PublicationReplacementAmbiguousError,
+    PublicationReplacementCleanupError,
     PublicationResult,
     PublicationStageError,
     PublicationTreeError,
+    ReplacementCleanupDisposition,
+    ReplacementResult,
     TreeReadiness,
     atomic_write_bytes,
     exchange_exact,
     fsync_tree,
     publish_no_clobber,
+    replace_exact,
     stage_file_bytes,
     unlink_exact,
 )
@@ -58,6 +69,22 @@ def _write(path: Path, data: bytes, mode: int = 0o600) -> FileIdentity:
     path.write_bytes(data)
     path.chmod(mode)
     return _identity(path)
+
+
+def _tree_readiness(
+    parent: OpenedDirectory,
+    path: Path,
+    name: str,
+) -> TreeReadiness:
+    with OpenedDirectory(path) as root:
+        return fsync_tree(root, parent, name)
+
+
+def _assert_same_tree(actual: TreeReadiness, expected: TreeReadiness) -> None:
+    assert actual.root_identity.state == expected.root_identity.state
+    assert actual.root_identity.mtime_ns == expected.root_identity.mtime_ns
+    assert actual.snapshot == expected.snapshot
+    assert actual.root_digest == expected.root_digest
 
 
 def _different_uid(result: os.stat_result) -> SimpleNamespace:
@@ -92,7 +119,7 @@ def _fail_second_directory_pin(
 
 def test_checkpoint_domain_is_finite_unique_and_literal() -> None:
     assert isinstance(PUBLICATION_CHECKPOINTS, tuple)
-    assert len(PUBLICATION_CHECKPOINTS) == len(set(PUBLICATION_CHECKPOINTS)) == 32
+    assert len(PUBLICATION_CHECKPOINTS) == len(set(PUBLICATION_CHECKPOINTS)) == 38
     assert {
         "stage-before-create",
         "stage-after-write",
@@ -100,6 +127,9 @@ def test_checkpoint_domain_is_finite_unique_and_literal() -> None:
         "publication-after-mutation",
         "exchange-before-mutation",
         "exchange-after-mutation",
+        "replacement-before-exchange",
+        "replacement-after-exchange-durability",
+        "replacement-terminal-validation",
         "cleanup-before-unlink",
         "tree-before-final-validation",
     } <= set(PUBLICATION_CHECKPOINTS)
@@ -393,6 +423,874 @@ def test_atomic_write_rejects_every_existing_destination(
     after = destination.lstat()
     assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
     assert not tuple(tmp_path.glob(".destination.stage-*"))
+
+
+def test_replace_file_exchanges_exact_inodes_and_removes_old_state(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new", 0o640)
+    destination_expected = _write(destination, b"old", 0o600)
+    with OpenedDirectory(tmp_path) as parent:
+        result = replace_exact(
+            parent,
+            "source",
+            source_expected,
+            parent,
+            "destination",
+            destination_expected,
+        )
+    assert isinstance(result, ReplacementResult)
+    assert result.destination_identity.ino == source_expected.ino
+    assert result.old_destination_identity.ino == destination_expected.ino
+    assert result.cleanup_disposition is ReplacementCleanupDisposition.REMOVED
+    assert result.old_destination_readiness is None
+    assert destination.read_bytes() == b"new"
+    assert destination.stat().st_ino == source_expected.ino
+    assert not source.exists()
+    with pytest.raises(FrozenInstanceError):
+        result.cleanup_disposition = ReplacementCleanupDisposition.REMOVED  # type: ignore[misc]
+
+
+def test_replace_emits_only_the_exact_replacement_checkpoint_inventory(
+    tmp_path: Path,
+) -> None:
+    source_expected = _write(tmp_path / "source", b"new")
+    destination_expected = _write(tmp_path / "destination", b"old")
+    observed: list[str] = []
+    with OpenedDirectory(tmp_path) as parent:
+        replace_exact(
+            parent,
+            "source",
+            source_expected,
+            parent,
+            "destination",
+            destination_expected,
+            fault_hook=observed.append,
+        )
+    assert observed == [
+        "replacement-before-exchange",
+        "replacement-after-exchange",
+        "replacement-after-exchange-durability",
+        "replacement-before-old-disposition",
+        "replacement-after-old-disposition",
+        "replacement-terminal-validation",
+    ]
+
+
+def test_atomic_write_replaces_only_explicit_exact_destination(tmp_path: Path) -> None:
+    destination = tmp_path / "destination"
+    expected = _write(destination, b"old")
+    wrong = FileIdentity(
+        expected.dev,
+        expected.ino,
+        expected.uid,
+        expected.permissions,
+        expected.links,
+        expected.size + 1,
+        expected.mtime_ns,
+        expected.ctime_ns,
+        expected.kind,
+    )
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationIdentityError):
+            atomic_write_bytes(
+                parent,
+                "destination",
+                b"rejected",
+                expected_destination=wrong,
+            )
+        assert destination.read_bytes() == b"old"
+        result = atomic_write_bytes(
+            parent,
+            "destination",
+            b"new",
+            expected_destination=expected,
+        )
+    assert isinstance(result, ReplacementResult)
+    assert destination.read_bytes() == b"new"
+    assert not tuple(tmp_path.glob(".destination.stage-*"))
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(TypeError):
+            atomic_write_bytes(
+                parent,
+                "other",
+                b"data",
+                expected_destination=None,
+            )
+        atomic_write_bytes(parent, "other", b"data", expected_destination=ABSENT)
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "old_stage_retained"),
+    (
+        ("replacement-before-old-disposition", True),
+        ("replacement-terminal-validation", False),
+    ),
+)
+def test_atomic_write_replacement_preserves_recoverable_ambiguous_state(
+    checkpoint: str,
+    old_stage_retained: bool,
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "destination"
+    expected = _write(destination, b"old")
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationAmbiguousError):
+            atomic_write_bytes(
+                parent,
+                "destination",
+                b"new",
+                expected_destination=expected,
+                fault_hook=FaultHook(failure_at=checkpoint),
+            )
+    assert destination.read_bytes() == b"new"
+    stages = tuple(tmp_path.glob(".destination.stage-*"))
+    assert bool(stages) is old_stage_retained
+    if old_stage_retained:
+        assert len(stages) == 1
+        assert stages[0].read_bytes() == b"old"
+        assert stages[0].stat().st_ino == expected.ino
+
+
+def test_atomic_write_preserves_primary_over_redacted_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "secret-destination"
+    expected = _write(destination, b"old-secret")
+
+    def fail_cleanup(_name: str, *, dir_fd: int | None = None) -> None:
+        del dir_fd
+        raise OSError("secret cleanup diagnostic")
+
+    monkeypatch.setattr(publication.os, "unlink", fail_cleanup)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(InjectedFaultError) as caught:
+            atomic_write_bytes(
+                parent,
+                "secret-destination",
+                b"new-secret",
+                expected_destination=expected,
+                fault_hook=FaultHook(failure_at="replacement-before-exchange"),
+            )
+    assert isinstance(caught.value.__cause__, PublicationCleanupError)
+    assert destination.read_bytes() == b"old-secret"
+    stages = tuple(tmp_path.glob(".secret-destination.stage-*"))
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == b"new-secret"
+    rendered = render_error(caught.value)
+    for secret in (
+        "secret-destination",
+        "old-secret",
+        "new-secret",
+        "secret cleanup diagnostic",
+        os.fspath(tmp_path),
+    ):
+        assert secret not in str(caught.value)
+        assert secret not in repr(caught.value)
+        assert secret not in str(caught.value.__cause__)
+        assert secret not in rendered
+
+
+def test_replace_directory_retains_complete_old_tree_and_readiness_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    _write(source / "value", b"new")
+    child = destination / "child"
+    child.mkdir(mode=0o700)
+    _write(child / "value", b"old")
+    source_expected = _identity(source)
+    destination_expected = _identity(destination)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationPolicyError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+        with OpenedDirectory(source) as source_root:
+            source_readiness = fsync_tree(source_root, parent, "source")
+        with OpenedDirectory(destination) as destination_root:
+            destination_readiness = fsync_tree(
+                destination_root, parent, "destination"
+            )
+
+        def reject_cleanup(*_arguments: object, **_keywords: object) -> None:
+            pytest.fail("directory replacement invoked a cleanup syscall")
+
+        monkeypatch.setattr(publication.os, "unlink", reject_cleanup)
+        monkeypatch.setattr(publication.os, "rmdir", reject_cleanup)
+        result = replace_exact(
+            parent,
+            "source",
+            source_expected,
+            parent,
+            "destination",
+            destination_expected,
+            source_readiness=source_readiness,
+            destination_readiness=destination_readiness,
+        )
+    assert result.destination_identity.ino == source_expected.ino
+    assert result.old_destination_identity.ino == destination_expected.ino
+    assert result.cleanup_disposition is ReplacementCleanupDisposition.RETAINED
+    assert result.old_destination_readiness is destination_readiness
+    assert (destination / "value").read_bytes() == b"new"
+    assert (source / "child/value").read_bytes() == b"old"
+    assert source.stat().st_ino == destination_expected.ino
+    with OpenedDirectory(tmp_path) as parent:
+        retained_readiness = _tree_readiness(parent, source, "source")
+    assert retained_readiness.root_identity == result.old_destination_identity
+    _assert_same_tree(retained_readiness, destination_readiness)
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    (
+        "replacement-after-exchange",
+        "replacement-after-exchange-durability",
+        "replacement-before-old-disposition",
+        "replacement-after-old-disposition",
+        "replacement-terminal-validation",
+    ),
+)
+def test_directory_replacement_fault_retains_both_exact_complete_trees(
+    checkpoint: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    source_child = source / "child"
+    destination_child = destination / "child"
+    source_child.mkdir(mode=0o700)
+    destination_child.mkdir(mode=0o700)
+    _write(source_child / "value", b"new")
+    _write(destination_child / "value", b"old")
+    source_expected = _identity(source)
+    destination_expected = _identity(destination)
+    with OpenedDirectory(tmp_path) as parent:
+        source_readiness = _tree_readiness(parent, source, "source")
+        destination_readiness = _tree_readiness(
+            parent, destination, "destination"
+        )
+        with pytest.raises(PublicationAmbiguousError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                source_readiness=source_readiness,
+                destination_readiness=destination_readiness,
+                fault_hook=FaultHook(failure_at=checkpoint),
+            )
+        retained_old = _tree_readiness(parent, source, "source")
+        retained_new = _tree_readiness(parent, destination, "destination")
+    _assert_same_tree(retained_old, destination_readiness)
+    _assert_same_tree(retained_new, source_readiness)
+
+
+@pytest.mark.parametrize("race", ("source", "destination"))
+def test_replace_pre_exchange_name_races_leave_both_original_names_untouched(
+    race: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    retained = tmp_path / f"retained-{race}"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+
+    def replace(point: str) -> None:
+        if point != "replacement-before-exchange":
+            return
+        path = source if race == "source" else destination
+        path.rename(retained)
+        _write(path, b"competitor")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationIdentityError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=replace,
+            )
+    unchanged = destination if race == "source" else source
+    assert unchanged.read_bytes() == (b"old" if race == "source" else b"new")
+    assert retained.read_bytes() == (b"new" if race == "source" else b"old")
+    assert (source if race == "source" else destination).read_bytes() == b"competitor"
+
+
+@pytest.mark.parametrize("operand", ("source", "destination"))
+def test_replace_syscall_boundary_operand_race_is_ambiguous_and_keeps_all_inodes(
+    operand: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    retained = tmp_path / f"retained-{operand}"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    competitor: FileIdentity | None = None
+    real_renameat2 = publication._renameat2
+
+    def race_then_exchange(
+        first_parent: publication._PinnedDirectory,
+        first_name: str,
+        second_parent: publication._PinnedDirectory,
+        second_name: str,
+        flags: int,
+    ) -> None:
+        nonlocal competitor
+        raced_path = source if operand == "source" else destination
+        raced_path.rename(retained)
+        competitor = _write(raced_path, f"{operand}-racer".encode())
+        real_renameat2(
+            first_parent,
+            first_name,
+            second_parent,
+            second_name,
+            flags,
+        )
+
+    monkeypatch.setattr(publication, "_renameat2", race_then_exchange)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationAmbiguousError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+    assert competitor is not None
+    if operand == "source":
+        expected_locations = {
+            retained: source_expected,
+            source: destination_expected,
+            destination: competitor,
+        }
+    else:
+        expected_locations = {
+            retained: destination_expected,
+            source: competitor,
+            destination: source_expected,
+        }
+    for path, expected in expected_locations.items():
+        actual = _identity(path)
+        assert actual.state == expected.state
+        assert actual.mtime_ns == expected.mtime_ns
+    assert {path.read_bytes() for path in expected_locations} == {
+        b"new",
+        b"old",
+        f"{operand}-racer".encode(),
+    }
+    assert set(tmp_path.iterdir()) == set(expected_locations)
+
+
+@pytest.mark.parametrize("race", ("source-bytes", "destination-mode", "destination-link"))
+def test_replace_rejects_same_inode_pre_exchange_mutations(
+    race: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+
+    def mutate(point: str) -> None:
+        if point != "replacement-before-exchange":
+            return
+        if race == "source-bytes":
+            source.write_bytes(b"NEW")
+        elif race == "destination-mode":
+            destination.chmod(0o400)
+        else:
+            os.link(destination, tmp_path / "competitor-link")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationIdentityError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=mutate,
+            )
+    assert source.exists() and destination.exists()
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "source_retained", "error_type"),
+    (
+        ("replacement-after-exchange", True, PublicationReplacementAmbiguousError),
+        (
+            "replacement-after-exchange-durability",
+            True,
+            PublicationReplacementAmbiguousError,
+        ),
+        (
+            "replacement-before-old-disposition",
+            True,
+            PublicationReplacementAmbiguousError,
+        ),
+        ("replacement-after-old-disposition", False, PublicationAmbiguousError),
+        ("replacement-terminal-validation", False, PublicationAmbiguousError),
+    ),
+)
+def test_replace_checkpoint_failures_preserve_forward_observable_state(
+    checkpoint: str,
+    source_retained: bool,
+    error_type: type[BaseException],
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(error_type):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=FaultHook(failure_at=checkpoint),
+            )
+    assert destination.read_bytes() == b"new"
+    assert destination.stat().st_ino == source_expected.ino
+    assert source.exists() is source_retained
+    if source_retained:
+        assert source.read_bytes() == b"old"
+        assert source.stat().st_ino == destination_expected.ino
+
+
+def test_replace_cleanup_failure_and_competitor_are_retained(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    real_unlink = os.unlink
+
+    def fail_old(name: str, *, dir_fd: int | None = None) -> None:
+        if name == "source":
+            raise OSError("secret cleanup failure")
+        real_unlink(name, dir_fd=dir_fd)
+
+    monkeypatch.setattr(publication.os, "unlink", fail_old)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationReplacementCleanupError) as caught:
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+    assert "secret" not in str(caught.value)
+    assert destination.read_bytes() == b"new"
+    assert source.read_bytes() == b"old"
+
+    monkeypatch.setattr(publication.os, "unlink", real_unlink)
+    source.unlink()
+    _write(source, b"competitor")
+    assert source.read_bytes() == b"competitor"
+
+
+def test_replace_cleanup_failure_after_unlink_reports_unconfirmed_durability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    real_unlink = os.unlink
+
+    def unlink_then_fail(name: str, *, dir_fd: int | None = None) -> None:
+        real_unlink(name, dir_fd=dir_fd)
+        if name == "source":
+            raise OSError("secret post-unlink failure")
+
+    monkeypatch.setattr(publication.os, "unlink", unlink_then_fail)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationDurabilityError) as caught:
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+    assert "secret" not in str(caught.value)
+    assert destination.read_bytes() == b"new"
+    assert not source.exists()
+
+
+def test_replace_cleanup_checkpoint_preserves_competing_source_name(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    retained = tmp_path / "retained-old"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+
+    def compete(point: str) -> None:
+        if point == "replacement-before-old-disposition":
+            source.rename(retained)
+            _write(source, b"competitor")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationAmbiguousError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=compete,
+            )
+    assert destination.read_bytes() == b"new"
+    assert retained.read_bytes() == b"old"
+    assert source.read_bytes() == b"competitor"
+
+
+@pytest.mark.parametrize("mutation", ("bytes", "size", "mode", "owner", "link"))
+def test_replace_rejects_same_inode_post_exchange_destination_mutation(
+    mutation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    changed = False
+    owner_changed = False
+    real_fstat = os.fstat
+
+    def observe_owner(fd: int):
+        result = real_fstat(fd)
+        if owner_changed and result.st_ino == source_expected.ino:
+            return _different_uid(result)
+        return result
+
+    monkeypatch.setattr(publication.os, "fstat", observe_owner)
+
+    def mutate(point: str) -> None:
+        nonlocal changed, owner_changed
+        if point != "replacement-before-old-disposition" or changed:
+            return
+        changed = True
+        if mutation == "bytes":
+            destination.write_bytes(b"NEW")
+        elif mutation == "size":
+            with destination.open("ab") as stream:
+                stream.write(b"!")
+        elif mutation == "mode":
+            destination.chmod(0o400)
+        elif mutation == "owner":
+            owner_changed = True
+        else:
+            os.link(destination, tmp_path / "retained-link")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationAmbiguousError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=mutate,
+            )
+    assert source.read_bytes() == b"old"
+    assert destination.stat().st_ino == source_expected.ino
+
+
+def test_replace_directory_rechecks_nested_state_after_before_exchange_hook(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    _write(source / "value", b"new")
+    _write(destination / "value", b"old")
+    source_expected = _identity(source)
+    destination_expected = _identity(destination)
+
+    def mutate(point: str) -> None:
+        if point == "replacement-before-exchange":
+            (destination / "value").write_bytes(b"OLD")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with OpenedDirectory(source) as source_root:
+            source_readiness = fsync_tree(source_root, parent, "source")
+        with OpenedDirectory(destination) as destination_root:
+            destination_readiness = fsync_tree(
+                destination_root, parent, "destination"
+            )
+        with pytest.raises(PublicationTreeError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                source_readiness=source_readiness,
+                destination_readiness=destination_readiness,
+                fault_hook=mutate,
+            )
+    assert (source / "value").read_bytes() == b"new"
+    assert (destination / "value").read_bytes() == b"OLD"
+    assert source.stat().st_ino == source_expected.ino
+    assert destination.stat().st_ino == destination_expected.ino
+
+
+def test_replace_post_exchange_destination_competitor_is_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    retained_new = tmp_path / "retained-new"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+
+    def compete(point: str) -> None:
+        if point == "replacement-after-exchange":
+            destination.rename(retained_new)
+            _write(destination, b"competitor")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationAmbiguousError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=compete,
+            )
+    assert retained_new.read_bytes() == b"new"
+    assert destination.read_bytes() == b"competitor"
+    assert source.read_bytes() == b"old"
+
+
+def test_replace_cross_parent_same_device_syncs_and_cleans_source_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_parent_path = tmp_path / "source-parent"
+    destination_parent_path = tmp_path / "destination-parent"
+    source_parent_path.mkdir()
+    destination_parent_path.mkdir()
+    source_expected = _write(source_parent_path / "source", b"new")
+    destination_expected = _write(destination_parent_path / "destination", b"old")
+    order: list[int] = []
+    real_fsync = os.fsync
+
+    def record(fd: int) -> None:
+        order.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr(publication.os, "fsync", record)
+    with (
+        OpenedDirectory(source_parent_path) as source_parent,
+        OpenedDirectory(destination_parent_path) as destination_parent,
+    ):
+        source_parent_inode = source_parent.identity.ino
+        destination_parent_inode = destination_parent.identity.ino
+        replace_exact(
+            source_parent,
+            "source",
+            source_expected,
+            destination_parent,
+            "destination",
+            destination_expected,
+        )
+    assert order == [
+        source_expected.ino,
+        destination_expected.ino,
+        source_parent_inode,
+        destination_parent_inode,
+        source_parent_inode,
+    ]
+    assert not (source_parent_path / "source").exists()
+    assert (destination_parent_path / "destination").read_bytes() == b"new"
+
+
+@pytest.mark.parametrize(("directory_sync", "source_retained"), ((1, True), (2, False)))
+def test_replace_parent_fsync_failures_report_durable_ambiguity(
+    directory_sync: int,
+    source_retained: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    real_fsync = os.fsync
+    seen = 0
+
+    def fail_selected(fd: int) -> None:
+        nonlocal seen
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            seen += 1
+            if seen == directory_sync:
+                raise OSError("secret durability failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(publication.os, "fsync", fail_selected)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationDurabilityError) as caught:
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+    assert "secret" not in str(caught.value)
+    assert destination.read_bytes() == b"new"
+    assert source.exists() is source_retained
+    if source_retained:
+        assert source.read_bytes() == b"old"
+
+
+@pytest.mark.parametrize("unsafe", ("mixed-kind", "source-mode", "destination-link"))
+def test_replace_rejects_kind_mode_and_link_policy_before_exchange(
+    unsafe: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    if unsafe == "mixed-kind":
+        destination.mkdir(mode=0o700)
+    else:
+        destination_expected = _write(destination, b"old")
+        if unsafe == "source-mode":
+            source.chmod(0o622)
+            source_expected = _identity(source)
+        else:
+            os.link(destination, tmp_path / "destination-link")
+            destination_expected = _identity(destination)
+    destination_expected = _identity(destination)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationPolicyError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+    assert source.exists() and destination.exists()
+
+
+def test_replace_pins_survive_caller_close_and_descriptor_reuse(tmp_path: Path) -> None:
+    source_parent_path = tmp_path / "source-parent"
+    destination_parent_path = tmp_path / "destination-parent"
+    source_parent_path.mkdir()
+    destination_parent_path.mkdir()
+    source_expected = _write(source_parent_path / "source", b"new")
+    destination_expected = _write(destination_parent_path / "destination", b"old")
+    source_parent = OpenedDirectory(source_parent_path)
+    destination_parent = OpenedDirectory(destination_parent_path)
+    reused: list[int] = []
+
+    def close_and_reuse(point: str) -> None:
+        if point == "replacement-before-exchange":
+            source_parent.close()
+            destination_parent.close()
+            reused.extend(
+                os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC) for _ in range(2)
+            )
+
+    try:
+        replace_exact(
+            source_parent,
+            "source",
+            source_expected,
+            destination_parent,
+            "destination",
+            destination_expected,
+            fault_hook=close_and_reuse,
+        )
+    finally:
+        source_parent.close()
+        destination_parent.close()
+        for descriptor in reused:
+            os.close(descriptor)
+    assert not (source_parent_path / "source").exists()
+    assert (destination_parent_path / "destination").read_bytes() == b"new"
+
+
+def test_replacement_retry_does_not_infer_or_mutate_post_exchange_state(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationReplacementAmbiguousError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                fault_hook=FaultHook(failure_at="replacement-before-old-disposition"),
+            )
+        with pytest.raises(PublicationIdentityError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+            )
+    assert source.read_bytes() == b"old"
+    assert destination.read_bytes() == b"new"
 
 
 def test_no_clobber_directory_preserves_exact_inode_and_tree(tmp_path: Path) -> None:
@@ -1370,6 +2268,178 @@ def test_cross_device_exchange_is_rejected_where_available(tmp_path: Path) -> No
         shutil.rmtree(second_parent_path)
 
 
+def test_cross_device_replacement_is_rejected_where_available(tmp_path: Path) -> None:
+    shared = Path("/dev/shm")
+    if not shared.is_dir() or shared.stat().st_dev == tmp_path.stat().st_dev:
+        pytest.skip("a writable second filesystem is unavailable")
+    destination_parent_path = Path(
+        tempfile.mkdtemp(prefix="platform-pki-replacement-", dir=shared)
+    )
+    try:
+        source_expected = _write(tmp_path / "source", b"new")
+        destination = destination_parent_path / "destination"
+        destination_expected = _write(destination, b"old")
+        with (
+            OpenedDirectory(tmp_path) as source_parent,
+            OpenedDirectory(destination_parent_path) as destination_parent,
+        ):
+            with pytest.raises(PublicationCrossDeviceError):
+                replace_exact(
+                    source_parent,
+                    "source",
+                    source_expected,
+                    destination_parent,
+                    "destination",
+                    destination_expected,
+                )
+        assert (tmp_path / "source").read_bytes() == b"new"
+        assert destination.read_bytes() == b"old"
+    finally:
+        shutil.rmtree(destination_parent_path)
+
+
+@pytest.mark.parametrize("_iteration", range(20))
+def test_simultaneous_exact_replacements_preserve_only_enumerated_states(
+    _iteration: int,
+    tmp_path: Path,
+) -> None:
+    del _iteration
+    destination = tmp_path / "destination"
+    original_identities = {b"old": _write(destination, b"old")}
+    for name, payload in (("source-first", b"first"), ("source-second", b"second")):
+        original_identities[payload] = _write(tmp_path / name, payload)
+    script = (
+        "import os,sys\n"
+        "from src.platform_pki.filesystem import OpenedDirectory,identity_at\n"
+        "from src.platform_pki.publication import replace_exact,"
+        "PublicationAmbiguousError,PublicationIdentityError\n"
+        "ready=int(sys.argv[3]); release=int(sys.argv[4])\n"
+        "def pause(point):\n"
+        " if point != 'replacement-before-exchange': return\n"
+        " os.write(ready,b'R'); os.close(ready)\n"
+        " try:\n"
+        "  if os.read(release,1) != b'G': raise RuntimeError('release closed')\n"
+        " finally: os.close(release)\n"
+        "with OpenedDirectory(sys.argv[1]) as parent:\n"
+        " source=identity_at(sys.argv[2],dir_fd=parent)\n"
+        " destination=identity_at('destination',dir_fd=parent)\n"
+        " try: replace_exact(parent,sys.argv[2],source,parent,'destination',"
+        "destination,pause_hook=pause)\n"
+        " except PublicationIdentityError: print('identity')\n"
+        " except PublicationAmbiguousError: print('ambiguous')\n"
+        " else: print('replaced')\n"
+    )
+    processes: list[subprocess.Popen[bytes]] = []
+    ready_reads: list[int] = []
+    release_writes: list[int] = []
+    open_fds: set[int] = set()
+    try:
+        for name in ("source-first", "source-second"):
+            ready_read, ready_write = os.pipe()
+            release_read, release_write = os.pipe()
+            open_fds.update((ready_read, ready_write, release_read, release_write))
+            try:
+                process = subprocess.Popen(
+                    (
+                        PYTHON,
+                        "-c",
+                        script,
+                        os.fspath(tmp_path),
+                        name,
+                        str(ready_write),
+                        str(release_read),
+                    ),
+                    cwd=ROOT,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    pass_fds=(ready_write, release_read),
+                )
+            finally:
+                os.close(ready_write)
+                os.close(release_read)
+                open_fds.difference_update((ready_write, release_read))
+            processes.append(process)
+            ready_reads.append(ready_read)
+            release_writes.append(release_write)
+        for descriptor in ready_reads:
+            readable, _, _ = select.select((descriptor,), (), (), 3)
+            assert readable and os.read(descriptor, 1) == b"R"
+            os.close(descriptor)
+            open_fds.discard(descriptor)
+        for descriptor in release_writes:
+            os.write(descriptor, b"G")
+            os.close(descriptor)
+            open_fds.discard(descriptor)
+        observations = [
+            (*process.communicate(timeout=3), process.returncode)
+            for process in processes
+        ]
+    finally:
+        for descriptor in open_fds:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
+    assert all(returncode == 0 for _stdout, _stderr, returncode in observations)
+    assert all(stderr == b"" for _stdout, stderr, _returncode in observations)
+    outcomes = tuple(
+        stdout.removesuffix(b"\n").decode("ascii")
+        for stdout, _stderr, _returncode in observations
+    )
+    assert outcomes in {
+        ("replaced", "identity"),
+        ("identity", "replaced"),
+        ("replaced", "ambiguous"),
+        ("ambiguous", "replaced"),
+        ("ambiguous", "ambiguous"),
+    }
+
+    names = {
+        "destination": destination,
+        "source-first": tmp_path / "source-first",
+        "source-second": tmp_path / "source-second",
+    }
+    located: dict[int, str] = {}
+    for name, path in names.items():
+        if not path.exists():
+            continue
+        payload = path.read_bytes()
+        assert payload in original_identities
+        identity = _identity(path)
+        assert identity.state == original_identities[payload].state
+        assert identity.mtime_ns == original_identities[payload].mtime_ns
+        assert identity.ino not in located
+        located[identity.ino] = name
+
+    for payload in (b"first", b"second"):
+        assert original_identities[payload].ino in located
+    assert destination.read_bytes() in {b"first", b"second"}
+    old_retained = original_identities[b"old"].ino in located
+    absent_sources = sum(
+        not names[name].exists() for name in ("source-first", "source-second")
+    )
+    if old_retained:
+        assert outcomes == ("ambiguous", "ambiguous")
+        assert located[original_identities[b"old"].ino] in {
+            "source-first",
+            "source-second",
+        }
+        assert absent_sources == 0
+    else:
+        assert absent_sources == 1
+        absent_index = next(
+            index
+            for index, name in enumerate(("source-first", "source-second"))
+            if not names[name].exists()
+        )
+        assert outcomes[absent_index] in {"replaced", "ambiguous"}
+
+
 def test_simultaneous_no_clobber_publishers_have_one_winner(tmp_path: Path) -> None:
     script = (
         "import os,sys\n"
@@ -1531,6 +2601,110 @@ def test_sigkill_at_publication_mutation_boundaries_retains_observable_state(
         assert stages[0].read_bytes() == b"payload"
 
 
+@pytest.mark.parametrize(
+    ("checkpoint", "source_retained"),
+    (
+        ("replacement-after-exchange", True),
+        ("replacement-after-exchange-durability", True),
+        ("replacement-before-old-disposition", True),
+        ("replacement-after-old-disposition", False),
+        ("replacement-terminal-validation", False),
+    ),
+)
+def test_sigkill_after_replacement_exchange_preserves_recovery_observations(
+    checkpoint: str,
+    source_retained: bool,
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "source", b"new")
+    _write(tmp_path / "destination", b"old")
+    script = (
+        "import sys\n"
+        "from src.platform_pki.faults import FaultHook\n"
+        "from src.platform_pki.filesystem import OpenedDirectory,identity_at\n"
+        "from src.platform_pki.publication import replace_exact\n"
+        "with OpenedDirectory(sys.argv[1]) as parent:\n"
+        " source=identity_at('source',dir_fd=parent)\n"
+        " destination=identity_at('destination',dir_fd=parent)\n"
+        " replace_exact(parent,'source',source,parent,'destination',destination,"
+        "fault_hook=FaultHook(crash_at=sys.argv[2]))\n"
+    )
+    result = subprocess.run(
+        (PYTHON, "-c", script, os.fspath(tmp_path), checkpoint),
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=3,
+    )
+    assert shell_status(result.returncode) == 137
+    assert result.stdout == result.stderr == b""
+    assert (tmp_path / "destination").read_bytes() == b"new"
+    assert (tmp_path / "source").exists() is source_retained
+    if source_retained:
+        assert (tmp_path / "source").read_bytes() == b"old"
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    (
+        "replacement-after-exchange",
+        "replacement-after-exchange-durability",
+        "replacement-before-old-disposition",
+        "replacement-after-old-disposition",
+        "replacement-terminal-validation",
+    ),
+)
+def test_sigkill_after_directory_exchange_retains_both_exact_complete_trees(
+    checkpoint: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    _write(source / "value", b"new")
+    _write(destination / "value", b"old")
+    with OpenedDirectory(tmp_path) as parent:
+        source_readiness = _tree_readiness(parent, source, "source")
+        destination_readiness = _tree_readiness(
+            parent, destination, "destination"
+        )
+    script = (
+        "import sys\n"
+        "from src.platform_pki.faults import FaultHook\n"
+        "from src.platform_pki.filesystem import OpenedDirectory,identity_at\n"
+        "from src.platform_pki.publication import fsync_tree,replace_exact\n"
+        "with OpenedDirectory(sys.argv[1]) as parent:\n"
+        " source=identity_at('source',dir_fd=parent)\n"
+        " destination=identity_at('destination',dir_fd=parent)\n"
+        " with OpenedDirectory(sys.argv[1]+'/source') as root:\n"
+        "  source_ready=fsync_tree(root,parent,'source')\n"
+        " with OpenedDirectory(sys.argv[1]+'/destination') as root:\n"
+        "  destination_ready=fsync_tree(root,parent,'destination')\n"
+        " replace_exact(parent,'source',source,parent,'destination',destination,"
+        "source_readiness=source_ready,destination_readiness=destination_ready,"
+        "fault_hook=FaultHook(crash_at=sys.argv[2]))\n"
+    )
+    result = subprocess.run(
+        (PYTHON, "-c", script, os.fspath(tmp_path), checkpoint),
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=3,
+    )
+    assert shell_status(result.returncode) == 137
+    assert result.stdout == result.stderr == b""
+    with OpenedDirectory(tmp_path) as parent:
+        retained_old = _tree_readiness(parent, source, "source")
+        retained_new = _tree_readiness(parent, destination, "destination")
+    _assert_same_tree(retained_old, destination_readiness)
+    _assert_same_tree(retained_new, source_readiness)
+
+
 def test_owned_descriptor_is_closed_across_exec_even_with_close_fds_false(
     tmp_path: Path,
 ) -> None:
@@ -1576,3 +2750,11 @@ def test_public_errors_are_static_and_redact_paths_bytes_and_os_errors(tmp_path:
     assert issubclass(PublicationAmbiguousError, PublicationError)
     assert issubclass(PublicationDurabilityError, PublicationAmbiguousError)
     assert issubclass(PublicationCleanupError, PublicationError)
+    assert issubclass(
+        PublicationReplacementAmbiguousError,
+        PublicationAmbiguousError,
+    )
+    assert issubclass(
+        PublicationReplacementCleanupError,
+        PublicationReplacementAmbiguousError,
+    )

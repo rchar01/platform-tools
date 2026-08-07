@@ -19,14 +19,18 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anonymous `O_TMPFILE` no-clobber lazy creation, no-state and deterministic
   race-hook support, primary-exception-preserving cleanup, owned same-parent
   exact-byte staging, identity-bound unlink, Linux `renameat2` no-clobber file
-  and directory publication, exact file and directory exchange,
+  and directory publication, exact file and directory exchange, guarded exact
+  existing-destination replacement with forward-only regular-file cleanup and
+  complete retained-directory evidence,
   fsynced and content-observed regular sources, immutable parent-bound tree
   readiness, descriptor-relative tree synchronization, operation-lifetime
   parent/path-chain pins, post-unlink ambiguity reporting, deterministic
   transaction test hooks, secret-safe errors, no-state parser behavior, and
-  installed-layout verification. Guarded replacement of an existing destination
-  is not yet implemented. Existing operational `platform-pki-*` commands remain
-  on their Bash implementations during migration.
+  installed-layout verification. Replacement requires explicit source and
+  destination identities under cooperative locks and exclusive stage ownership,
+  returns immutable disposition evidence, and never claims rollback. Existing
+  operational `platform-pki-*` commands remain on their Bash implementations
+  during migration.
 
 ### Changed
 

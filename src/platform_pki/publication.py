@@ -1,11 +1,11 @@
 """Linux descriptor-bound durable publication primitives.
 
-The APIs in this module operate on already-opened parent directories.  They do
-not provide guarded replacement of an existing destination.  Exact unlink has
-an unavoidable same-UID limitation: Python exposes no unlink-by-handle, so a
-hostile process with write access to the parent can replace a name between the
-last identity check and ``unlinkat``.  Cooperative replacement at the exposed
-checkpoint is detected and the competing object is preserved.
+Callers must hold the required cooperative lifecycle/operation locks and own
+stage names exclusively. Linux has no identity-conditional compare-and-swap
+exchange, so a noncooperating same-UID writer can race the final checks. Exact
+regular-file unlink has the additional unavoidable check-to-``unlinkat`` race
+because Python exposes no unlink-by-handle. Cooperative replacement at exposed
+checkpoints is detected and the competing object is preserved.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import os
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from types import TracebackType
 
 from . import filesystem
@@ -62,6 +63,12 @@ _CHECKPOINTS = (
     "exchange-after-parent-fsync",
     "exchange-before-final-validation",
     "exchange-after-final-validation",
+    "replacement-before-exchange",
+    "replacement-after-exchange",
+    "replacement-after-exchange-durability",
+    "replacement-before-old-disposition",
+    "replacement-after-old-disposition",
+    "replacement-terminal-validation",
     "cleanup-before-unlink",
     "cleanup-after-unlink",
     "cleanup-before-parent-fsync",
@@ -150,6 +157,22 @@ class PublicationCleanupAmbiguousError(PublicationAmbiguousError):
         )
 
 
+class PublicationReplacementAmbiguousError(PublicationAmbiguousError):
+    def __init__(self) -> None:
+        ApplicationError.__init__(
+            self,
+            "Publication replaced the destination and requires inspection",
+        )
+
+
+class PublicationReplacementCleanupError(PublicationReplacementAmbiguousError):
+    def __init__(self) -> None:
+        ApplicationError.__init__(
+            self,
+            "Publication replaced the destination but old-state cleanup is incomplete",
+        )
+
+
 class PublicationTreeError(PublicationError):
     def __init__(self) -> None:
         super().__init__("Publication tree could not be synchronized safely")
@@ -172,6 +195,25 @@ class ExchangeResult:
     second_identity: FileIdentity
     first_parent: DirectoryIdentity
     second_parent: DirectoryIdentity
+
+
+class ReplacementCleanupDisposition(Enum):
+    """Terminal disposition of the exact old destination."""
+
+    REMOVED = "removed"
+    RETAINED = "retained"
+
+
+@dataclass(frozen=True, slots=True)
+class ReplacementResult:
+    """Final replacement identity and exact displaced-state evidence."""
+
+    destination_identity: FileIdentity
+    old_destination_identity: FileIdentity
+    cleanup_disposition: ReplacementCleanupDisposition
+    old_destination_readiness: TreeReadiness | None = field(repr=False)
+    source_parent: DirectoryIdentity
+    destination_parent: DirectoryIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -1203,6 +1245,295 @@ def exchange_exact(
         first_pin.close()
 
 
+def _removed_at(parent_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as error:
+        if error.errno == errno.ENOENT:
+            return True
+        raise PublicationReplacementCleanupError() from None
+    return False
+
+
+def _remove_replaced_regular(
+    parent: _PinnedDirectory,
+    name: str,
+    expected: FileIdentity,
+    descriptor: int,
+) -> None:
+    current = _stat_at(parent, name)
+    if current != expected or _fstat(descriptor) != expected:
+        raise PublicationReplacementCleanupError()
+    try:
+        os.unlink(name, dir_fd=parent.fileno())
+    except OSError:
+        raise PublicationReplacementCleanupError() from None
+    opened = _fstat(descriptor)
+    if not _same_inode(opened, expected) or opened.links != 0:
+        raise PublicationReplacementCleanupError()
+    if not _removed_at(parent.fileno(), name):
+        raise PublicationReplacementCleanupError()
+    _sync_parent(parent)
+
+
+def replace_exact(
+    source_parent: OpenedDirectory,
+    source_name: str | os.PathLike[str],
+    expected_source: FileIdentity,
+    destination_parent: OpenedDirectory,
+    destination_name: str | os.PathLike[str],
+    expected_destination: FileIdentity,
+    *,
+    source_readiness: TreeReadiness | None = None,
+    destination_readiness: TreeReadiness | None = None,
+    fault_hook: Hook = DEFAULT_FAULT_HOOK,
+    pause_hook: Hook = DEFAULT_PAUSE_HOOK,
+) -> ReplacementResult:
+    """Replace one exact destination under cooperative locking and stage ownership.
+
+    Both names remain untouched on failures before ``RENAME_EXCHANGE``.  Once
+    exchanged, this function never attempts rollback: the new destination is
+    retained and failures are reported as ambiguous. Regular displaced files
+    are identity-unlinked; complete displaced directory trees remain at the
+    source name for later caller-journaled cleanup. Linux provides no
+    compare-and-swap exchange, and regular cleanup has the same same-UID final
+    name-check limitation documented for :func:`unlink_exact`.
+    """
+
+    if not isinstance(source_parent, OpenedDirectory) or not isinstance(
+        destination_parent, OpenedDirectory
+    ):
+        raise TypeError("replacement parents must be OpenedDirectory objects")
+    if not isinstance(expected_source, FileIdentity) or not isinstance(
+        expected_destination, FileIdentity
+    ):
+        raise TypeError("replacement identities must be FileIdentity objects")
+    source = _single_name(source_name, "source_name")
+    destination = _single_name(destination_name, "destination_name")
+    if expected_source.kind != expected_destination.kind:
+        raise PublicationPolicyError()
+    if expected_source.kind == "directory" and (
+        not isinstance(source_readiness, TreeReadiness)
+        or not isinstance(destination_readiness, TreeReadiness)
+    ):
+        raise PublicationPolicyError()
+    if expected_source.kind == "regular" and (
+        source_readiness is not None or destination_readiness is not None
+    ):
+        raise PublicationPolicyError()
+    _hooks(fault_hook, pause_hook)
+
+    source_pin = _pin_directory(source_parent)
+    try:
+        destination_pin = (
+            source_pin
+            if destination_parent is source_parent
+            else _pin_directory(destination_parent)
+        )
+    except BaseException:
+        source_pin.close()
+        raise
+    assert source_pin.directory_identity is not None
+    assert destination_pin.directory_identity is not None
+    if source_pin.directory_identity == destination_pin.directory_identity and (
+        source == destination
+    ):
+        if destination_pin is not source_pin:
+            destination_pin.close()
+        source_pin.close()
+        raise ValueError("replacement names must differ")
+    if (
+        expected_source.dev != source_pin.directory_identity.dev
+        or expected_destination.dev != destination_pin.directory_identity.dev
+        or source_pin.directory_identity.dev != destination_pin.directory_identity.dev
+    ):
+        if destination_pin is not source_pin:
+            destination_pin.close()
+        source_pin.close()
+        raise PublicationCrossDeviceError()
+
+    source_fd = -1
+    destination_fd = -1
+    exchanged = False
+    cleanup_started = False
+    cleanup_removed = False
+    try:
+        source_fd = _open_exact(source_pin, source, expected_source)
+        destination_fd = _open_exact(
+            destination_pin, destination, expected_destination
+        )
+        _checkpoint("replacement-before-exchange", fault_hook, pause_hook)
+        source_regular = destination_regular = None
+        if expected_source.kind == "regular":
+            source_regular = _prepare_regular_source(
+                source_pin, source, expected_source, source_fd
+            )
+            destination_regular = _prepare_regular_source(
+                destination_pin,
+                destination,
+                expected_destination,
+                destination_fd,
+            )
+        else:
+            assert source_readiness is not None and destination_readiness is not None
+            _validate_tree_source(
+                source_pin,
+                source,
+                expected_source,
+                source_readiness,
+                source_fd,
+            )
+            _validate_tree_source(
+                destination_pin,
+                destination,
+                expected_destination,
+                destination_readiness,
+                destination_fd,
+            )
+        if (
+            _stat_at(source_pin, source) != expected_source
+            or _stat_at(destination_pin, destination) != expected_destination
+        ):
+            raise PublicationIdentityError()
+        _recheck_parent(source_pin)
+        _recheck_parent(destination_pin)
+        _renameat2(
+            source_pin,
+            source,
+            destination_pin,
+            destination,
+            _RENAME_EXCHANGE,
+        )
+        exchanged = True
+        _checkpoint("replacement-after-exchange", fault_hook, pause_hook)
+        _sync_parents(source_pin, destination_pin)
+        _checkpoint(
+            "replacement-after-exchange-durability", fault_hook, pause_hook
+        )
+        destination_final, source_final = _exchanged_identities(
+            destination_pin,
+            destination,
+            expected_destination,
+            destination_fd,
+            source_pin,
+            source,
+            expected_source,
+            source_fd,
+            destination_regular,
+            source_regular,
+            destination_readiness,
+            source_readiness,
+        )
+        _checkpoint("replacement-before-old-disposition", fault_hook, pause_hook)
+        destination_final, source_final = _exchanged_identities(
+            destination_pin,
+            destination,
+            expected_destination,
+            destination_fd,
+            source_pin,
+            source,
+            expected_source,
+            source_fd,
+            destination_regular,
+            source_regular,
+            destination_readiness,
+            source_readiness,
+        )
+        if expected_source.kind == "directory":
+            _checkpoint(
+                "replacement-after-old-disposition", fault_hook, pause_hook
+            )
+            _checkpoint("replacement-terminal-validation", fault_hook, pause_hook)
+            destination_final, source_final = _exchanged_identities(
+                destination_pin,
+                destination,
+                expected_destination,
+                destination_fd,
+                source_pin,
+                source,
+                expected_source,
+                source_fd,
+                destination_regular,
+                source_regular,
+                destination_readiness,
+                source_readiness,
+            )
+            _recheck_parent(source_pin)
+            _recheck_parent(destination_pin)
+            return ReplacementResult(
+                destination_final,
+                source_final,
+                ReplacementCleanupDisposition.RETAINED,
+                destination_readiness,
+                source_pin.directory_identity,
+                destination_pin.directory_identity,
+            )
+        cleanup_started = True
+        _remove_replaced_regular(
+            source_pin,
+            source,
+            source_final,
+            destination_fd,
+        )
+        cleanup_removed = True
+        _checkpoint("replacement-after-old-disposition", fault_hook, pause_hook)
+        _checkpoint("replacement-terminal-validation", fault_hook, pause_hook)
+        destination_final = _published_identity(
+            source_pin,
+            source,
+            destination_pin,
+            destination,
+            expected_source,
+            source_fd,
+            source_regular,
+            source_readiness,
+        )
+        removed = _fstat(destination_fd)
+        if not _same_inode(removed, expected_destination) or removed.links != 0:
+            raise PublicationValidationError()
+        _recheck_parent(source_pin)
+        _recheck_parent(destination_pin)
+        return ReplacementResult(
+            destination_final,
+            source_final,
+            ReplacementCleanupDisposition.REMOVED,
+            None,
+            source_pin.directory_identity,
+            destination_pin.directory_identity,
+        )
+    except BaseException as error:
+        if exchanged:
+            removed_observed = False
+            if destination_fd >= 0:
+                try:
+                    removed = _fstat(destination_fd)
+                    removed_observed = (
+                        _same_inode(removed, expected_destination)
+                        and removed.links == 0
+                    )
+                except PublicationError:
+                    pass
+            if removed_observed and not cleanup_removed:
+                if isinstance(error, PublicationDurabilityError):
+                    raise
+                raise PublicationDurabilityError() from error
+            if not isinstance(error, PublicationAmbiguousError):
+                if cleanup_removed:
+                    raise PublicationValidationError() from error
+                if cleanup_started:
+                    raise PublicationReplacementCleanupError() from error
+                raise PublicationReplacementAmbiguousError() from error
+        raise
+    finally:
+        if destination_fd >= 0:
+            _close(destination_fd)
+        if source_fd >= 0:
+            _close(source_fd)
+        if destination_pin is not source_pin:
+            destination_pin.close()
+        source_pin.close()
+
+
 def atomic_write_bytes(
     parent: OpenedDirectory,
     destination_name: str | os.PathLike[str],
@@ -1210,10 +1541,16 @@ def atomic_write_bytes(
     *,
     mode: int = 0o600,
     owner: int | None = None,
+    expected_destination: FileIdentity | object = ABSENT,
     fault_hook: Hook = DEFAULT_FAULT_HOOK,
     pause_hook: Hook = DEFAULT_PAUSE_HOOK,
-) -> PublicationResult:
-    """Write exact bytes to an absent destination; replacement is unsupported."""
+) -> PublicationResult | ReplacementResult:
+    """Write exact bytes, replacing only an explicitly expected destination."""
+
+    if expected_destination is not ABSENT and not isinstance(
+        expected_destination, FileIdentity
+    ):
+        raise TypeError("expected_destination must be ABSENT or a FileIdentity")
 
     stage = stage_file_bytes(
         parent,
@@ -1226,15 +1563,28 @@ def atomic_write_bytes(
     )
     primary: BaseException | None = None
     try:
-        result = publish_no_clobber(
-            parent,
-            stage.name,
-            stage.identity,
-            parent,
-            destination_name,
-            fault_hook=fault_hook,
-            pause_hook=pause_hook,
-        )
+        if expected_destination is ABSENT:
+            result = publish_no_clobber(
+                parent,
+                stage.name,
+                stage.identity,
+                parent,
+                destination_name,
+                fault_hook=fault_hook,
+                pause_hook=pause_hook,
+            )
+        else:
+            assert isinstance(expected_destination, FileIdentity)
+            result = replace_exact(
+                parent,
+                stage.name,
+                stage.identity,
+                parent,
+                destination_name,
+                expected_destination,
+                fault_hook=fault_hook,
+                pause_hook=pause_hook,
+            )
         stage.mark_consumed()
         return result
     except BaseException as error:

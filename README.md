@@ -177,11 +177,15 @@ fork/exec descriptor-inheritance, anonymous-publication process-death, and lock
 holder process-death checks for the Python ordered-lock primitive. It also tests
 Linux no-clobber file/directory rename, exact file/directory exchange, owned
 same-parent staging and cleanup, source-file synchronization, immutable
-parent-bound directory readiness, and descriptor-relative tree durability.
-Publication results report exact final root identities; directory tree claims
-require readiness returned by `fsync_tree`. These primitives are not yet wired
-into operational commands, and guarded replacement of an existing destination
-remains deliberately unimplemented.
+parent-bound directory readiness, descriptor-relative tree durability, and
+guarded exact replacement of an existing file or directory. Replacement uses
+Linux `RENAME_EXCHANGE`, durably validates both names, and never claims rollback.
+It identity-unlinks displaced regular files, but retains a complete displaced
+directory at the source name for later command-journaled cleanup. Replacement
+results report the old destination identity, `REMOVED` or `RETAINED` disposition,
+and retained directory readiness evidence. Directory tree claims require
+parent-bound readiness returned by `fsync_tree`. These primitives are not yet
+wired into operational commands.
 
 Run only the durable-publication checkpoint tests:
 
