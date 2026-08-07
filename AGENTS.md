@@ -31,12 +31,12 @@
 
 ## Verification
 
-- Use `make shell` for interactive development in the rootless Podman container, or `make container-check` to run all maintained checks in a one-shot container. Do not mount host SSH keys, private config, PKI state, or the Podman socket into routine development containers.
+- Use `make shell` for Bashly generation and shell linting in the rootless development container. Use `./scripts/in-test-container make <target>` for focused pinned tests, or `make container-check` to run all maintained checks across both containers. Do not mount host SSH keys, private config, PKI state, or the Podman socket into routine containers.
 - Run `make generate` after changing Bashly source and `make verify-generated` to prove committed executables are deterministic and current. Never edit a Bashly-generated `bin/` file directly.
 - Run `make verify` after tool changes; it runs `bash -n` over maintained Bash files and `python3 -m py_compile` over maintained Python tools.
 - All maintained tests are pytest-orchestrated. They must preserve real generated commands, external tools, executable fakes, PTYs, inherited descriptors, and SSH transport as subprocess boundaries rather than replacing them with in-process mocks.
-- Run focused Make targets or pytest modules while developing. Reserve `make container-check`, which owns one complete `make test` execution in the pinned image, for final acceptance; do not run a separate full `make test` immediately before it.
-- `make test` runs non-rollover targets with two bounded Make jobs, then runs the rollover suite alone with four pytest workers. `TEST_MAKE_JOBS` and `PKI_PYTEST_WORKERS` accept 1 through 4 and are forwarded by `scripts/in-container`; use bounded values rather than `-j` or `-n auto`.
+- Run focused Make targets or pytest modules through the test container while developing. Reserve `make container-check`, which owns one complete `make test` execution in the pinned test image, for final acceptance; do not run a separate full `make test` immediately before it.
+- `make test` runs non-rollover targets with two bounded Make jobs, then runs the rollover suite alone with four pytest workers. `TEST_MAKE_JOBS` and `PKI_PYTEST_WORKERS` accept 1 through 4 and are forwarded by `scripts/in-test-container`; use bounded values rather than `-j` or `-n auto`.
 - Run `make test-python-infrastructure` after changing pytest fixtures or process helpers. Keep subprocesses argv-only with `shell=False`, isolated process groups, bounded descendant cleanup, and shell-style signal statuses. PTY and escaped-descendant supervision requires Linux procfs and pidfds.
 - CSR signing, certificate-export, candidate, and schema-2 trust-install tests share one immutable session seed per pytest process; each test must use a metadata-preserving private copy with both managed OpenSSL configuration paths rebased and fresh signed exchange timestamps.
 - Python-migration differential tests use `tests/pki/migration_contract.py` as the command/recovery inventory and `tests/pki/migration_harness.py` for metadata-aware snapshots. Preserve hard-link classes and within-tree identity transitions, normalize only declared dynamic fields, and never copy a crashed tree before recovery.
@@ -62,7 +62,7 @@
 
 ## Tooling Notes
 
-- `Containerfile.dev` uses a digest-pinned Debian 13 Ruby base, an immutable Debian snapshot with exact direct package versions, checksum-verified ShellCheck/shfmt binaries for `amd64` and `arm64`, and the locked Bashly bundle in `Gemfile.lock`. Refresh these inputs together and verify with a reviewed `podman build --no-cache -f Containerfile.dev .`.
+- `Containerfile.dev` uses a digest-pinned Debian 13 Ruby base, an immutable Debian snapshot with exact direct package versions, checksum-verified ShellCheck/shfmt binaries for `amd64` and `arm64`, and the locked Bashly bundle in `Gemfile.lock`. `Containerfile.test` separately uses digest-pinned Python 3.14, a matching immutable Debian snapshot, exact system packages, and pinned pytest dependencies; current final acceptance is `amd64`. Refresh each image's inputs together and verify both clean builds before `make container-check`.
 - `make install` copies scripts to `INSTALL_DIR` and PKI shared assets to `SHARE_DIR`; custom installs commonly use `make install INSTALL_DIR="$PWD/.tools/bin" SHARE_DIR="$PWD/.tools/share/platform-tools"`.
 - Installed PKI scripts find shared assets through `PLATFORM_TOOLS_LIB_DIR`, checkout-relative `../lib`, or `PLATFORM_TOOLS_SHARE_DIR`/`~/.local/share/platform-tools`; preserve this lookup behavior when editing wrappers.
 - Proxmox helpers can stream themselves over SSH; remote prerequisites are `pveum` for token bootstrap, `qm` for VM cleanup, and remote `jq` only when `platform-proxmox-token-init --write-token-file` parses JSON output.

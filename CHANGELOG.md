@@ -9,6 +9,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Separated the Bashly development image from a pinned Python 3.14 test image.
+  `make container-check` now verifies generated artifacts and runs ShellCheck in
+  the development image, then runs syntax checks, one complete pytest aggregate,
+  and the archive smoke in the test image.
 - Changed CSR signing, certificate-export, candidate, and schema-2 trust-install
   tests to copy an immutable per-session PKI seed, rebase only its managed
   OpenSSL paths, and refresh signed exchange timestamps, reducing focused test

@@ -4,6 +4,10 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Bashly generation and shell linting now use a dedicated development image,
+  while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
+  pytest-xdist 3.8.0. The canonical container check still runs the complete test
+  aggregate exactly once.
 - CSR protocol test modules now copy one immutable per-session PKI seed instead
   of regenerating complete root and intermediate authorities for every test.
 

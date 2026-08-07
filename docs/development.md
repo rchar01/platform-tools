@@ -1,8 +1,9 @@
 # Development
 
-Use the repository development container for generation, tests, and static
-checks. The host needs Podman, Bash, and Make; Ruby and Bashly stay in the
-container.
+Use the repository development container for Bashly generation and shell
+linting. Run syntax and behavior tests in the separate Python test container.
+The host needs Podman, Bash, and Make; Ruby, Bashly, and the pinned Python test
+stack stay in their respective containers.
 
 ## Interactive Workflow
 
@@ -16,13 +17,19 @@ The repository is mounted at `/workspace`. The container uses a temporary home
 directory and does not mount host SSH keys, private platform configuration, PKI
 state, or the Podman socket.
 
-Run focused checks inside the shell while developing:
+Run Bashly and shell-lint checks inside the shell while developing:
 
 ```bash
 make verify-generated
-make verify
 make shellcheck
-make test-command-contract
+```
+
+The development image intentionally does not include pytest or the external PKI
+test runtime. Run focused checks in the pinned test image from the host:
+
+```bash
+./scripts/in-test-container make verify
+./scripts/in-test-container make test-command-contract
 ```
 
 Use the one-shot equivalent from the host when an interactive shell is not
@@ -33,17 +40,18 @@ make container-check
 ```
 
 `make container-check` is the canonical final acceptance command. It builds the
-pinned image, runs static and generated checks, executes the Python-only
-`make test` aggregate once, runs the container-only archive smoke, and runs
-ShellCheck. Do not run a separate full `make test` immediately beforehand unless
-an intentional host-versus-container comparison is required.
+pinned development image to verify generated artifacts and run ShellCheck, then
+builds the pinned test image to run syntax checks, execute the `make test`
+aggregate once, and run the container-only archive smoke. Do not run a separate
+full `make test` immediately beforehand unless an intentional
+host-versus-container comparison is required.
 
 The aggregate runs all non-rollover targets included by `make test` with two
 bounded Make jobs by default, waits for them to finish, then runs the
 durability-heavy rollover suite alone with four pytest workers. The archive
 smoke remains a separate container-only phase after the aggregate.
-`scripts/in-container` forwards both settings so host-side overrides affect the
-one-shot container:
+`scripts/in-test-container` forwards both settings so host-side overrides affect
+the test container:
 
 ```bash
 make container-check TEST_MAKE_JOBS=1
@@ -162,7 +170,7 @@ python3 -m pytest -m pki tests/pki/test_ca_rollover_*.py
 
 The first target routes to the bounded parallel target, so `make test` executes
 the suite exactly once, after the non-rollover Make pool, with four workers by
-default. The development container pins `pytest-xdist`; use the direct serial
+default. The test container pins `pytest-xdist`; use the direct serial
 target for ordering diagnostics or override the bounded worker count from 1
 through 4:
 
@@ -219,21 +227,29 @@ make test-pki-ca-rollover-parser
 The no-argument `make test-pki-ca-rollover` target runs the complete Python
 suite.
 
-## Generator Updates
+## Container Updates
 
 The development image uses a digest-pinned Debian 13 Ruby base, the matching
 immutable Debian snapshot, exact direct package versions, checksum-verified
 ShellCheck and shfmt binaries, and the Bashly dependency graph locked in
 `Gemfile.lock`. Its reviewed ShellCheck and shfmt asset mappings support
-`amd64` and `arm64`; builds reject other architectures. Update these inputs
-together, inspect upstream release notes, regenerate all Bashly-backed tools,
-and run a clean build:
+`amd64` and `arm64`; builds reject other architectures.
+
+The test image uses a digest-pinned Python 3.14 Debian 13 base, its matching
+immutable Debian snapshot, exact direct system packages, and pinned pytest,
+pytest-xdist, PyYAML, and pluggy versions. It intentionally excludes Ruby,
+Bashly, ShellCheck, shfmt, anyio, and typeguard.
+
+Update each base digest with its matching snapshot and package pins, inspect
+upstream release notes, regenerate all Bashly-backed tools when generator inputs
+change, and run clean builds:
 
 ```bash
 podman build --no-cache -f Containerfile.dev .
+podman build --no-cache -f Containerfile.test .
 make container-check
 ```
 
-The dated Debian snapshot keeps reviewed package versions available. Refresh
-the base digest and snapshot timestamp together so the image does not mix a
-Ruby base with a different operating-system package snapshot.
+The dated Debian snapshots keep reviewed package versions available. Do not mix
+either language base with a different operating-system package snapshot. Final
+test-image acceptance is currently performed on `amd64`.

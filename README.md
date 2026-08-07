@@ -114,12 +114,15 @@ Optional verification tools:
 - `shellcheck` for `make shellcheck`
 - `gitleaks` for local secret scanning
 
-## Development Container
+## Development Containers
 
-The canonical development environment is a Debian 13 rootless Podman container
-for `amd64` and `arm64`, with the repository mounted at `/workspace`. It includes
-the pinned Bashly generator, pytest, and the tools needed by the maintained
-checks without mounting host SSH keys, private configuration, or PKI state.
+The canonical tooling uses two rootless Podman containers with the repository
+mounted at `/workspace`. The Debian 13 development image contains the pinned
+Bashly generator, ShellCheck, and shfmt. The separate Python 3.14 test image
+contains pytest and the external tools exercised by maintained tests. Neither
+container mounts host SSH keys, private configuration, PKI state, or the Podman
+socket. Current final acceptance is performed on `amd64`; the development
+image retains reviewed ShellCheck and shfmt mappings for `amd64` and `arm64`.
 
 Open an interactive development shell:
 
@@ -127,25 +130,27 @@ Open an interactive development shell:
 make shell
 ```
 
-Run all maintained checks in a one-shot container:
+Run all maintained checks across both pinned containers:
 
 ```bash
 make container-check
 ```
 
-This is the canonical final acceptance command and runs the complete pytest
-aggregate once. Do not run `make test` immediately before it unless a separate
-host-environment comparison is intentional.
+This is the canonical final acceptance command. It verifies generated Bashly
+artifacts and runs ShellCheck in the development image, then runs syntax checks,
+the complete pytest aggregate once, and the archive smoke in the test image. Do
+not run `make test` immediately before it unless a separate host-environment
+comparison is intentional.
 
 The aggregate runs non-rollover test targets with two bounded Make jobs, then
 runs the durability-heavy rollover suite alone with its own four pytest workers.
 Set `TEST_MAKE_JOBS` from 1 through 4 to adjust the first pool; `1` preserves
 serial non-rollover execution. Both worker settings are forwarded into the
-one-shot container:
+test container:
 
 ```bash
 make container-check TEST_MAKE_JOBS=1
-make test TEST_MAKE_JOBS=4
+TEST_MAKE_JOBS=4 ./scripts/in-test-container make test
 ```
 
 The two pools never overlap. Avoid unbounded `make -j` or pytest `-n auto` runs;
@@ -167,7 +172,7 @@ make test-pki-ca-rollover
 Within `make test`, the authoritative rollover target runs only after the
 non-rollover pool and uses four workers by default. Invoking the rollover target
 directly does not run that pool. Run the serial diagnostic target directly when
-comparing ordering or timing. The pinned development image includes pytest-xdist;
+comparing ordering or timing. The pinned test image includes pytest-xdist;
 host-only runs must provide it separately:
 
 ```bash
@@ -217,8 +222,14 @@ terminals. Colors are disabled automatically for pipes and redirects; set
 `NO_COLOR=1` to disable them explicitly. Command result, warning, and error
 logs remain uncolored.
 
-Set `PLATFORM_TOOLS_DEV_IMAGE` to override the local image name. The wrapper
-targets require Podman, Bash, and Make on the host.
+Set `PLATFORM_TOOLS_DEV_IMAGE` or `PLATFORM_TOOLS_TEST_IMAGE` to override the
+local image names. Run a focused target in the pinned test environment with:
+
+```bash
+./scripts/in-test-container make test-command-contract
+```
+
+The wrapper targets require Podman, Bash, and Make on the host.
 
 ## Verify
 
