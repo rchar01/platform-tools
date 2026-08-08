@@ -63,6 +63,10 @@ def test_valid_inventory_writes_canonical_snapshot(
 def test_consumer_loads_exactly_one_inventory_snapshot(consumer: str) -> None:
     if consumer == "platform-pki-csr-candidate":
         source = ROOT / "lib/platform-pki-csr-candidate.sh"
+    elif consumer == "platform-pki-export-ansible":
+        source = ROOT / "src/platform_pki/export_ansible.py"
+        assert source.read_text(encoding="utf-8").count("parse_inventory(") == 1
+        return
     else:
         source_name = "initialize.sh" if consumer == "platform-pki-certificate-export" else "root_command.sh"
         source = ROOT / "bashly" / consumer / f"src/{source_name}"

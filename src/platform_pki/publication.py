@@ -15,6 +15,7 @@ import errno
 import hashlib
 import os
 import secrets
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -41,6 +42,7 @@ _STAGE_ATTEMPTS = 16
 _WRITE_CHUNK = 64 * 1024
 _TREE_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
 _TREE_DIRECTORY_FLAGS = _TREE_FILE_FLAGS | os.O_DIRECTORY
+_TREE_SYMLINK_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
 
 _CHECKPOINTS = (
     "stage-before-create",
@@ -66,6 +68,7 @@ _CHECKPOINTS = (
     "guarded-exchange-before-mutation",
     "guarded-exchange-after-mutation",
     "replacement-before-exchange",
+    "replacement-before-final-authorization",
     "replacement-after-exchange",
     "replacement-after-exchange-durability",
     "replacement-before-old-disposition",
@@ -83,6 +86,13 @@ _CHECKPOINTS = (
     "tree-after-final-validation",
     "tree-before-child-final-name-check",
     "tree-after-child-final-name-check",
+    "tree-cleanup-before-mutation",
+    "tree-cleanup-before-entry-unlink",
+    "tree-cleanup-before-directory-rmdir",
+    "tree-cleanup-before-root-rmdir",
+    "tree-cleanup-after-mutation",
+    "tree-cleanup-before-parent-fsync",
+    "tree-cleanup-after-parent-fsync",
 )
 PUBLICATION_CHECKPOINTS = _CHECKPOINTS
 
@@ -187,6 +197,14 @@ class PublicationTreeError(PublicationError):
         super().__init__("Publication tree could not be synchronized safely")
 
 
+class PublicationTreeCleanupError(PublicationReplacementCleanupError):
+    def __init__(self) -> None:
+        ApplicationError.__init__(
+            self,
+            "Publication replaced the destination but displaced-tree cleanup is incomplete",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class PublicationResult:
     """The final root identity and the operation's pinned parent identities."""
@@ -226,9 +244,41 @@ class ReplacementResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _SymlinkIdentity:
+    dev: int
+    ino: int
+    uid: int
+    permissions: int
+    links: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    kind: str = "symlink"
+
+
+def _symlink_identity(result: os.stat_result) -> _SymlinkIdentity:
+    if not stat.S_ISLNK(result.st_mode):
+        raise PublicationTreeError()
+    return _SymlinkIdentity(
+        result.st_dev,
+        result.st_ino,
+        result.st_uid,
+        stat.S_IMODE(result.st_mode),
+        result.st_nlink,
+        result.st_size,
+        result.st_mtime_ns,
+        result.st_ctime_ns,
+    )
+
+
+def _same_symlink_inode(first: _SymlinkIdentity, second: _SymlinkIdentity) -> bool:
+    return first.dev == second.dev and first.ino == second.ino
+
+
+@dataclass(frozen=True, slots=True)
 class _TreeEntry:
     name: str
-    identity: FileIdentity
+    identity: FileIdentity | _SymlinkIdentity
     digest: bytes | None = field(repr=False)
     children: tuple[_TreeEntry, ...] = ()
 
@@ -242,6 +292,7 @@ class TreeReadiness:
     root_name: str
     snapshot: tuple[_TreeEntry, ...] = field(repr=False)
     root_digest: bytes | None = field(default=None, repr=False)
+    allows_symlinks: bool = field(default=False, repr=False)
 
     def __init__(self, *_arguments: object, **_keywords: object) -> None:
         raise TypeError("TreeReadiness values are created only by fsync_tree")
@@ -254,6 +305,7 @@ class TreeReadiness:
         root_name: str,
         snapshot: tuple[_TreeEntry, ...],
         root_digest: bytes | None,
+        allows_symlinks: bool,
     ) -> TreeReadiness:
         readiness = object.__new__(cls)
         object.__setattr__(readiness, "root_identity", root_identity)
@@ -261,6 +313,7 @@ class TreeReadiness:
         object.__setattr__(readiness, "root_name", root_name)
         object.__setattr__(readiness, "snapshot", snapshot)
         object.__setattr__(readiness, "root_digest", root_digest)
+        object.__setattr__(readiness, "allows_symlinks", allows_symlinks)
         return readiness
 
 
@@ -1442,6 +1495,7 @@ def replace_exact(
     *,
     source_readiness: TreeReadiness | None = None,
     destination_readiness: TreeReadiness | None = None,
+    pre_exchange_check: Callable[[], None] | None = None,
     fault_hook: Hook = DEFAULT_FAULT_HOOK,
     pause_hook: Hook = DEFAULT_PAUSE_HOOK,
 ) -> ReplacementResult:
@@ -1477,6 +1531,8 @@ def replace_exact(
         source_readiness is not None or destination_readiness is not None
     ):
         raise PublicationPolicyError()
+    if pre_exchange_check is not None and not callable(pre_exchange_check):
+        raise TypeError("pre_exchange_check must be callable or None")
     _hooks(fault_hook, pause_hook)
 
     source_pin = _pin_directory(source_parent)
@@ -1553,6 +1609,11 @@ def replace_exact(
             raise PublicationIdentityError()
         _recheck_parent(source_pin)
         _recheck_parent(destination_pin)
+        _checkpoint(
+            "replacement-before-final-authorization", fault_hook, pause_hook
+        )
+        if pre_exchange_check is not None:
+            pre_exchange_check()
         _renameat2(
             source_pin,
             source,
@@ -1762,15 +1823,24 @@ def atomic_write_bytes(
             raise cleanup
 
 
-def _tree_stat(parent_fd: int, name: str) -> FileIdentity:
+def _tree_stat(
+    parent_fd: int,
+    name: str,
+) -> FileIdentity | _SymlinkIdentity:
     try:
         result = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(result.st_mode):
+            return _symlink_identity(result)
         return identity_from_stat(result)
     except (OSError, FilesystemError):
         raise PublicationTreeError() from None
 
 
-def _tree_open(parent_fd: int, entry: _TreeEntry | FileIdentity, name: str) -> int:
+def _tree_open(
+    parent_fd: int,
+    entry: _TreeEntry | FileIdentity | _SymlinkIdentity,
+    name: str,
+) -> int:
     identity = entry.identity if isinstance(entry, _TreeEntry) else entry
     flags = _TREE_DIRECTORY_FLAGS if identity.kind == "directory" else _TREE_FILE_FLAGS
     try:
@@ -1786,11 +1856,31 @@ def _tree_open(parent_fd: int, entry: _TreeEntry | FileIdentity, name: str) -> i
     return descriptor
 
 
+def _tree_open_symlink(
+    parent_fd: int,
+    name: str,
+    expected: _SymlinkIdentity,
+) -> int:
+    try:
+        descriptor = os.open(name, _TREE_SYMLINK_FLAGS, dir_fd=parent_fd)
+    except OSError:
+        raise PublicationTreeError() from None
+    try:
+        opened = _symlink_identity(os.fstat(descriptor))
+        if os.get_inheritable(descriptor) or opened != expected:
+            raise PublicationTreeError()
+    except BaseException:
+        _close(descriptor)
+        raise
+    return descriptor
+
+
 def _scan_and_sync(
     descriptor: int,
     root_device: int,
     fault_hook: Hook,
     pause_hook: Hook,
+    allow_symlinks: bool,
 ) -> tuple[_TreeEntry, ...]:
     try:
         names = tuple(sorted(os.listdir(descriptor)))
@@ -1799,6 +1889,19 @@ def _scan_and_sync(
     entries: list[_TreeEntry] = []
     for name in names:
         identity = _tree_stat(descriptor, name)
+        if isinstance(identity, _SymlinkIdentity):
+            if not allow_symlinks or identity.uid != os.geteuid():
+                raise PublicationTreeError()
+            try:
+                target = os.readlink(name, dir_fd=descriptor).encode(
+                    errors="surrogateescape"
+                )
+            except OSError:
+                raise PublicationTreeError() from None
+            if _tree_stat(descriptor, name) != identity:
+                raise PublicationTreeError()
+            entries.append(_TreeEntry(name, identity, target))
+            continue
         if (
             identity.dev != root_device
             or identity.uid != os.geteuid()
@@ -1809,7 +1912,13 @@ def _scan_and_sync(
         child_fd = _tree_open(descriptor, identity, name)
         try:
             children = (
-                _scan_and_sync(child_fd, root_device, fault_hook, pause_hook)
+                _scan_and_sync(
+                    child_fd,
+                    root_device,
+                    fault_hook,
+                    pause_hook,
+                    allow_symlinks,
+                )
                 if identity.kind == "directory"
                 else ()
             )
@@ -1849,6 +1958,16 @@ def _validate_tree(
     for entry in entries:
         if _tree_stat(descriptor, entry.name) != entry.identity:
             raise PublicationTreeError()
+        if isinstance(entry.identity, _SymlinkIdentity):
+            try:
+                target = os.readlink(entry.name, dir_fd=descriptor).encode(
+                    errors="surrogateescape"
+                )
+            except OSError:
+                raise PublicationTreeError() from None
+            if target != entry.digest or _tree_stat(descriptor, entry.name) != entry.identity:
+                raise PublicationTreeError()
+            continue
         child_fd = _tree_open(descriptor, entry, entry.name)
         try:
             if entry.identity.kind == "directory":
@@ -1948,6 +2067,7 @@ def fsync_tree(
     *,
     fault_hook: Hook = DEFAULT_FAULT_HOOK,
     pause_hook: Hook = DEFAULT_PAUSE_HOOK,
+    allow_symlinks: bool = False,
 ) -> TreeReadiness:
     """Synchronize one already-opened, same-filesystem regular/directory tree.
 
@@ -1965,6 +2085,8 @@ def fsync_tree(
             "must be an OpenedDirectory"
         )
     name = _single_name(root_name, "root_name")
+    if not isinstance(allow_symlinks, bool):
+        raise TypeError("allow_symlinks must be a boolean")
     _hooks(fault_hook, pause_hook)
     root_pin = (
         _pin_directory(root)
@@ -1998,7 +2120,11 @@ def fsync_tree(
 
         entries = (
             _scan_and_sync(
-                root_pin.fileno(), root_identity.dev, fault_hook, pause_hook
+                root_pin.fileno(),
+                root_identity.dev,
+                fault_hook,
+                pause_hook,
+                allow_symlinks,
             )
             if isinstance(root, OpenedDirectory)
             else ()
@@ -2024,6 +2150,7 @@ def fsync_tree(
             name,
             entries,
             root_digest,
+            allow_symlinks,
         )
         for point in (
             "tree-before-final-validation",
@@ -2046,3 +2173,163 @@ def fsync_tree(
         if parent_pin is not root_pin:
             parent_pin.close()
         root_pin.close()
+
+
+def _remove_tree_entries(
+    descriptor: int,
+    entries: tuple[_TreeEntry, ...],
+    fault_hook: Hook,
+    pause_hook: Hook,
+) -> None:
+    for entry in entries:
+        current = _tree_stat(descriptor, entry.name)
+        if current != entry.identity:
+            raise PublicationTreeCleanupError()
+        if isinstance(entry.identity, _SymlinkIdentity) or entry.identity.kind == "regular":
+            entry_fd = -1
+            try:
+                if isinstance(entry.identity, _SymlinkIdentity):
+                    entry_fd = _tree_open_symlink(
+                        descriptor, entry.name, entry.identity
+                    )
+                else:
+                    entry_fd = _tree_open(descriptor, entry, entry.name)
+                _checkpoint(
+                    "tree-cleanup-before-entry-unlink", fault_hook, pause_hook
+                )
+                if _tree_stat(descriptor, entry.name) != entry.identity:
+                    raise PublicationTreeCleanupError()
+                if isinstance(entry.identity, _SymlinkIdentity):
+                    if _symlink_identity(os.fstat(entry_fd)) != entry.identity:
+                        raise PublicationTreeCleanupError()
+                elif _fstat(entry_fd) != entry.identity:
+                    raise PublicationTreeCleanupError()
+                try:
+                    os.unlink(entry.name, dir_fd=descriptor)
+                except OSError:
+                    raise PublicationTreeCleanupError() from None
+                if not _removed_at(descriptor, entry.name):
+                    raise PublicationTreeCleanupError()
+                if isinstance(entry.identity, _SymlinkIdentity):
+                    opened_link = _symlink_identity(os.fstat(entry_fd))
+                    if (
+                        not _same_symlink_inode(opened_link, entry.identity)
+                        or opened_link.links != 0
+                    ):
+                        raise PublicationTreeCleanupError()
+                else:
+                    opened = _fstat(entry_fd)
+                    if not _same_inode(opened, entry.identity) or opened.links != 0:
+                        raise PublicationTreeCleanupError()
+            finally:
+                if entry_fd >= 0:
+                    _close(entry_fd)
+            continue
+
+        child_fd = _tree_open(descriptor, entry, entry.name)
+        try:
+            _remove_tree_entries(child_fd, entry.children, fault_hook, pause_hook)
+            try:
+                os.fsync(child_fd)
+            except OSError:
+                raise PublicationTreeCleanupError() from None
+            _checkpoint(
+                "tree-cleanup-before-directory-rmdir", fault_hook, pause_hook
+            )
+            current = _tree_stat(descriptor, entry.name)
+            if not isinstance(current, FileIdentity) or not _same_inode(
+                current, entry.identity
+            ) or not _same_inode(_fstat(child_fd), entry.identity):
+                raise PublicationTreeCleanupError()
+            try:
+                os.rmdir(entry.name, dir_fd=descriptor)
+            except OSError:
+                raise PublicationTreeCleanupError() from None
+            opened = _fstat(child_fd)
+            if not _same_inode(opened, entry.identity) or opened.links != 0:
+                raise PublicationTreeCleanupError()
+            if not _removed_at(descriptor, entry.name):
+                raise PublicationTreeCleanupError()
+        finally:
+            _close(child_fd)
+
+
+def remove_exact_tree(
+    parent: OpenedDirectory,
+    name: str | os.PathLike[str],
+    expected_identity: FileIdentity,
+    readiness: TreeReadiness,
+    *,
+    fault_hook: Hook = DEFAULT_FAULT_HOOK,
+    pause_hook: Hook = DEFAULT_PAUSE_HOOK,
+) -> None:
+    """Remove only one exact readiness-bound directory tree without following links."""
+
+    if not isinstance(parent, OpenedDirectory):
+        raise TypeError("parent must be an OpenedDirectory")
+    component = _single_name(name, "name")
+    if (
+        not isinstance(expected_identity, FileIdentity)
+        or expected_identity.kind != "directory"
+        or not isinstance(readiness, TreeReadiness)
+        or not _same_inode(readiness.root_identity, expected_identity)
+        or readiness.root_identity.state != expected_identity.state
+        or readiness.root_identity.mtime_ns != expected_identity.mtime_ns
+    ):
+        raise PublicationPolicyError()
+    _hooks(fault_hook, pause_hook)
+    parent_pin = _pin_directory(parent)
+    descriptor = -1
+    try:
+        if parent_pin.directory_identity != readiness.parent_identity:
+            raise PublicationTreeCleanupError()
+        descriptor = _open_exact(parent_pin, component, expected_identity)
+        _validate_tree_root(
+            parent_pin,
+            component,
+            expected_identity,
+            readiness,
+            descriptor,
+        )
+        _checkpoint("tree-cleanup-before-mutation", fault_hook, pause_hook)
+        _remove_tree_entries(
+            descriptor,
+            readiness.snapshot,
+            fault_hook,
+            pause_hook,
+        )
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            raise PublicationTreeCleanupError() from None
+        _checkpoint("tree-cleanup-before-root-rmdir", fault_hook, pause_hook)
+        current = _stat_at(parent_pin, component)
+        if not isinstance(current, FileIdentity) or not _same_inode(
+            current, expected_identity
+        ) or not _same_inode(_fstat(descriptor), expected_identity):
+            raise PublicationTreeCleanupError()
+        try:
+            os.rmdir(component, dir_fd=parent_pin.fileno())
+        except OSError:
+            raise PublicationTreeCleanupError() from None
+        opened = _fstat(descriptor)
+        if not _same_inode(opened, expected_identity) or opened.links != 0:
+            raise PublicationTreeCleanupError()
+        if not _removed_at(parent_pin.fileno(), component):
+            raise PublicationTreeCleanupError()
+        _checkpoint("tree-cleanup-after-mutation", fault_hook, pause_hook)
+        _checkpoint("tree-cleanup-before-parent-fsync", fault_hook, pause_hook)
+        try:
+            os.fsync(parent_pin.fileno())
+        except OSError:
+            raise PublicationDurabilityError() from None
+        _checkpoint("tree-cleanup-after-parent-fsync", fault_hook, pause_hook)
+        _recheck_parent(parent_pin)
+    except BaseException as error:
+        if isinstance(error, PublicationTreeCleanupError):
+            raise
+        raise PublicationTreeCleanupError() from error
+    finally:
+        if descriptor >= 0:
+            _close(descriptor)
+        parent_pin.close()

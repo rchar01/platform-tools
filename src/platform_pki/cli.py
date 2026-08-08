@@ -23,6 +23,10 @@ def _handler(route: tuple[str, ...]):
         from .inventory_install import install_inventory
 
         return install_inventory
+    if route == ("export-ansible",):
+        from .export_ansible import export_ansible
+
+        return export_ansible
     if route == ("list-expiry",):
         from .list_expiry import list_expiry
 
@@ -233,6 +237,40 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "Inventory entries with key_custody: host-local fail closed here; use\n"
             "platform-pki-csr-candidate verify with an exact request ID.\n"
             "Legacy singleton CA state must be migrated before this command can run.\n",
+            end="",
+        )
+        return
+    if route == ("export-ansible",) and not unified:
+        print(
+            f"{name} - Export generated PKI files into an Ansible-consumable layout\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [SERVICES...] [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--export-dir PATH', '35')}\n"
+            "    Export directory\n\n"
+            f"  {_color('--force', '35')}\n"
+            "    Replace an existing trusted export directory\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICES...', '34')}\n"
+            "    Inventory service names; defaults to all generated services\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} --force\n"
+            f"  {name} platform-example --force\n\n"
+            "The export contains service private keys. Custom export directories must be\n"
+            "absolute and pass ownership, permission, and symlink safety checks.\n"
+            "Explicit host-local service selection fails; all-service export skips\n"
+            "host-local inventory entries because this export is managed-key-only.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n\n",
             end="",
         )
         return

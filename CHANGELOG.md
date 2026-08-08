@@ -42,6 +42,20 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lifecycle-through-inventory locking, exact-byte validation, no-op and mode
   normalization behavior, atomic no-clobber/exchange publication, and retained
   ambiguous recovery artifacts.
+- Changed `platform-pki-export-ansible` to use one Python 3.14 handler for its
+  compatibility command and unified `platform-pki export-ansible` route. The
+  handler preserves service selection, source and path validation,
+  lifecycle-through-export locking, output, layout, and modes while replacing
+  destructive in-place rebuilding with complete same-parent staging, no-follow
+  descriptor copies, whole-tree durability, atomic no-clobber publication, and
+  forward-only exact-destination exchange. Displaced trees are removed without
+  following symlinks or retained under an owner-only recovery name with
+  explicit evidence when cleanup is incomplete. Custom replacement markers stay
+  descriptor-pinned and are rechecked for exact identity and bytes immediately
+  before exchange. Every cleanup unlink and directory removal rechecks its
+  snapshotted name at the mutation boundary; stages without completed readiness
+  are retained under their reported private evidence path rather than traversed
+  destructively.
 - Changed `platform-pki-print-cert`, `platform-pki-list-expiry`, and
   `platform-pki-service-verify` to use the same Python 3.14 operational handlers
   as their unified `platform-pki` routes, preserving their command names,

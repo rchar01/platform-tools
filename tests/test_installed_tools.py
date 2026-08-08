@@ -308,6 +308,143 @@ def test_installed_inventory_install_uses_shared_library(
     assert destination.stat().st_mode & 0o777 == 0o600
 
 
+def _prepare_export_state(
+    process_runner: Callable[..., ProcessResult], install: Install, name: str
+) -> Path:
+    root = install.state / f"export-authority-{name}"
+    pki = install.state / f"export-pki-{name}"
+    for directory in (
+        root,
+        pki / "inventory",
+        pki / "authorities/roots/g1/certs",
+        pki / "authorities/intermediates/g1-i1/certs",
+        pki / "services/api/certs",
+        pki / "services/api/private",
+        pki / "services/api/chain",
+        pki / "export",
+    ):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
+
+    root_key = root / "root.key"
+    root_certificate = root / "root.crt"
+    intermediate_key = root / "intermediate.key"
+    request = root / "intermediate.csr"
+    intermediate_certificate = root / "intermediate.crt"
+    commands = (
+        (
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "365",
+            "-subj",
+            "/CN=InstalledExportRoot",
+            "-keyout",
+            root_key,
+            "-out",
+            root_certificate,
+        ),
+        (
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-subj",
+            "/CN=InstalledExportIntermediate",
+            "-keyout",
+            intermediate_key,
+            "-out",
+            request,
+        ),
+        (
+            "x509",
+            "-req",
+            "-in",
+            request,
+            "-CA",
+            root_certificate,
+            "-CAkey",
+            root_key,
+            "-CAcreateserial",
+            "-days",
+            "300",
+            "-out",
+            intermediate_certificate,
+        ),
+    )
+    for arguments in commands:
+        result = execute(
+            process_runner, install, install.runtime / "openssl", *arguments
+        )
+        assert result.status == 0, result.stderr
+
+    files = {
+        pki / "inventory/services.yml": (
+            b"services:\n  api:\n    common_name: api.example\n"
+            b"    dns:\n      - api.example\n"
+        ),
+        pki / "state/active-issuer": b"root=g1\nintermediate=g1-i1\n",
+        pki / "services/api/certs/tls.crt": b"api certificate\n",
+        pki / "services/api/private/tls.key": b"api private key\n",
+        pki / "services/api/chain/ca-chain.crt": b"api ca chain\n",
+        pki / "services/api/chain/fullchain.crt": b"api full chain\n",
+        pki / "services/api/issuer": b"root=g1\nintermediate=g1-i1\n",
+    }
+    for path, data in files.items():
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(data)
+        path.chmod(0o600)
+    shutil.copyfile(
+        root_certificate, pki / "authorities/roots/g1/certs/root-ca.crt"
+    )
+    shutil.copyfile(
+        intermediate_certificate,
+        pki / "authorities/intermediates/g1-i1/certs/intermediate-ca.crt",
+    )
+    pki.chmod(0o700)
+    return pki
+
+
+@pytest.mark.parametrize(
+    "command",
+    (("platform-pki-export-ansible",), ("platform-pki", "export-ansible")),
+    ids=("compatibility", "unified"),
+)
+def test_installed_export_ansible_uses_shared_library(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    pki = _prepare_export_state(process_runner, install, command[0])
+    destination = pki / "export/installed"
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "api",
+        "--pki-dir",
+        pki,
+        "--export-dir",
+        destination,
+    )
+
+    assert result.status == 0, result.stderr
+    assert result.stdout == (
+        "[OK] Exported service: api\n"
+        f"[OK] Ansible export ready: {destination}\n"
+    )
+    assert result.stderr == (
+        f"[WARN] Export contains service private keys: {destination}\n"
+    )
+    assert (destination / "services/api/tls.key").read_bytes() == b"api private key\n"
+    assert (destination / "services/api/tls.key").stat().st_mode & 0o777 == 0o600
+
+
 def test_installed_pki_command_prepares_legacy_control_state(
     process_runner: Callable[..., ProcessResult], install: Install
 ) -> None:

@@ -996,7 +996,33 @@ Output layout:
 ```
 
 The export directory contains service private keys and must stay outside Git.
-Custom `--export-dir` values must be absolute paths. Existing export path components must be owned by the current user or root, must not be unsafe writable directories, and must not contain symlink components. The immediate export parent must already exist, be owned by the current user, and must not be group- or world-writable. The helper creates a fresh private export tree and publishes temporary files with exact-target, no-clobber hard links.
+Custom `--export-dir` values must be absolute paths. Existing export path
+components must be owned by the current user or root, must not be unsafe
+writable directories, and must not contain symlink components. The immediate
+export parent must already exist, be owned by the current user, and must not be
+group- or world-writable. The helper builds the complete export in an exclusive
+mode-700 same-parent directory, reads source bytes through no-follow
+identity-checked descriptors, synchronizes every staged file and directory,
+rechecks all source and destination identities, and atomically publishes the
+whole directory. Existing export roots must remain owner-only mode `700`. An
+absent destination is never clobbered. `--force` atomically exchanges only the
+validated existing top-level directory and never rolls back the new export
+after publication. Safe cleanup unlinks hostile symlinks as directory entries
+without following their targets and rechecks every snapshotted entry immediately
+before unlinking its name. Incomplete cleanup leaves the displaced directory
+under the reported owner-only recovery name. For custom destinations, the exact
+authorization marker inode and accepted bytes remain descriptor-pinned from
+authorization through a final recheck immediately before exchange.
+
+This whole-directory publication deliberately improves interruption safety over
+the retained Bash implementation. Before the atomic publication point, a copy,
+source-race, durability, or injected failure leaves an existing export and its
+byte/metadata/identity tree untouched. A stage with completed immutable
+readiness is removed only through the same exact-name cleanup primitive; a
+partial or not-yet-ready stage is retained mode `700` and its precise evidence
+path is reported rather than recursively traversed. After the publication
+point, the new complete export remains authoritative even if displaced-tree
+cleanup or final durability reporting fails.
 
 An export inside the PKI tree must stay under its `export/` directory. Forced
 replacement of an existing custom export requires the marker written by this

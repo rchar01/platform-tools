@@ -5,8 +5,9 @@
 Active incremental-migration contract. This inventory records the compatibility
 surface that the Python migration must preserve. Retained Bash source and
 existing tests remain the authoritative oracle until each command is cut over.
-The three Phase 3 read-oriented commands and Phase 4 `platform-pki-init` and
-`platform-pki-inventory-install` are Python-backed.
+The three Phase 3 read-oriented commands and all Phase 4 bounded-publication
+commands (`platform-pki-init`, `platform-pki-inventory-install`, and
+`platform-pki-export-ansible`) are Python-backed.
 
 ## Runtime and Interfaces
 
@@ -140,6 +141,23 @@ the required common-library SHA-256 is
 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`.
 `tests/pki/test_inventory_install.py` checks this provenance and compares the
 oracle with both Python interfaces and descriptor-bound publication races.
+
+The retained export-ansible oracle is
+`tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible`
+from commit `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b`. Its SHA-256 is
+`08ea4436e688569ed3a0794b2946ced76a8e69cca335b06cf3fcc4a5577c2599`;
+the required common-library SHA-256 is
+`dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`.
+Compatible Bash/Python differentials compare process observations and final
+state. Python-only subprocess acceptance tests record the bounded safety
+divergence: complete exports are atomically published rather than rebuilt in
+place, failures before publication preserve the old identity tree and either
+remove an exactly readiness-bound stage or report retained private evidence,
+and failures after exchange retain the new export plus displaced directory
+evidence without rollback. Custom replacement authorization keeps the accepted
+marker descriptor, identity, and exact bytes pinned through the final exchange
+boundary; displaced-tree cleanup rechecks every snapshotted name immediately
+before its destructive mutation.
 
 `tests/pki/migration_contract.py` now freezes all 24 leaf routes, including
 ordered positionals and long flags, required names, defaults, enum values,

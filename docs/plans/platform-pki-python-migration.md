@@ -3,8 +3,9 @@
 ## Status
 
 Phase 0 contract expansion remains in progress. Phases 1 through 3 are
-implemented, and Phase 4 has `platform-pki-init` and
-`platform-pki-inventory-install` Python-backed.
+implemented, and Phase 4 is complete with `platform-pki-init`,
+`platform-pki-inventory-install`, and `platform-pki-export-ansible`
+Python-backed.
 
 ## Goal
 
@@ -204,6 +205,7 @@ Recorded cutovers:
 | `platform-pki-service-verify` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-service-verify/platform-pki-service-verify` |
 | `platform-pki-init` | `ee03cddc626338ea7d066dd71519204bddb46db3` | `tests/pki/oracles/platform-pki-init/platform-pki-init` |
 | `platform-pki-inventory-install` | `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1` | `tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install` |
+| `platform-pki-export-ansible` | `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b` | `tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible` |
 
 ## Phase 1: Build the Python Foundation
 
@@ -318,18 +320,25 @@ Tasks:
   differential coverage.
 - [x] Preserve init template lookup and custom `INSTALL_DIR`/`SHARE_DIR`
   behavior.
-- [ ] Preserve template and installed-layout behavior for the remaining Phase 4
-  commands.
-- [ ] Preserve lifecycle, authority, inventory, and export locking boundaries.
+- [x] Preserve installed-layout behavior for the remaining Phase 4 command.
+- [x] Preserve lifecycle, authority, inventory, and export locking boundaries.
 - [x] Preserve source identities, destination identities, and atomic
   publication behavior.
 - [x] Run existing unsafe-path, race, no-op, and installed-layout tests for
   inventory installation.
+- [x] Migrate `platform-pki-export-ansible` with one shared handler, retained
+  Bash provenance and compatible success/failure differentials, complete
+  same-parent staging, exact no-clobber or forward-only exchange publication,
+  and Python-specific interruption, race, durability, and no-follow displaced
+  tree cleanup coverage.
 
 Validation gate:
 
-- [ ] Bash/Python state-tree comparisons are equivalent for success, no-op,
-  invalid input, interrupted publication, and competing destination cases.
+- [x] Bash/Python process and final state-tree comparisons are equivalent for
+  compatible success, selection, warnings, invalid input, and generation
+  gating. Python-specific tests cover intentionally safer interruption and
+  competing-publication behavior where transition parity is neither possible
+  nor desired.
 
 ## Phase 5: Migrate Security Utilities
 
@@ -597,6 +606,7 @@ implementation.
 | 2026-08-08 | `platform-pki-print-cert` became the first Python-backed operational compatibility command. | The frozen Bash oracle is recorded at `4cd6b2294760571ffed632295de441c34a4c0eb1`; focused Bash/Python output and state comparison passed, and command-contract, installed-tool, and legacy-gating verification passed 702 tests. |
 | 2026-08-08 | `platform-pki-init` started Phase 4 bounded-publication command migration. | The frozen Bash oracle is recorded at `ee03cddc626338ea7d066dd71519204bddb46db3`; the compatibility and unified routes share one Python handler and retain the existing template and path contract. |
 | 2026-08-08 | `platform-pki-inventory-install` migrated to one Python publication handler. | The frozen Bash oracle is recorded at `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1`; Bash/Python differentials cover installation, no-op, normalization, invalid input, physical-CWD resolution, legacy and recovery gates, replacement, fallback, overlap, and lock contention, while Python-specific tests exercise descriptor-bound races and retained ambiguity. |
+| 2026-08-08 | `platform-pki-export-ansible` completed Phase 4 bounded-publication migration and independent cleanup review. | The frozen Bash oracle is recorded at `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b`; compatible output/final-state differentials cover success, custom marker authorization, reversed explicit selection order, warnings, path boundaries, host-local rejection, issuer diagnostics, and generation gating. Python-specific subprocess tests prove the exact export manifest, whole-tree atomicity, descriptor-pinned marker authorization, late pre-publication preservation, exact readiness-bound stage cleanup or reported private retention, competing-publisher no-clobber behavior, forward-only replacement, pre/post-commit crashes, mutation-boundary exact-name cleanup, retained displaced-tree evidence, and no-follow hostile-symlink cleanup. Final `make container-check` passed 2,703 tests in the pinned containers. |
 
 ## Decision Log
 

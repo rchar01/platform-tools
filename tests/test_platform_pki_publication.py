@@ -51,6 +51,7 @@ from src.platform_pki.publication import (
     exchange_guarded_regular_files,
     fsync_tree,
     publish_no_clobber,
+    remove_exact_tree,
     replace_exact,
     stage_file_bytes,
     unlink_exact,
@@ -121,7 +122,7 @@ def _fail_second_directory_pin(
 
 def test_checkpoint_domain_is_finite_unique_and_literal() -> None:
     assert isinstance(PUBLICATION_CHECKPOINTS, tuple)
-    assert len(PUBLICATION_CHECKPOINTS) == len(set(PUBLICATION_CHECKPOINTS)) == 40
+    assert len(PUBLICATION_CHECKPOINTS) == len(set(PUBLICATION_CHECKPOINTS)) == 48
     assert {
         "stage-before-create",
         "stage-after-write",
@@ -132,10 +133,14 @@ def test_checkpoint_domain_is_finite_unique_and_literal() -> None:
         "guarded-exchange-before-mutation",
         "guarded-exchange-after-mutation",
         "replacement-before-exchange",
+        "replacement-before-final-authorization",
         "replacement-after-exchange-durability",
         "replacement-terminal-validation",
         "cleanup-before-unlink",
         "tree-before-final-validation",
+        "tree-cleanup-before-entry-unlink",
+        "tree-cleanup-before-directory-rmdir",
+        "tree-cleanup-before-root-rmdir",
     } <= set(PUBLICATION_CHECKPOINTS)
     assert all(point == point.strip() and point.isascii() for point in PUBLICATION_CHECKPOINTS)
 
@@ -475,6 +480,7 @@ def test_replace_emits_only_the_exact_replacement_checkpoint_inventory(
         )
     assert observed == [
         "replacement-before-exchange",
+        "replacement-before-final-authorization",
         "replacement-after-exchange",
         "replacement-after-exchange-durability",
         "replacement-before-old-disposition",
@@ -1316,6 +1322,139 @@ def test_no_clobber_directory_preserves_exact_inode_and_tree(tmp_path: Path) -> 
     assert not source.exists()
     assert (tmp_path / "destination/value").read_bytes() == b"tree"
     assert result.identity.ino == expected.ino == (tmp_path / "destination").stat().st_ino
+
+
+def test_opt_in_tree_readiness_snapshots_symlinks_without_following_them(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    victim = tmp_path / "victim"
+    tree.mkdir(mode=0o700)
+    victim.write_bytes(b"victim")
+    (tree / "link").symlink_to(victim)
+    with OpenedDirectory(tmp_path) as parent, OpenedDirectory(tree) as root:
+        with pytest.raises(PublicationTreeError):
+            fsync_tree(root, parent, "tree")
+        readiness = fsync_tree(root, parent, "tree", allow_symlinks=True)
+    assert readiness.allows_symlinks
+    assert victim.read_bytes() == b"victim"
+
+
+def test_displaced_tree_cleanup_unlinks_symlinks_without_touching_targets(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    victim = tmp_path / "victim"
+    tree.mkdir(mode=0o700)
+    victim.mkdir()
+    _write(victim / "sentinel", b"victim")
+    (tree / "link").symlink_to(victim, target_is_directory=True)
+    with OpenedDirectory(tmp_path) as parent, OpenedDirectory(tree) as root:
+        readiness = fsync_tree(root, parent, "tree", allow_symlinks=True)
+        identity = root.identity
+    with OpenedDirectory(tmp_path) as parent:
+        remove_exact_tree(parent, "tree", identity, readiness)
+    assert not tree.exists()
+    assert (victim / "sentinel").read_bytes() == b"victim"
+
+
+def test_displaced_tree_cleanup_preserves_regular_replacement_before_unlink(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "recovery"
+    tree.mkdir(mode=0o700)
+    original = _write(tree / "value", b"original")
+    with OpenedDirectory(tmp_path) as parent, OpenedDirectory(tree) as root:
+        readiness = fsync_tree(root, parent, "recovery")
+        identity = root.identity
+
+    saved = tmp_path / "saved-original"
+
+    def replace(point: str) -> None:
+        if point != "tree-cleanup-before-entry-unlink":
+            return
+        (tree / "value").rename(saved)
+        _write(tree / "value", b"replacement")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationReplacementCleanupError):
+            remove_exact_tree(
+                parent,
+                "recovery",
+                identity,
+                readiness,
+                pause_hook=replace,
+            )
+
+    assert tree.is_dir()
+    assert (tree / "value").read_bytes() == b"replacement"
+    assert saved.read_bytes() == b"original"
+    assert _identity(saved).ino == original.ino
+
+
+def test_displaced_tree_cleanup_preserves_nested_replacement_before_rmdir(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "recovery"
+    nested = tree / "nested"
+    nested.mkdir(mode=0o700, parents=True)
+    _write(nested / "old", b"old")
+    with OpenedDirectory(tmp_path) as parent, OpenedDirectory(tree) as root:
+        readiness = fsync_tree(root, parent, "recovery")
+        identity = root.identity
+
+    saved = tmp_path / "saved-nested"
+
+    def replace(point: str) -> None:
+        if point != "tree-cleanup-before-directory-rmdir":
+            return
+        nested.rename(saved)
+        nested.mkdir(mode=0o700)
+        _write(nested / "victim", b"replacement")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationReplacementCleanupError):
+            remove_exact_tree(
+                parent,
+                "recovery",
+                identity,
+                readiness,
+                pause_hook=replace,
+            )
+
+    assert tree.is_dir()
+    assert (nested / "victim").read_bytes() == b"replacement"
+    assert saved.is_dir()
+
+
+def test_displaced_tree_cleanup_preserves_root_replacement_before_rmdir(
+    tmp_path: Path,
+) -> None:
+    recovery = tmp_path / "recovery"
+    replacement = tmp_path / "replacement"
+    saved = tmp_path / "saved-recovery"
+    recovery.mkdir(mode=0o700)
+    replacement.mkdir(mode=0o700)
+    _write(replacement / "victim", b"replacement")
+    with OpenedDirectory(tmp_path) as parent, OpenedDirectory(recovery) as root:
+        readiness = fsync_tree(root, parent, "recovery")
+        identity = root.identity
+
+    def exchange(point: str) -> None:
+        if point != "tree-cleanup-before-root-rmdir":
+            return
+        recovery.rename(saved)
+        replacement.rename(recovery)
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationReplacementCleanupError):
+            remove_exact_tree(
+                parent,
+                "recovery",
+                identity,
+                readiness,
+                pause_hook=exchange,
+            )
+
+    assert (recovery / "victim").read_bytes() == b"replacement"
+    assert saved.is_dir()
+    assert saved.stat().st_ino == identity.ino
 
 
 def test_directory_publication_requires_exact_parent_bound_readiness(

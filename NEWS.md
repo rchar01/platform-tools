@@ -31,8 +31,18 @@ This file gives a short, release-oriented view of what changed between versions.
   `platform-pki-print-cert`, `platform-pki-list-expiry`, and
   `platform-pki-service-verify` likewise share their Python operational handlers
   with the corresponding unified routes while preserving locking, OpenSSL child
-  behavior, installed shared-asset lookup, and legacy-state rejection. Other
-  operational `platform-pki-*` commands remain on Bash.
+  behavior, installed shared-asset lookup, and legacy-state rejection.
+  `platform-pki-export-ansible` and `platform-pki export-ansible` now build a
+  complete mode-700 same-parent tree, copy source bytes through no-follow
+  identity-checked descriptors, synchronize and revalidate the complete tree,
+  and publish it atomically. Forced replacement exchanges only the validated
+  destination identity, never rolls back a published replacement, and retains
+  the exact displaced directory with recovery evidence when safe cleanup cannot
+  be completed. Custom marker authorization remains descriptor-pinned through
+  exchange, cleanup rechecks each exact entry immediately before mutation, and
+  prepublication stages without complete cleanup readiness are retained and
+  reported rather than traversed destructively. Other operational
+  `platform-pki-*` commands remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test
