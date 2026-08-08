@@ -20,10 +20,12 @@ This file gives a short, release-oriented view of what changed between versions.
   Existing-destination replacement requires explicit exact identities, uses
   forward-only `RENAME_EXCHANGE`, exact-unlinks only displaced regular files,
   and retains complete displaced directories with readiness evidence for later
-  caller-journaled cleanup. `platform-pki-print-cert`,
-  `platform-pki-list-expiry`, and `platform-pki-service-verify` now share their
-  Python operational handlers with the corresponding unified routes while
-  preserving existing command names, output, status, locking, OpenSSL child
+  caller-journaled cleanup. `platform-pki-init` now shares one Python handler
+  with `platform-pki init` while preserving its path and tree validation,
+  template publication, installed shared-asset lookup, output, and status.
+  `platform-pki-print-cert`, `platform-pki-list-expiry`, and
+  `platform-pki-service-verify` likewise share their Python operational handlers
+  with the corresponding unified routes while preserving locking, OpenSSL child
   behavior, installed shared-asset lookup, and legacy-state rejection. Other
   operational `platform-pki-*` commands remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -7,15 +8,44 @@ from pathlib import Path
 import pytest
 
 from ..harness import ProcessResult
+from .migration_harness import run_differential_case
 from .support import BIN, REPOSITORY, assert_result, environment, executable, executable_directory, mode, write_executable
 
 
 pytestmark = pytest.mark.pki
 TOOL = BIN / "platform-pki-init"
+ORACLE = REPOSITORY / "tests/pki/oracles/platform-pki-init/platform-pki-init"
+UNIFIED = BIN / "platform-pki"
+ORACLE_COMMIT = "ee03cddc626338ea7d066dd71519204bddb46db3"
+ORACLE_SHA256 = "bebb970bea2fbd46ed807854e14680416f9cef6e0e2b63557a7675ecc1e28e9e"
+COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
+TEMPLATE_SHA256 = "6faf52e34ab66d402b9777277383f5963aad417e748ea24de977de103e3cf2fe"
+
+
+INTERFACES = (
+    pytest.param((ORACLE,), id="bash-oracle"),
+    pytest.param((TOOL,), id="python-compatibility"),
+    pytest.param((UNIFIED, "init"), id="python-unified"),
+)
 
 
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], *args: object) -> ProcessResult:
     return process_runner([TOOL, *args], env=env, timeout=30)
+
+
+def run_interface(
+    process_runner: Callable[..., ProcessResult],
+    env: Mapping[str, str],
+    tool: tuple[Path | str, ...],
+    *args: object,
+) -> ProcessResult:
+    effective = dict(env)
+    if tool == (ORACLE,):
+        effective.setdefault("PLATFORM_TOOLS_LIB_DIR", os.fspath(REPOSITORY / "lib"))
+        effective.setdefault(
+            "PLATFORM_TOOLS_TEMPLATE_DIR", os.fspath(REPOSITORY / "templates")
+        )
+    return process_runner([*tool, *args], env=effective, timeout=30)
 
 
 def test_init_cli_contract(process_runner, isolated_environment) -> None:
@@ -24,6 +54,10 @@ def test_init_cli_contract(process_runner, isolated_environment) -> None:
     assert_result(result, 0, stderr="")
     assert "Usage:" in result.stdout
     assert "platform-pki-init --version | -v" in result.stdout
+    oracle_help = run_interface(
+        process_runner, isolated_environment, (ORACLE,), "--help"
+    )
+    assert result == ProcessResult(result.args, 0, oracle_help.stdout, "")
 
     result = run(process_runner, isolated_environment, "--version")
     assert_result(result, 0, stdout=f"platform-pki-init {version}\n", stderr="")
@@ -32,6 +66,122 @@ def test_init_cli_contract(process_runner, isolated_environment) -> None:
         result = run(process_runner, isolated_environment, *arguments)
         assert_result(result, 1, stdout="")
         assert message in result.stderr
+
+
+def test_frozen_oracle_and_assets_match_recorded_provenance() -> None:
+    plan = (REPOSITORY / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
+    assert hashlib.sha256((REPOSITORY / "lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
+    assert hashlib.sha256((REPOSITORY / "templates/pki/services.yml.example").read_bytes()).hexdigest() == TEMPLATE_SHA256
+    assert ORACLE_COMMIT in plan
+    assert os.access(ORACLE, os.X_OK)
+
+
+@pytest.mark.parametrize("tool", INTERFACES)
+def test_init_three_interfaces_fresh_repeat_force_and_preflight(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    tool,
+) -> None:
+    namespace = tmp_path / tool[0].name
+    pki = namespace / "pki"
+    example = pki / "inventory/services.yml.example"
+
+    result = run_interface(
+        process_runner, isolated_environment, tool, "--namespace", namespace
+    )
+    assert_result(
+        result,
+        0,
+        stdout=(
+            f"[OK] Wrote {example}\n"
+            f"[OK] PKI directory ready: {pki}\n"
+        ),
+        stderr="",
+    )
+
+    example.write_text("retained example\n")
+    example.chmod(0o600)
+    result = run_interface(
+        process_runner, isolated_environment, tool, "--namespace", namespace
+    )
+    assert_result(
+        result,
+        0,
+        stdout=(
+            f"[INFO] Kept existing file: {example}\n"
+            f"[OK] PKI directory ready: {pki}\n"
+        ),
+        stderr="",
+    )
+    assert example.read_text() == "retained example\n"
+
+    result = run_interface(
+        process_runner,
+        isolated_environment,
+        tool,
+        "--namespace",
+        namespace,
+        "--force",
+    )
+    assert_result(
+        result,
+        0,
+        stdout=(
+            f"[OK] Wrote {example}\n"
+            f"[OK] PKI directory ready: {pki}\n"
+        ),
+        stderr="",
+    )
+    assert example.read_bytes() == (REPOSITORY / "templates/pki/services.yml.example").read_bytes()
+
+    rejected = tmp_path / f"{tool[0].name}-rejected"
+    result = run_interface(
+        process_runner,
+        isolated_environment,
+        tool,
+        "--namespace",
+        rejected,
+        "--pki-dir",
+        rejected,
+    )
+    assert_result(result, 1, stdout="")
+    assert result.stderr == (
+        f"[ERROR] PKI directory must not equal or contain the namespace: {rejected}\n"
+    )
+    assert not rejected.exists()
+
+
+@pytest.mark.parametrize("tool", INTERFACES)
+def test_init_three_interfaces_expand_home_paths(
+    process_runner,
+    isolated_environment,
+    tool,
+) -> None:
+    home = Path(isolated_environment["HOME"])
+    home.parent.chmod(0o700)
+    home.chmod(0o700)
+    namespace = home / "expanded-namespace"
+    pki = home / "expanded-pki"
+
+    result = run_interface(
+        process_runner,
+        isolated_environment,
+        tool,
+        "--namespace",
+        "~/expanded-namespace",
+        "--pki-dir",
+        "~/expanded-pki",
+    )
+
+    assert_result(result, 0, stderr="")
+    assert f"[OK] PKI directory ready: {pki}\n" in result.stdout
+    assert namespace.is_dir() and mode(namespace) == 0o700
+    assert (pki / "inventory/services.yml.example").is_file()
 
 
 def test_init_creates_modes_and_force_only_refreshes_example(tmp_path, process_runner, isolated_environment) -> None:
@@ -251,6 +401,29 @@ def test_init_template_discovery_and_missing_templates(tmp_path, process_runner,
     assert not incomplete.exists()
 
 
+def test_init_rejects_common_library_directory(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    library = tmp_path / "bad-lib/platform-pki-common.sh"
+    library.mkdir(mode=0o700, parents=True)
+    namespace = tmp_path / "bad-library-namespace"
+
+    result = run(
+        process_runner,
+        environment(
+            isolated_environment,
+            PLATFORM_TOOLS_LIB_DIR=os.fspath(library.parent),
+        ),
+        "--namespace",
+        namespace,
+    )
+
+    assert result == ProcessResult(
+        result.args, 1, "", "[ERROR] platform-pki-common.sh not found\n"
+    )
+    assert not namespace.exists()
+
+
 def test_init_failed_template_rename_cleans_temporary_file(tmp_path, process_runner, isolated_environment, executable_directory) -> None:
     fake_bin = executable_directory / "failing-bin"
     write_executable(fake_bin / "mv", "#!/usr/bin/env bash\n: >\"$MV_FAIL_MARKER\"\nexit 1\n")
@@ -288,3 +461,335 @@ def test_init_installed_share_layout(tmp_path, process_runner, isolated_environm
         assert_result(result, 1, stdout="")
         assert "PKI templates not found" in result.stderr
         assert not namespace.exists()
+
+
+def _normalize_case_root(root: Path, output: str) -> str:
+    return output.replace(os.fspath(root), "<CASE>")
+
+
+def _differential_environment(isolated_environment: Mapping[str, str]) -> dict[str, str]:
+    return environment(
+        isolated_environment,
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(REPOSITORY / "lib"),
+        PLATFORM_TOOLS_TEMPLATE_DIR=os.fspath(REPOSITORY / "templates"),
+    )
+
+
+def _run_init_differential(
+    seed: Path,
+    case_root: Path,
+    isolated_environment: Mapping[str, str],
+    *arguments: str,
+    extra_environment: Mapping[str, str] | None = None,
+):
+    base_environment = _differential_environment(isolated_environment)
+    if extra_environment is not None:
+        base_environment.update(extra_environment)
+    return run_differential_case(
+        seed,
+        case_root,
+        Path("containing-root"),
+        lambda root: (
+            ORACLE,
+            "--namespace",
+            root / "containing-root/namespace",
+            *arguments,
+        ),
+        lambda root: (
+            UNIFIED,
+            "init",
+            "--namespace",
+            root / "containing-root/namespace",
+            *arguments,
+        ),
+        base_environment,
+        output_normalizers=(_normalize_case_root,),
+        run_options={"timeout": 30},
+    )
+
+
+def _differential_seed(tmp_path: Path) -> tuple[Path, Path]:
+    seed = tmp_path / "seed"
+    containing_root = seed / "containing-root"
+    containing_root.mkdir(mode=0o700, parents=True)
+    seed.chmod(0o700)
+    containing_root.chmod(0o700)
+    return seed, containing_root
+
+
+def _initialize_seed(
+    seed: Path,
+    containing_root: Path,
+    process_runner: Callable[..., ProcessResult],
+    isolated_environment: Mapping[str, str],
+) -> Path:
+    namespace = containing_root / "namespace"
+    result = run_interface(
+        process_runner,
+        isolated_environment,
+        (ORACLE,),
+        "--namespace",
+        namespace,
+    )
+    assert_result(result, 0, stderr="")
+    return namespace
+
+
+def test_bash_python_fresh_creation_is_equivalent(
+    tmp_path, isolated_environment
+) -> None:
+    seed, _ = _differential_seed(tmp_path)
+
+    result = _run_init_differential(
+        seed, tmp_path / "fresh-case", isolated_environment
+    )
+
+    result.assert_equivalent()
+
+
+def test_bash_python_repeat_and_force_replacement_are_equivalent(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    seed, containing_root = _differential_seed(tmp_path)
+    namespace = _initialize_seed(
+        seed, containing_root, process_runner, isolated_environment
+    )
+    example = namespace / "pki/inventory/services.yml.example"
+    example.write_text("custom example\n")
+    example.chmod(0o600)
+
+    repeat = _run_init_differential(
+        seed, tmp_path / "repeat-case", isolated_environment
+    )
+    repeat.assert_equivalent()
+
+    force = _run_init_differential(
+        seed, tmp_path / "force-case", isolated_environment, "--force"
+    )
+    force.assert_equivalent()
+
+
+def test_bash_python_preflight_failure_is_equivalent(
+    tmp_path, isolated_environment
+) -> None:
+    seed, containing_root = _differential_seed(tmp_path)
+    pki = containing_root / "namespace/pki"
+    pki.mkdir(mode=0o700, parents=True)
+    (pki / "services").write_text("destination collision\n")
+
+    result = _run_init_differential(
+        seed, tmp_path / "preflight-case", isolated_environment
+    )
+
+    result.assert_equivalent()
+
+
+def test_bash_python_failed_publication_cleans_stage_equivalently(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    executable_directory,
+) -> None:
+    seed, containing_root = _differential_seed(tmp_path)
+    _initialize_seed(seed, containing_root, process_runner, isolated_environment)
+    fake_bin = executable_directory / "differential-failing-bin"
+    write_executable(fake_bin / "mv", "#!/usr/bin/env bash\nexit 1\n")
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / "failed-publication-case",
+        isolated_environment,
+        "--force",
+        extra_environment={
+            "PATH": f"{fake_bin}:{isolated_environment['PATH']}",
+        },
+    )
+
+    result.assert_equivalent()
+    assert all(
+        not any(path.rglob(".platform-pki-init.*"))
+        for path in (
+            tmp_path / "failed-publication-case/bash/containing-root",
+            tmp_path / "failed-publication-case/python/containing-root",
+        )
+    )
+
+
+def test_bash_python_ineffective_successful_move_cleans_stage_equivalently(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    executable_directory,
+) -> None:
+    seed, containing_root = _differential_seed(tmp_path)
+    namespace = _initialize_seed(
+        seed, containing_root, process_runner, isolated_environment
+    )
+    example = namespace / "pki/inventory/services.yml.example"
+    example.write_text("retained example\n")
+    example.chmod(0o600)
+    fake_bin = executable_directory / "differential-ineffective-bin"
+    write_executable(fake_bin / "mv", "#!/usr/bin/env bash\nexit 0\n")
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / "ineffective-publication-case",
+        isolated_environment,
+        "--force",
+        extra_environment={
+            "PATH": f"{fake_bin}:{isolated_environment['PATH']}",
+        },
+    )
+
+    result.assert_equivalent()
+    for path in (
+        tmp_path / "ineffective-publication-case/bash/containing-root",
+        tmp_path / "ineffective-publication-case/python/containing-root",
+    ):
+        assert not any(path.rglob(".platform-pki-init.*"))
+        assert (
+            path / "namespace/pki/inventory/services.yml.example"
+        ).read_text() == "retained example\n"
+
+
+def test_bash_python_relative_pki_rejection_is_equivalent(
+    tmp_path, isolated_environment
+) -> None:
+    seed, _ = _differential_seed(tmp_path)
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / "relative-pki-case",
+        isolated_environment,
+        "--pki-dir",
+        "relative/pki",
+    )
+
+    result.assert_equivalent()
+
+
+@pytest.mark.parametrize("case", ["symlink", "hardlink", "private-mode"])
+def test_bash_python_unsafe_existing_tree_rejection_is_equivalent(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    case,
+) -> None:
+    seed, containing_root = _differential_seed(tmp_path)
+    namespace = _initialize_seed(
+        seed, containing_root, process_runner, isolated_environment
+    )
+    pki = namespace / "pki"
+    private = pki / "services/custom/private"
+    private.mkdir(mode=0o700, parents=True)
+    (pki / "services/custom").chmod(0o700)
+
+    if case == "symlink":
+        (private / "linked").symlink_to(pki / "inventory", target_is_directory=True)
+    elif case == "hardlink":
+        source = private / "tls.key"
+        source.write_text("key sentinel\n")
+        source.chmod(0o600)
+        os.link(source, pki / "inventory/linked-key")
+    else:
+        private.chmod(0o777)
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / f"unsafe-tree-{case}-case",
+        isolated_environment,
+    )
+
+    result.assert_equivalent()
+
+
+def test_bash_python_namespace_creation_race_is_equivalent(
+    tmp_path,
+    isolated_environment,
+    executable_directory,
+) -> None:
+    seed, _ = _differential_seed(tmp_path)
+    victim = tmp_path / "creation-race-victim"
+    victim.mkdir(mode=0o700)
+    fake_bin = executable_directory / "differential-creation-race-bin"
+    write_executable(
+        fake_bin / "mkdir",
+        """#!/usr/bin/env bash
+set -euo pipefail
+target=${!#}
+if [[ $target == */namespace ]]; then
+  ln -s "$RACE_VICTIM" "$target"
+  exit 1
+fi
+exec "$REAL_MKDIR" "$@"
+""",
+    )
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / "creation-race-case",
+        isolated_environment,
+        extra_environment={
+            "PATH": f"{fake_bin}:{isolated_environment['PATH']}",
+            "RACE_VICTIM": os.fspath(victim),
+            "REAL_MKDIR": executable("mkdir"),
+        },
+    )
+
+    result.assert_equivalent()
+
+
+def test_bash_python_template_destination_race_is_equivalent(
+    tmp_path,
+    isolated_environment,
+    executable_directory,
+) -> None:
+    seed, _ = _differential_seed(tmp_path)
+    victim = tmp_path / "template-race-victim"
+    victim.write_text("victim sentinel\n")
+    fake_bin = executable_directory / "differential-template-race-bin"
+    write_executable(
+        fake_bin / "chmod",
+        """#!/usr/bin/env bash
+set -euo pipefail
+target=${!#}
+"$REAL_CHMOD" "$@"
+if [[ $target == */inventory ]]; then
+  ln -s "$RACE_VICTIM" "$target/services.yml.example"
+fi
+""",
+    )
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / "template-destination-race-case",
+        isolated_environment,
+        "--force",
+        extra_environment={
+            "PATH": f"{fake_bin}:{isolated_environment['PATH']}",
+            "RACE_VICTIM": os.fspath(victim),
+            "REAL_CHMOD": executable("chmod"),
+        },
+    )
+
+    result.assert_equivalent()
+    assert victim.read_text() == "victim sentinel\n"
+
+
+def test_bash_python_missing_template_rejection_is_equivalent(
+    tmp_path, isolated_environment
+) -> None:
+    seed, _ = _differential_seed(tmp_path)
+    template_root = tmp_path / "missing-template-root"
+    (template_root / "pki").mkdir(mode=0o700, parents=True)
+
+    result = _run_init_differential(
+        seed,
+        tmp_path / "missing-template-case",
+        isolated_environment,
+        extra_environment={
+            "PLATFORM_TOOLS_TEMPLATE_DIR": os.fspath(template_root),
+        },
+    )
+
+    result.assert_equivalent()

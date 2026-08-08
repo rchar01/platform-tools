@@ -2,9 +2,8 @@
 
 ## Status
 
-Phase 0 contract expansion remains in progress. Phase 1 shared Python
-infrastructure and the Phase 2 path, filesystem, fault, and ordered-lock
-checkpoints are implemented; operational command handlers have not started.
+Phase 0 contract expansion remains in progress. Phases 1 through 3 are
+implemented, and Phase 4 has started with `platform-pki-init` Python-backed.
 
 ## Goal
 
@@ -202,6 +201,7 @@ Recorded cutovers:
 | `platform-pki-print-cert` | `4cd6b2294760571ffed632295de441c34a4c0eb1` | `tests/pki/oracles/platform-pki-print-cert/platform-pki-print-cert` |
 | `platform-pki-list-expiry` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-list-expiry/platform-pki-list-expiry` |
 | `platform-pki-service-verify` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-service-verify/platform-pki-service-verify` |
+| `platform-pki-init` | `ee03cddc626338ea7d066dd71519204bddb46db3` | `tests/pki/oracles/platform-pki-init/platform-pki-init` |
 
 ## Phase 1: Build the Python Foundation
 
@@ -311,7 +311,13 @@ Migration order:
 
 Tasks:
 
-- [ ] Preserve template lookup and custom `INSTALL_DIR`/`SHARE_DIR` behavior.
+- [x] Migrate `platform-pki-init` with one handler shared by compatibility and
+  unified routes, retained Bash provenance, and fresh/no-op/force/failure
+  differential coverage.
+- [x] Preserve init template lookup and custom `INSTALL_DIR`/`SHARE_DIR`
+  behavior.
+- [ ] Preserve template and installed-layout behavior for the remaining Phase 4
+  commands.
 - [ ] Preserve lifecycle, authority, inventory, and export locking boundaries.
 - [ ] Preserve source identities, destination identities, and atomic
   publication behavior.
@@ -586,6 +592,7 @@ implementation.
 | 2026-08-07 | A proposed `doctor` contract was investigated before implementation. | Source inventory and review exposed incomplete positive-eligibility grammars and the lack of an exclusive assessment-to-package-replacement handoff. No route or runtime code was added. |
 | 2026-08-08 | Python-to-Bash package rollback and the proposed `doctor` route were removed from scope. | The user selected a forward-only operating model; Python still recovers final Bash transactions, while using older Bash releases with Python-written state is unsupported. |
 | 2026-08-08 | `platform-pki-print-cert` became the first Python-backed operational compatibility command. | The frozen Bash oracle is recorded at `4cd6b2294760571ffed632295de441c34a4c0eb1`; focused Bash/Python output and state comparison passed, and command-contract, installed-tool, and legacy-gating verification passed 702 tests. |
+| 2026-08-08 | `platform-pki-init` started Phase 4 bounded-publication command migration. | The frozen Bash oracle is recorded at `ee03cddc626338ea7d066dd71519204bddb46db3`; the compatibility and unified routes share one Python handler and retain the existing template and path contract. |
 
 ## Decision Log
 

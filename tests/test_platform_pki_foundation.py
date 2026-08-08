@@ -30,6 +30,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/errors.py",
     "platform_pki/faults.py",
     "platform_pki/filesystem.py",
+    "platform_pki/init.py",
     "platform_pki/inventory.py",
     "platform_pki/list_expiry.py",
     "platform_pki/locks.py",
@@ -196,16 +197,15 @@ def test_leading_root_action_precedes_later_invalid_arguments(
         _assert_success(result)
 
 
-def test_parser_and_unavailable_handler_fail_without_state(
+def test_parser_failure_has_no_application_state(
     process_runner: Callable[..., ProcessResult],
     clean_environment: dict[str, str],
 ) -> None:
-    for arguments in (("--invalid",), ("init",)):
-        result = _run(process_runner, clean_environment, ARTIFACT, *arguments)
-        assert result.status == 1
-        assert result.stdout == ""
-        assert result.stderr.startswith("[ERROR] ")
-        assert "\033" not in result.stderr
+    result = _run(process_runner, clean_environment, ARTIFACT, "--invalid")
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("[ERROR] ")
+    assert "\033" not in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -241,16 +241,21 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
     clean_environment: dict[str, str],
     route,
 ) -> None:
+    arguments = MINIMAL_ARGUMENTS[route.unified_route]
+    if route.unified_route == ("init",):
+        arguments = (*arguments, "--namespace", "/")
     result = _run(
         process_runner,
         clean_environment,
         ARTIFACT,
         *route.unified_route,
-        *MINIMAL_ARGUMENTS[route.unified_route],
+        *arguments,
     )
     assert result.status == 1
     assert result.stdout == ""
-    if route.unified_route in {
+    if route.unified_route == ("init",):
+        assert result.stderr == "[ERROR] Namespace must not be the filesystem root\n"
+    elif route.unified_route in {
         ("list-expiry",),
         ("print-cert",),
         ("service-verify",),
@@ -361,6 +366,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     help_result = _run(process_runner, clean_environment, copied, "--help", cwd=tmp_path)
     _assert_success(help_result)
     operational_descriptions = {
+        "init": "Create the local outside-Git PKI working directory",
         "list-expiry": "List expiry dates for generated service certificates",
         "print-cert": "Print readable details for a generated service certificate",
         "service-verify": "Verify a generated service certificate",

@@ -15,6 +15,10 @@ from .parser import (
 
 
 def _handler(route: tuple[str, ...]):
+    if route == ("init",):
+        from .init import initialize
+
+        return initialize
     if route == ("list-expiry",):
         from .list_expiry import list_expiry
 
@@ -74,6 +78,33 @@ def _error(message: str) -> int:
 
 
 def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> None:
+    if route == ("init",) and not unified:
+        print(
+            f"{name} - Create the local outside-Git PKI working directory\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--force', '35')}\n"
+            "    Refresh the inventory example\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name}\n"
+            f"  {name} --namespace /tmp/platform-pki-test\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "--force never overwrites active inventory, CA keys, certificates, or database state.\n\n",
+            end="",
+        )
+        return
     if route == ("list-expiry",) and not unified:
         print(
             f"{name} - List expiry dates for generated service certificates\n\n"

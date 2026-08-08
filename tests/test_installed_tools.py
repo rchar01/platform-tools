@@ -228,14 +228,22 @@ def test_relative_xdg_cache_home_is_rejected(
     assert not (tmp_path / "relative-cache").exists()
 
 
+@pytest.mark.parametrize(
+    "command",
+    (("platform-pki-init",), ("platform-pki", "init")),
+    ids=("compatibility", "unified"),
+)
 def test_installed_pki_shared_asset_lookup(
-    process_runner: Callable[..., ProcessResult], install: Install
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
 ) -> None:
-    namespace = install.state / "pki-namespace"
+    namespace = install.state / f"pki-namespace-{command[0]}"
     result = execute(
         process_runner,
         install,
-        install.runtime / "platform-pki-init",
+        install.runtime / command[0],
+        *command[1:],
         "--namespace",
         namespace,
     )
