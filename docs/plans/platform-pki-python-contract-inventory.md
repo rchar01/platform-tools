@@ -5,8 +5,8 @@
 Active incremental-migration contract. This inventory records the compatibility
 surface that the Python migration must preserve. Retained Bash source and
 existing tests remain the authoritative oracle until each command is cut over.
-The three Phase 3 read-oriented commands and Phase 4 `platform-pki-init` are
-Python-backed.
+The three Phase 3 read-oriented commands and Phase 4 `platform-pki-init` and
+`platform-pki-inventory-install` are Python-backed.
 
 ## Runtime and Interfaces
 
@@ -131,6 +131,15 @@ The retained init oracle is
 `bebb970bea2fbd46ed807854e14680416f9cef6e0e2b63557a7675ecc1e28e9e`;
 the required common library and `services.yml.example` oracle dependencies are
 pinned by `tests/pki/test_init.py`.
+
+The retained inventory-install oracle is
+`tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install`
+from commit `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1`. Its SHA-256 is
+`9084754ca9a6906abdbd3b1f6cbe7230f17a55074dfd327a0403d8d7a9a77031`;
+the required common-library SHA-256 is
+`dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`.
+`tests/pki/test_inventory_install.py` checks this provenance and compares the
+oracle with both Python interfaces and descriptor-bound publication races.
 
 `tests/pki/migration_contract.py` now freezes all 24 leaf routes, including
 ordered positionals and long flags, required names, defaults, enum values,

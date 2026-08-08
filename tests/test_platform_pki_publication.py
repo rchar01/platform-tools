@@ -28,6 +28,7 @@ from src.platform_pki.filesystem import (
 from src.platform_pki.publication import (
     PUBLICATION_CHECKPOINTS,
     ExchangeResult,
+    GuardedExchangeRaceError,
     PublicationAmbiguousError,
     PublicationCleanupAmbiguousError,
     PublicationCleanupError,
@@ -47,6 +48,7 @@ from src.platform_pki.publication import (
     TreeReadiness,
     atomic_write_bytes,
     exchange_exact,
+    exchange_guarded_regular_files,
     fsync_tree,
     publish_no_clobber,
     replace_exact,
@@ -119,7 +121,7 @@ def _fail_second_directory_pin(
 
 def test_checkpoint_domain_is_finite_unique_and_literal() -> None:
     assert isinstance(PUBLICATION_CHECKPOINTS, tuple)
-    assert len(PUBLICATION_CHECKPOINTS) == len(set(PUBLICATION_CHECKPOINTS)) == 38
+    assert len(PUBLICATION_CHECKPOINTS) == len(set(PUBLICATION_CHECKPOINTS)) == 40
     assert {
         "stage-before-create",
         "stage-after-write",
@@ -127,6 +129,8 @@ def test_checkpoint_domain_is_finite_unique_and_literal() -> None:
         "publication-after-mutation",
         "exchange-before-mutation",
         "exchange-after-mutation",
+        "guarded-exchange-before-mutation",
+        "guarded-exchange-after-mutation",
         "replacement-before-exchange",
         "replacement-after-exchange-durability",
         "replacement-terminal-validation",
@@ -1696,6 +1700,132 @@ def test_exchange_files_preserves_names_and_swaps_exact_inodes(tmp_path: Path) -
     assert second.read_bytes() == b"first"
     assert first.stat().st_ino == result.first_identity.ino == second_expected.ino
     assert second.stat().st_ino == result.second_identity.ino == first_expected.ino
+
+
+def _guarded_exchange_inputs(
+    tmp_path: Path,
+) -> tuple[FileIdentity, FileIdentity]:
+    stage_expected = _write(tmp_path / "stage", b"new")
+    _write(tmp_path / "destination", b"old")
+    os.link(tmp_path / "destination", tmp_path / "guard")
+    return stage_expected, _identity(tmp_path / "destination")
+
+
+def test_guarded_exchange_swaps_stage_and_destination_with_guard_intact(
+    tmp_path: Path,
+) -> None:
+    stage_expected, guarded_expected = _guarded_exchange_inputs(tmp_path)
+    with OpenedDirectory(tmp_path) as parent:
+        result = exchange_guarded_regular_files(
+            parent,
+            "stage",
+            stage_expected,
+            "destination",
+            guarded_expected,
+            "guard",
+            guarded_expected,
+        )
+    assert result.first_identity.ino == guarded_expected.ino
+    assert result.second_identity.ino == stage_expected.ino
+    assert (tmp_path / "stage").read_bytes() == b"old"
+    assert (tmp_path / "destination").read_bytes() == b"new"
+    assert (tmp_path / "guard").stat().st_ino == guarded_expected.ino
+
+
+def test_guarded_exchange_pre_mutation_race_does_not_exchange(tmp_path: Path) -> None:
+    stage_expected, guarded_expected = _guarded_exchange_inputs(tmp_path)
+
+    def compete(point: str) -> None:
+        if point == "guarded-exchange-before-mutation":
+            (tmp_path / "destination").unlink()
+            _write(tmp_path / "destination", b"competitor")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationIdentityError):
+            exchange_guarded_regular_files(
+                parent,
+                "stage",
+                stage_expected,
+                "destination",
+                guarded_expected,
+                "guard",
+                guarded_expected,
+                fault_hook=compete,
+            )
+    assert (tmp_path / "stage").read_bytes() == b"new"
+    assert (tmp_path / "destination").read_bytes() == b"competitor"
+    assert (tmp_path / "guard").read_bytes() == b"old"
+
+
+def test_guarded_exchange_restores_syscall_boundary_destination_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stage_expected, guarded_expected = _guarded_exchange_inputs(tmp_path)
+    retained = tmp_path / "retained-old"
+    real_renameat2 = publication._renameat2
+    calls = 0
+
+    def race_then_exchange(
+        first_parent: publication._PinnedDirectory,
+        first_name: str,
+        second_parent: publication._PinnedDirectory,
+        second_name: str,
+        flags: int,
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            (tmp_path / "destination").rename(retained)
+            _write(tmp_path / "destination", b"competitor")
+        real_renameat2(
+            first_parent,
+            first_name,
+            second_parent,
+            second_name,
+            flags,
+        )
+
+    monkeypatch.setattr(publication, "_renameat2", race_then_exchange)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(GuardedExchangeRaceError):
+            exchange_guarded_regular_files(
+                parent,
+                "stage",
+                stage_expected,
+                "destination",
+                guarded_expected,
+                "guard",
+                guarded_expected,
+            )
+    assert calls == 2
+    assert (tmp_path / "stage").read_bytes() == b"new"
+    assert (tmp_path / "destination").read_bytes() == b"competitor"
+    assert retained.read_bytes() == b"old"
+    assert (tmp_path / "guard").stat().st_ino == retained.stat().st_ino
+
+
+def test_guarded_exchange_post_mutation_fault_retains_swapped_names(
+    tmp_path: Path,
+) -> None:
+    stage_expected, guarded_expected = _guarded_exchange_inputs(tmp_path)
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationAmbiguousError):
+            exchange_guarded_regular_files(
+                parent,
+                "stage",
+                stage_expected,
+                "destination",
+                guarded_expected,
+                "guard",
+                guarded_expected,
+                fault_hook=FaultHook(
+                    failure_at="guarded-exchange-after-mutation"
+                ),
+            )
+    assert (tmp_path / "stage").read_bytes() == b"old"
+    assert (tmp_path / "destination").read_bytes() == b"new"
+    assert (tmp_path / "guard").read_bytes() == b"old"
 
 
 def test_exchange_directories_preserves_both_names(tmp_path: Path) -> None:

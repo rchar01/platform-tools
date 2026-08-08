@@ -36,7 +36,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
-| `platform-pki` | Unified Python PKI interface; `init`, `print-cert`, `list-expiry`, and `service-verify` are operational while later migration routes remain fail-closed. |
+| `platform-pki` | Unified Python PKI interface; `init`, `inventory-install`, `print-cert`, `list-expiry`, and `service-verify` are operational while later migration routes remain fail-closed. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
@@ -95,7 +95,7 @@ PKI helpers require:
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
 - `python3` for byte-bounded `platform-pki-custody-report` header and receipt inspection
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-print-cert`, `platform-pki-list-expiry`, and `platform-pki-service-verify`; other operational PKI commands remain on their existing Bash executables during migration
+- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-print-cert`, `platform-pki-list-expiry`, and `platform-pki-service-verify`; other operational PKI commands remain on their existing Bash executables during migration
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for the currently disconnected Python ordered-lock primitive
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
@@ -424,7 +424,8 @@ different private repository. `platform-pki-init --force` refreshes only the
 example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
-The equivalent unified initialization route is `platform-pki init`.
+The equivalent unified routes are `platform-pki init` and
+`platform-pki inventory-install`.
 
 Service inventory may set `key_custody: host-local`; such entries must also set
 canonical `target`, `validation_boundary_sha256`, and positive-decimal

@@ -36,6 +36,12 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   compatibility command and unified `platform-pki init` route, preserving its
   parser, help, path validation, private-tree creation, template publication,
   installed shared-asset, output, and status contracts.
+- Changed `platform-pki-inventory-install` to use one Python 3.14 handler for
+  its compatibility command and unified `platform-pki inventory-install`
+  route, preserving source and destination identity checks,
+  lifecycle-through-inventory locking, exact-byte validation, no-op and mode
+  normalization behavior, atomic no-clobber/exchange publication, and retained
+  ambiguous recovery artifacts.
 - Changed `platform-pki-print-cert`, `platform-pki-list-expiry`, and
   `platform-pki-service-verify` to use the same Python 3.14 operational handlers
   as their unified `platform-pki` routes, preserving their command names,

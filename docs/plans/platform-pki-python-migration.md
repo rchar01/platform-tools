@@ -3,7 +3,8 @@
 ## Status
 
 Phase 0 contract expansion remains in progress. Phases 1 through 3 are
-implemented, and Phase 4 has started with `platform-pki-init` Python-backed.
+implemented, and Phase 4 has `platform-pki-init` and
+`platform-pki-inventory-install` Python-backed.
 
 ## Goal
 
@@ -202,6 +203,7 @@ Recorded cutovers:
 | `platform-pki-list-expiry` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-list-expiry/platform-pki-list-expiry` |
 | `platform-pki-service-verify` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-service-verify/platform-pki-service-verify` |
 | `platform-pki-init` | `ee03cddc626338ea7d066dd71519204bddb46db3` | `tests/pki/oracles/platform-pki-init/platform-pki-init` |
+| `platform-pki-inventory-install` | `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1` | `tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install` |
 
 ## Phase 1: Build the Python Foundation
 
@@ -319,9 +321,10 @@ Tasks:
 - [ ] Preserve template and installed-layout behavior for the remaining Phase 4
   commands.
 - [ ] Preserve lifecycle, authority, inventory, and export locking boundaries.
-- [ ] Preserve source identities, destination identities, and atomic
+- [x] Preserve source identities, destination identities, and atomic
   publication behavior.
-- [ ] Run existing unsafe-path, race, no-op, and installed-layout tests.
+- [x] Run existing unsafe-path, race, no-op, and installed-layout tests for
+  inventory installation.
 
 Validation gate:
 
@@ -593,6 +596,7 @@ implementation.
 | 2026-08-08 | Python-to-Bash package rollback and the proposed `doctor` route were removed from scope. | The user selected a forward-only operating model; Python still recovers final Bash transactions, while using older Bash releases with Python-written state is unsupported. |
 | 2026-08-08 | `platform-pki-print-cert` became the first Python-backed operational compatibility command. | The frozen Bash oracle is recorded at `4cd6b2294760571ffed632295de441c34a4c0eb1`; focused Bash/Python output and state comparison passed, and command-contract, installed-tool, and legacy-gating verification passed 702 tests. |
 | 2026-08-08 | `platform-pki-init` started Phase 4 bounded-publication command migration. | The frozen Bash oracle is recorded at `ee03cddc626338ea7d066dd71519204bddb46db3`; the compatibility and unified routes share one Python handler and retain the existing template and path contract. |
+| 2026-08-08 | `platform-pki-inventory-install` migrated to one Python publication handler. | The frozen Bash oracle is recorded at `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1`; Bash/Python differentials cover installation, no-op, normalization, invalid input, physical-CWD resolution, legacy and recovery gates, replacement, fallback, overlap, and lock contention, while Python-specific tests exercise descriptor-bound races and retained ambiguity. |
 
 ## Decision Log
 

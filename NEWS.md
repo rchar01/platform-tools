@@ -23,6 +23,11 @@ This file gives a short, release-oriented view of what changed between versions.
   caller-journaled cleanup. `platform-pki-init` now shares one Python handler
   with `platform-pki init` while preserving its path and tree validation,
   template publication, installed shared-asset lookup, output, and status.
+  `platform-pki-inventory-install` now likewise shares one descriptor-bound
+  Python publication handler with `platform-pki inventory-install`, preserving
+  source and destination identity checks, lifecycle-through-inventory locking,
+  mode normalization, atomic no-clobber/exchange behavior, and retained
+  ambiguous recovery artifacts.
   `platform-pki-print-cert`, `platform-pki-list-expiry`, and
   `platform-pki-service-verify` likewise share their Python operational handlers
   with the corresponding unified routes while preserving locking, OpenSSL child

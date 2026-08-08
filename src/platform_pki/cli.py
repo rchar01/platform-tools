@@ -19,6 +19,10 @@ def _handler(route: tuple[str, ...]):
         from .init import initialize
 
         return initialize
+    if route == ("inventory-install",):
+        from .inventory_install import install_inventory
+
+        return install_inventory
     if route == ("list-expiry",):
         from .list_expiry import list_expiry
 
@@ -102,6 +106,35 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "The namespace defaults to platform-infrastructure under the XDG\n"
             "configuration home. The PKI directory defaults to <namespace>/pki.\n"
             "--force never overwrites active inventory, CA keys, certificates, or database state.\n\n",
+            end="",
+        )
+        return
+    if route == ("inventory-install",) and not unified:
+        print(
+            f"{name} - Install private-Git service inventory into local PKI state\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--private-repo PATH', '35')}\n"
+            "    Private repository path\n"
+            "    Default: ../platform-private\n\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name}\n"
+            f"  {name} --private-repo /srv/platform-private\n\n"
+            "The source is <private-repo>/pki/services.yml. Relative repository paths\n"
+            "resolve from the physical current directory. The destination is atomically\n"
+            "installed as mode 600 and is never linked to the source.\n"
+            "Legacy layouts are accepted so inventory can be installed before migration.\n\n",
             end="",
         )
         return

@@ -32,6 +32,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/filesystem.py",
     "platform_pki/init.py",
     "platform_pki/inventory.py",
+    "platform_pki/inventory_install.py",
     "platform_pki/list_expiry.py",
     "platform_pki/locks.py",
     "platform_pki/operational.py",
@@ -255,6 +256,10 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
     assert result.stdout == ""
     if route.unified_route == ("init",):
         assert result.stderr == "[ERROR] Namespace must not be the filesystem root\n"
+    elif route.unified_route == ("inventory-install",):
+        assert result.stderr.startswith(
+            "[ERROR] Private repository ancestor "
+        )
     elif route.unified_route in {
         ("list-expiry",),
         ("print-cert",),
@@ -367,6 +372,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     _assert_success(help_result)
     operational_descriptions = {
         "init": "Create the local outside-Git PKI working directory",
+        "inventory-install": "Install private-Git service inventory into local PKI state",
         "list-expiry": "List expiry dates for generated service certificates",
         "print-cert": "Print readable details for a generated service certificate",
         "service-verify": "Verify a generated service certificate",

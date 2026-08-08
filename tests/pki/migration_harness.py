@@ -365,8 +365,11 @@ def run_differential_case(
     content_normalizers: tuple[ContentNormalizer, ...] = (),
     runner: Callable[..., ProcessResult] = run_process,
     run_options: Mapping[str, object] | None = None,
+    cwd_relative: Path = Path("."),
 ) -> DifferentialResult:
     _require_relative_path(pki_relative, "PKI path")
+    if cwd_relative.is_absolute() or ".." in cwd_relative.parts:
+        raise ValueError("working directory must be relative without parent traversal")
     if case_root.exists() or case_root.is_symlink():
         raise FileExistsError(case_root)
     case_root.mkdir(mode=0o700)
@@ -386,11 +389,17 @@ def run_differential_case(
 
     def observe(root: Path, argv_factory: ArgvFactory) -> DifferentialObservation:
         state_root = root / pki_relative
+        try:
+            working_directory = _require_directory_components(root, cwd_relative)
+        except OSError:
+            raise ValueError(
+                f"Copied working directory does not exist: {root / cwd_relative}"
+            ) from None
         environment = _case_environment(root, base_environment)
         before = snapshot_state(state_root, normalizers)
         result = runner(
             tuple(argv_factory(root)),
-            cwd=root,
+            cwd=working_directory,
             env=environment,
             **options,
         )

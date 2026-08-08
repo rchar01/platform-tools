@@ -296,3 +296,80 @@ def test_differential_runner_reports_process_divergence_without_output(tmp_path:
     assert result.bash.process.status == 0
     assert result.python.process.status == 1
     assert str(error.value) == "differential process observations differ"
+
+
+def test_differential_runner_uses_validated_nested_working_directory(
+    tmp_path: Path,
+) -> None:
+    seed = tmp_path / "seed"
+    (seed / "pki").mkdir(parents=True)
+    (seed / "checkout/nested").mkdir(parents=True)
+
+    def argv(_root: Path) -> tuple[str, ...]:
+        return (sys.executable, "-c", "import os; print(os.getcwd())")
+
+    def normalize(root: Path, output: str) -> str:
+        return output.replace(os.fspath(root), "<CASE>")
+
+    result = run_differential_case(
+        seed,
+        tmp_path / "case",
+        Path("pki"),
+        argv,
+        argv,
+        {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+        cwd_relative=Path("checkout/nested"),
+        output_normalizers=(normalize,),
+    )
+
+    result.assert_equivalent()
+    assert result.bash.process.stdout == "<CASE>/checkout/nested\n"
+
+
+@pytest.mark.parametrize(
+    "working_directory",
+    [Path("/absolute"), Path("checkout/../outside")],
+    ids=["absolute", "parent-traversal"],
+)
+def test_differential_runner_rejects_lexically_unsafe_working_directory(
+    tmp_path: Path, working_directory: Path
+) -> None:
+    seed = tmp_path / "seed"
+    (seed / "pki").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="working directory must be relative"):
+        run_differential_case(
+            seed,
+            tmp_path / "case",
+            Path("pki"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+            cwd_relative=working_directory,
+        )
+
+
+@pytest.mark.parametrize("kind", ["symlink", "file", "missing"])
+def test_differential_runner_rejects_unsafe_working_directory_components(
+    tmp_path: Path, kind: str
+) -> None:
+    seed = tmp_path / "seed"
+    (seed / "pki").mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    working_directory = seed / "checkout"
+    if kind == "symlink":
+        working_directory.symlink_to(external, target_is_directory=True)
+    elif kind == "file":
+        working_directory.write_text("not a directory\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="working directory|path component"):
+        run_differential_case(
+            seed,
+            tmp_path / "case",
+            Path("pki"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+            cwd_relative=Path("checkout"),
+        )

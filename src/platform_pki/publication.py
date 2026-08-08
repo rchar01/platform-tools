@@ -63,6 +63,8 @@ _CHECKPOINTS = (
     "exchange-after-parent-fsync",
     "exchange-before-final-validation",
     "exchange-after-final-validation",
+    "guarded-exchange-before-mutation",
+    "guarded-exchange-after-mutation",
     "replacement-before-exchange",
     "replacement-after-exchange",
     "replacement-after-exchange-durability",
@@ -171,6 +173,13 @@ class PublicationReplacementCleanupError(PublicationReplacementAmbiguousError):
             self,
             "Publication replaced the destination but old-state cleanup is incomplete",
         )
+
+
+class GuardedExchangeRaceError(PublicationError):
+    """A guarded exchange race was restored to its pre-exchange names."""
+
+    def __init__(self) -> None:
+        super().__init__("Guarded publication destination changed")
 
 
 class PublicationTreeError(PublicationError):
@@ -422,12 +431,22 @@ def _open_exact(
     parent: _PinnedDirectory,
     name: str,
     expected: FileIdentity,
+    *,
+    expected_regular_links: int = 1,
 ) -> int:
     before = _stat_at(parent, name)
     if before is ABSENT or before != expected:
         raise PublicationIdentityError()
     assert isinstance(before, FileIdentity)
-    _validate_owned(before)
+    if expected_regular_links == 1:
+        _validate_owned(before)
+    elif (
+        before.kind != "regular"
+        or before.uid != os.geteuid()
+        or before.permissions & 0o022
+        or before.links != expected_regular_links
+    ):
+        raise PublicationPolicyError()
     flags = _TREE_FILE_FLAGS if before.kind == "regular" else _TREE_DIRECTORY_FLAGS
     try:
         descriptor = os.open(name, flags, dir_fd=parent.fileno())
@@ -1243,6 +1262,143 @@ def exchange_exact(
         if second_pin is not first_pin:
             second_pin.close()
         first_pin.close()
+
+
+def exchange_guarded_regular_files(
+    parent: OpenedDirectory,
+    stage_name: str | os.PathLike[str],
+    expected_stage: FileIdentity,
+    destination_name: str | os.PathLike[str],
+    expected_destination: FileIdentity,
+    guard_name: str | os.PathLike[str],
+    expected_guard: FileIdentity,
+    *,
+    fault_hook: Hook = DEFAULT_FAULT_HOOK,
+    pause_hook: Hook = DEFAULT_PAUSE_HOOK,
+) -> ExchangeResult:
+    """Exchange a stage with a destination protected by one exact hard-link guard.
+
+    This primitive exists for the retained inventory-install publication contract.
+    The destination and guard must be the same current-user-owned regular inode
+    with link count two. A destination race at the exchange syscall boundary is
+    exchanged back when the staged inode reached the destination; uncertainty
+    after either mutation is reported as ambiguous and left untouched.
+    """
+
+    if not isinstance(parent, OpenedDirectory):
+        raise TypeError("parent must be an OpenedDirectory")
+    if not all(
+        isinstance(identity, FileIdentity)
+        for identity in (expected_stage, expected_destination, expected_guard)
+    ):
+        raise TypeError("guarded exchange identities must be FileIdentity objects")
+    stage = _single_name(stage_name, "stage_name")
+    destination = _single_name(destination_name, "destination_name")
+    guard = _single_name(guard_name, "guard_name")
+    if len({stage, destination, guard}) != 3:
+        raise ValueError("guarded exchange names must differ")
+    if (
+        expected_stage.kind != "regular"
+        or expected_stage.links != 1
+        or expected_destination.kind != "regular"
+        or expected_destination.links != 2
+        or expected_guard != expected_destination
+    ):
+        raise PublicationPolicyError()
+    _hooks(fault_hook, pause_hook)
+
+    parent_pin = _pin_directory(parent)
+    assert parent_pin.directory_identity is not None
+    stage_fd = destination_fd = guard_fd = -1
+    exchanged = False
+    restored = False
+    try:
+        stage_fd = _open_exact(parent_pin, stage, expected_stage)
+        destination_fd = _open_exact(
+            parent_pin,
+            destination,
+            expected_destination,
+            expected_regular_links=2,
+        )
+        guard_fd = _open_exact(
+            parent_pin,
+            guard,
+            expected_guard,
+            expected_regular_links=2,
+        )
+        if not _same_inode(_fstat(destination_fd), _fstat(guard_fd)):
+            raise PublicationIdentityError()
+
+        _checkpoint("guarded-exchange-before-mutation", fault_hook, pause_hook)
+        if (
+            _stat_at(parent_pin, stage) != expected_stage
+            or _stat_at(parent_pin, destination) != expected_destination
+            or _stat_at(parent_pin, guard) != expected_guard
+        ):
+            raise PublicationIdentityError()
+        _recheck_parent(parent_pin)
+        _renameat2(
+            parent_pin,
+            stage,
+            parent_pin,
+            destination,
+            _RENAME_EXCHANGE,
+        )
+        exchanged = True
+        _checkpoint("guarded-exchange-after-mutation", fault_hook, pause_hook)
+
+        staged_at_destination = _stat_at(parent_pin, destination)
+        displaced_at_stage = _stat_at(parent_pin, stage)
+        guarded = _stat_at(parent_pin, guard)
+        _recheck_parent(parent_pin)
+        if (
+            isinstance(staged_at_destination, FileIdentity)
+            and isinstance(displaced_at_stage, FileIdentity)
+            and isinstance(guarded, FileIdentity)
+            and _same_inode(staged_at_destination, expected_stage)
+            and _same_inode(displaced_at_stage, expected_destination)
+            and _same_inode(guarded, expected_guard)
+        ):
+            return ExchangeResult(
+                displaced_at_stage,
+                staged_at_destination,
+                parent_pin.directory_identity,
+                parent_pin.directory_identity,
+            )
+
+        if (
+            isinstance(staged_at_destination, FileIdentity)
+            and isinstance(displaced_at_stage, FileIdentity)
+            and _same_inode(staged_at_destination, expected_stage)
+        ):
+            _renameat2(
+                parent_pin,
+                stage,
+                parent_pin,
+                destination,
+                _RENAME_EXCHANGE,
+            )
+            restored = True
+            restored_stage = _stat_at(parent_pin, stage)
+            restored_destination = _stat_at(parent_pin, destination)
+            _recheck_parent(parent_pin)
+            if (
+                isinstance(restored_stage, FileIdentity)
+                and isinstance(restored_destination, FileIdentity)
+                and _same_inode(restored_stage, expected_stage)
+                and _same_inode(restored_destination, displaced_at_stage)
+            ):
+                raise GuardedExchangeRaceError()
+        raise PublicationValidationError()
+    except BaseException as error:
+        if exchanged and not restored and not isinstance(error, PublicationAmbiguousError):
+            raise PublicationValidationError() from error
+        raise
+    finally:
+        for descriptor in (guard_fd, destination_fd, stage_fd):
+            if descriptor >= 0:
+                _close(descriptor)
+        parent_pin.close()
 
 
 def _removed_at(parent_fd: int, name: str) -> bool:

@@ -37,7 +37,7 @@ def make_tools() -> tuple[str, ...]:
 
 
 TOOLS = make_tools()
-DEPENDENCIES = ("bash", "python3", "dirname", "mkdir", "chmod", "id", "stat", "find", "mktemp", "cp", "mv", "rm", "pwd", "flock", "openssl")
+DEPENDENCIES = ("bash", "python3", "dirname", "mkdir", "chmod", "id", "stat", "find", "mktemp", "cp", "mv", "rm", "ln", "pwd", "flock", "openssl")
 LEGACY_MIGRATION_ERROR = (
     "[ERROR] Legacy PKI state requires migration; create a fresh backup and "
     "follow platform-pki-ca-rollover status/migrate\n"
@@ -260,6 +260,52 @@ def test_installed_pki_shared_asset_lookup(
     require_outside_checkout(example, "initialized PKI template", strict=True)
     require_outside_checkout(installed_template, "installed PKI template", strict=True)
     assert example.read_bytes() == installed_template.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "command",
+    (("platform-pki-inventory-install",), ("platform-pki", "inventory-install")),
+    ids=("compatibility", "unified"),
+)
+def test_installed_inventory_install_uses_shared_library(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    namespace = install.state / f"inventory-namespace-{command[0]}"
+    private = install.state / f"inventory-private-{command[0]}"
+    (private / "pki").mkdir(mode=0o700, parents=True)
+    private.chmod(0o700)
+    source = private / "pki/services.yml"
+    source.write_text(
+        "services:\n  api:\n    common_name: api.example\n    dns:\n      - api.example\n",
+        encoding="utf-8",
+    )
+    source.chmod(0o600)
+    initialized = execute(
+        process_runner,
+        install,
+        install.runtime / "platform-pki-init",
+        "--namespace",
+        namespace,
+    )
+    assert initialized.status == 0, initialized.stderr
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "--namespace",
+        namespace,
+        "--private-repo",
+        private,
+    )
+    assert result.status == 0, result.stderr
+    assert result.stderr == ""
+    destination = namespace / "pki/inventory/services.yml"
+    assert destination.read_bytes() == source.read_bytes()
+    assert destination.stat().st_mode & 0o777 == 0o600
 
 
 def test_installed_pki_command_prepares_legacy_control_state(
