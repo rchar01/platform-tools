@@ -67,7 +67,8 @@ class LockPolicyError(LockError):
 
 
 class LockContentionError(LockError):
-    def __init__(self) -> None:
+    def __init__(self, name: str | None = None) -> None:
+        self.name = name
         super().__init__("Another PKI operation is in progress")
 
 
@@ -405,7 +406,7 @@ def _open_lock(
             locked = True
         except OSError as error:
             if error.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
-                raise LockContentionError() from None
+                raise LockContentionError(name) from None
             raise LockAcquireError() from None
 
         _checkpoint(name, "after-acquire", fault_hook, pause_hook)

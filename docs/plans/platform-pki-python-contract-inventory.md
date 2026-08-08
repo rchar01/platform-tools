@@ -4,8 +4,8 @@
 
 Active incremental-migration contract. This inventory records the compatibility
 surface that the Python migration must preserve. Retained Bash source and
-existing tests remain the authoritative oracle until each command is cut over;
-`platform-pki-print-cert` is the first Python-backed operational command.
+existing tests remain the authoritative oracle until each command is cut over.
+The three Phase 3 read-oriented commands are Python-backed.
 
 ## Runtime and Interfaces
 

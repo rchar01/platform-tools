@@ -15,10 +15,18 @@ from .parser import (
 
 
 def _handler(route: tuple[str, ...]):
+    if route == ("list-expiry",):
+        from .list_expiry import list_expiry
+
+        return list_expiry
     if route == ("print-cert",):
         from .print_cert import print_certificate
 
         return print_certificate
+    if route == ("service-verify",):
+        from .service_verify import verify_service
+
+        return verify_service
     return None
 
 
@@ -66,6 +74,43 @@ def _error(message: str) -> int:
 
 
 def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> None:
+    if route == ("list-expiry",) and not unified:
+        print(
+            f"{name} - List expiry dates for generated service certificates\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--warn-days DAYS', '35')}\n"
+            "    Warning threshold\n"
+            "    Default: 90\n\n"
+            f"  {_color('--critical-days DAYS', '35')}\n"
+            "    Critical threshold\n"
+            "    Default: 30\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name}\n"
+            f"  {name} --warn-days 90 --critical-days 30\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n\n"
+            "Certificate status exit codes:\n"
+            "  0 all OK\n"
+            "  1 warning threshold reached\n"
+            "  2 critical threshold reached\n"
+            "  3 generated certificate missing\n\n"
+            "Parser and configuration errors exit 1.\n",
+            end="",
+        )
+        return
     if route == ("print-cert",) and not unified:
         print(
             f"{name} - Print readable details for a generated service certificate\n\n"
@@ -90,6 +135,39 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             f"  {name} platform-example --pki-dir /tmp/platform-pki\n\n"
             "The namespace defaults to platform-infrastructure under the XDG\n"
             "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n",
+            end="",
+        )
+        return
+    if route == ("service-verify",) and not unified:
+        print(
+            f"{name} - Verify a generated service certificate\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} SERVICE [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--min-days DAYS', '35')}\n"
+            "    Required remaining validity\n"
+            "    Default: 30\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICE', '34')}\n"
+            "    Inventory service name\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} platform-example\n"
+            f"  {name} platform-example --min-days 60\n\n"
+            "Verifies chain trust, private-key match, CA:false, serverAuth, inventory\n"
+            "SANs, and remaining validity. The PKI directory defaults to <namespace>/pki.\n"
+            "Inventory entries with key_custody: host-local fail closed here; use\n"
+            "platform-pki-csr-candidate verify with an exact request ID.\n"
             "Legacy singleton CA state must be migrated before this command can run.\n",
             end="",
         )

@@ -7,7 +7,8 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from .errors import ApplicationError
@@ -19,20 +20,26 @@ from .filesystem import (
     OpenedDirectory,
     OpenedFile,
 )
-from .inventory import Inventory, InventoryError, parse_inventory
+from .inventory import Inventory, InventoryError, InventoryService, parse_inventory
+from .locks import LockContentionError, acquire_pki_locks
 from .paths import PkiPaths, resolve_pki_paths
-from .records import RecordError, RecordSpec
 from .subprocesses import ProcessResult, run_process
 
 
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*", re.ASCII)
 _ROOT_GENERATION = re.compile(r"g[1-9][0-9]*", re.ASCII)
 _INTERMEDIATE_GENERATION = re.compile(r"g[1-9][0-9]*-i[1-9][0-9]*", re.ASCII)
-_PAIR_SPEC = RecordSpec(("root", "intermediate"))
 _PROCESS_TIMEOUT = 30.0
 _PROCESS_GRACE = 1.0
 _PROCESS_STDOUT_LIMIT = 4 * 1024 * 1024
 _PROCESS_STDERR_LIMIT = 1024 * 1024
+_LOCK_LABELS = {
+    "lifecycle": "PKI lifecycle operation",
+    "root": "root CA operation",
+    "intermediate": "intermediate CA operation",
+    "inventory": "inventory operation",
+    "export": "export operation",
+}
 
 
 def require_pilot_common_library(environment: Mapping[str, str]) -> None:
@@ -143,6 +150,18 @@ def prepare_control_state(pki_dir: str) -> None:
         raise ApplicationError("PKI directory does not satisfy its private path policy") from None
 
 
+@contextmanager
+def acquire_operational_locks(pki_dir: str, profile: str) -> Iterator[None]:
+    try:
+        with acquire_pki_locks(pki_dir, profile):
+            yield
+    except LockContentionError as error:
+        name = error.name
+        label = _LOCK_LABELS.get(name or "", "PKI operation")
+        suffix = f": {pki_dir}/locks/{name}" if name else ""
+        raise ApplicationError(f"Another {label} is in progress{suffix}") from None
+
+
 def require_pki_directory(pki_dir: str) -> None:
     if not os.path.isdir(pki_dir):
         raise ApplicationError(
@@ -161,18 +180,29 @@ def require_inventory_readable(pki_dir: str) -> str:
 
 
 def _read_pair(path: str) -> tuple[str, str]:
-    record = None
+    data = b""
     try:
         with OpenedFile(
             path,
             policy=FilePolicy(owner=os.geteuid(), mode=0o600, links=1, max_size=4096),
         ) as opened:
-            record = _PAIR_SPEC.parse(opened.read(opened.identity.size))
-    except (FilesystemError, RecordError):
+            data = opened.read(opened.identity.size)
+    except FilesystemError:
         raise ApplicationError("PKI issuer state is invalid") from None
-    assert record is not None
-    root = record["root"]
-    intermediate = record["intermediate"]
+    if data.endswith(b"\n"):
+        data = data[:-1]
+    lines = data.split(b"\n")
+    if (
+        len(lines) != 2
+        or not lines[0].startswith(b"root=")
+        or not lines[1].startswith(b"intermediate=")
+    ):
+        raise ApplicationError("PKI issuer state is invalid")
+    try:
+        root = lines[0].removeprefix(b"root=").decode("ascii")
+        intermediate = lines[1].removeprefix(b"intermediate=").decode("ascii")
+    except UnicodeDecodeError:
+        raise ApplicationError("PKI issuer state is invalid") from None
     if (
         _ROOT_GENERATION.fullmatch(root) is None
         or _INTERMEDIATE_GENERATION.fullmatch(intermediate) is None
@@ -193,6 +223,7 @@ def _directory_entries(path: str) -> tuple[str, ...]:
 
 
 def require_generation_layout(pki_dir: str) -> None:
+    require_no_unresolved_state(pki_dir)
     active = f"{pki_dir}/state/active-issuer"
     bootstrap = f"{pki_dir}/state/bootstrap-root"
     roots = f"{pki_dir}/authorities/roots"
@@ -329,7 +360,12 @@ def require_no_unresolved_state(pki_dir: str) -> None:
             )
 
 
-def run_external(argv: tuple[str, ...], environment: Mapping[str, str]) -> ProcessResult:
+def run_external(
+    argv: tuple[str, ...],
+    environment: Mapping[str, str],
+    *,
+    input: bytes | None = None,
+) -> ProcessResult:
     result = run_process(
         argv,
         env=environment,
@@ -337,6 +373,7 @@ def run_external(argv: tuple[str, ...], environment: Mapping[str, str]) -> Proce
         term_grace=_PROCESS_GRACE,
         stdout_limit=_PROCESS_STDOUT_LIMIT,
         stderr_limit=_PROCESS_STDERR_LIMIT,
+        input=input,
     )
     assert isinstance(result, ProcessResult)
     return result
@@ -391,7 +428,17 @@ def load_inventory(path: str) -> Inventory:
 
 
 def require_service(inventory: Inventory, service: str, inventory_path: str) -> None:
-    if not any(entry.name == service for entry in inventory.services):
-        raise ApplicationError(
-            f"Service is not defined in {inventory_path}: {service}"
-        )
+    get_service(inventory, service, inventory_path)
+
+
+def get_service(
+    inventory: Inventory, service: str, inventory_path: str
+) -> InventoryService:
+    for entry in inventory.services:
+        if entry.name == service:
+            return entry
+    raise ApplicationError(f"Service is not defined in {inventory_path}: {service}")
+
+
+def load_service_issuer(pki_dir: str, service: str) -> tuple[str, str]:
+    return _read_pair(f"{pki_dir}/services/{service}/issuer")

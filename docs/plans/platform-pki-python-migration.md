@@ -200,6 +200,8 @@ Recorded cutovers:
 | Command | Final Bash commit | Retained executable |
 | --- | --- | --- |
 | `platform-pki-print-cert` | `4cd6b2294760571ffed632295de441c34a4c0eb1` | `tests/pki/oracles/platform-pki-print-cert/platform-pki-print-cert` |
+| `platform-pki-list-expiry` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-list-expiry/platform-pki-list-expiry` |
+| `platform-pki-service-verify` | `b421370123db006148d0439af3e35efd47bcda2f` | `tests/pki/oracles/platform-pki-service-verify/platform-pki-service-verify` |
 
 ## Phase 1: Build the Python Foundation
 
@@ -283,17 +285,17 @@ Migration order:
 
 Tasks for each command:
 
-- [ ] Implement one Python handler used by both command interfaces.
-- [ ] Run Bash and Python against equivalent isolated state.
-- [ ] Compare status, stdout, stderr, and all state reads or mutations.
-- [ ] Pass the existing focused test target without weakening assertions.
-- [ ] Switch the existing executable only after differential parity is proven.
-- [ ] Add and document the corresponding unified CLI route.
+- [x] Implement one Python handler used by both command interfaces.
+- [x] Run Bash and Python against equivalent isolated state.
+- [x] Compare status, stdout, stderr, and all state reads or mutations.
+- [x] Pass the existing focused test target without weakening assertions.
+- [x] Switch the existing executable only after differential parity is proven.
+- [x] Add and document the corresponding unified CLI route.
 
 Validation gate:
 
-- [ ] Command-contract and installed-tool tests pass for both interfaces.
-- [ ] The first Python-backed compatibility commands are independently
+- [x] Command-contract and installed-tool tests pass for both interfaces.
+- [x] The first Python-backed compatibility commands are independently
   releasable.
 
 ## Phase 4: Migrate Bounded Publication Commands

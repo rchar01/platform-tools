@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import shutil
 import tempfile
@@ -9,10 +11,15 @@ from pathlib import Path
 import pytest
 
 from ..harness import ProcessResult, run_process
+from .migration_harness import run_differential_case
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "bin/platform-pki-list-expiry"
+ORACLE = ROOT / "tests/pki/oracles/platform-pki-list-expiry/platform-pki-list-expiry"
+ORACLE_COMMIT = "b421370123db006148d0439af3e35efd47bcda2f"
+ORACLE_SHA256 = "62a9a4d7fba7400935f91e9fe14843300ceb44992835501ce9c84df728e8eb27"
+UNIFIED = ROOT / "bin/platform-pki"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 HEADER = f"{'SERVICE':24} {'EXPIRES':22} {'DAYS_LEFT':10} STATUS\n"
 FAKE_COMMON = """# shellcheck source=../../../../lib/platform-pki-common.sh
@@ -29,6 +36,30 @@ pki_cert_days_left() {
 pki_cert_not_after_iso() {
   printf '%s\\n' '2027-07-26T00:00:00Z'
 }
+"""
+FAKE_OPENSSL = """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == verify ]]; then exit 0; fi
+case $* in
+  *critical-boundary*) printf '%s\\n' 'notAfter=critical-boundary' ;;
+  *warn-boundary*) printf '%s\\n' 'notAfter=warn-boundary' ;;
+  *) printf '%s\\n' 'notAfter=ok-service' ;;
+esac
+"""
+FAKE_DATE = """#!/usr/bin/env bash
+set -euo pipefail
+case $* in
+  *'+%Y-%m-%dT%H:%M:%SZ') printf '%s\\n' '2027-07-26T00:00:00Z' ;;
+  *critical-boundary*) printf '%s\\n' "$((30 * 86400))" ;;
+  *warn-boundary*) printf '%s\\n' "$((90 * 86400))" ;;
+  *'-d '*) printf '%s\\n' "$((120 * 86400))" ;;
+  *) printf '%s\\n' '0' ;;
+esac
+"""
+FAKE_SED = """#!/usr/bin/env bash
+set -euo pipefail
+printf 'sed %s\\n' "$*" >>"$EXPIRY_LOG"
+/usr/bin/sed "$@"
 """
 
 
@@ -128,9 +159,21 @@ def _run(
     process_runner: Callable[..., ProcessResult],
     arguments: Sequence[str | Path],
     environment: Mapping[str, str] | None = None,
-    tool: Path = TOOL,
+    tool: Path | Sequence[str | Path] = TOOL,
 ) -> ProcessResult:
-    return process_runner([tool, *arguments], env=environment)
+    command = (tool,) if isinstance(tool, Path) else tuple(tool)
+    effective_environment = environment
+    if command == (ORACLE,):
+        effective_environment = dict(os.environ if environment is None else environment)
+        effective_environment.setdefault("PLATFORM_TOOLS_LIB_DIR", os.fspath(ROOT / "lib"))
+    return process_runner([*command, *arguments], env=effective_environment)
+
+
+OPERATIONAL_TOOLS = (
+    pytest.param((ORACLE,), id="bash-oracle"),
+    pytest.param((TOOL,), id="python-compatibility"),
+    pytest.param((UNIFIED, "list-expiry"), id="python-unified"),
+)
 
 
 def test_help(process_runner: Callable[..., ProcessResult]) -> None:
@@ -146,6 +189,13 @@ def test_version(process_runner: Callable[..., ProcessResult]) -> None:
     assert result == ProcessResult(
         result.args, 0, f"platform-pki-list-expiry {VERSION}\n", ""
     )
+
+
+def test_frozen_oracle_matches_recorded_provenance() -> None:
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
+    assert ORACLE_COMMIT in (
+        ROOT / "docs/plans/platform-pki-python-migration.md"
+    ).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -165,10 +215,15 @@ def test_argument_errors(
     assert message in result.stderr
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_missing_pki_directory(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
 ) -> None:
-    result = _run(process_runner, ["--pki-dir", tmp_path / "does-not-exist"])
+    result = _run(
+        process_runner, ["--pki-dir", tmp_path / "does-not-exist"], tool=tool
+    )
     assert result.status == 1
     assert result.stdout == ""
     assert "PKI directory does not exist" in result.stderr
@@ -182,6 +237,7 @@ def test_missing_pki_directory(
         pytest.param("critical-service", 10, "CRITICAL", 2, id="critical"),
     ],
 )
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_real_certificate_lifetime_classification(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
@@ -190,6 +246,7 @@ def test_real_certificate_lifetime_classification(
     days: int,
     status: str,
     exit_status: int,
+    tool: tuple[Path | str, ...],
 ) -> None:
     pki = tmp_path / name
     _inventory(pki, name, authority_certificates)
@@ -198,6 +255,7 @@ def test_real_certificate_lifetime_classification(
     result = _run(
         process_runner,
         ["--pki-dir", pki, "--warn-days", "90", "--critical-days", "30"],
+        tool=tool,
     )
 
     assert result.status == exit_status
@@ -209,19 +267,56 @@ def test_real_certificate_lifetime_classification(
     assert fields[-1] == status
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_missing_certificate_status(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
     authority_certificates: tuple[Path, Path],
+    tool: tuple[Path | str, ...],
 ) -> None:
     pki = tmp_path / "missing"
     _inventory(pki, "missing-service", authority_certificates)
 
-    result = _run(process_runner, ["--pki-dir", pki])
+    result = _run(process_runner, ["--pki-dir", pki], tool=tool)
 
     assert result.status == 3
     assert result.stderr == ""
     assert result.stdout == HEADER + f"{'missing-service':24} {'-':22} {'-':10} MISSING\n"
+
+
+@pytest.mark.parametrize(
+    ("lock_name", "label"),
+    [
+        pytest.param("lifecycle", "PKI lifecycle operation", id="lifecycle"),
+        pytest.param("root", "root CA operation", id="root"),
+        pytest.param("intermediate", "intermediate CA operation", id="intermediate"),
+        pytest.param("inventory", "inventory operation", id="inventory"),
+    ],
+)
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
+def test_lock_contention_preserves_operation_label_and_path(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    authority_certificates: tuple[Path, Path],
+    lock_name: str,
+    label: str,
+    tool: tuple[Path | str, ...],
+) -> None:
+    pki = tmp_path / f"contended-{lock_name}"
+    _inventory(pki, "ok-service", authority_certificates)
+    lock_path = pki / f"locks/{lock_name}"
+    _write(lock_path, "")
+
+    with lock_path.open("r+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = _run(process_runner, ["--pki-dir", pki], tool=tool)
+
+    assert result == ProcessResult(
+        result.args,
+        1,
+        "",
+        f"[ERROR] Another {label} is in progress: {lock_path}\n",
+    )
 
 
 def _mixed_inventory(
@@ -249,20 +344,26 @@ def _mixed_inventory(
         pytest.param("critical-boundary", "missing-service", id="missing-last"),
     ],
 )
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_missing_status_dominates_regardless_of_inventory_order(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
     authority_certificates: tuple[Path, Path],
     first: str,
     second: str,
+    tool: tuple[Path | str, ...],
 ) -> None:
     order = "first" if first == "missing-service" else "last"
     pki = tmp_path / f"mixed-missing-{order}"
     _mixed_inventory(pki, first, second, authority_certificates)
     fake_library = tmp_path / f"fake-lib-{first}/platform-pki-common.sh"
     _write(fake_library, FAKE_COMMON, 0o644)
+    fake_bin = tmp_path / f"fake-bin-{first}"
+    _write(fake_bin / "openssl", FAKE_OPENSSL, 0o755)
+    _write(fake_bin / "date", FAKE_DATE, 0o755)
     environment = dict(
         os.environ,
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
         REAL_COMMON=os.fspath(ROOT / "lib/platform-pki-common.sh"),
         PLATFORM_TOOLS_LIB_DIR=os.fspath(fake_library.parent),
     )
@@ -271,6 +372,7 @@ def test_missing_status_dominates_regardless_of_inventory_order(
         process_runner,
         ["--pki-dir", pki, "--warn-days", "90", "--critical-days", "30"],
         environment,
+        tool,
     )
 
     expected_rows = {
@@ -282,6 +384,44 @@ def test_missing_status_dominates_regardless_of_inventory_order(
     assert result.stderr == ""
     assert result.stdout == HEADER + "".join(
         expected_rows[service] for service in (first, "warn-boundary", second)
+    )
+
+
+def test_bash_python_success_state_and_output_are_equivalent(
+    tmp_path: Path,
+    authority_certificates: tuple[Path, Path],
+) -> None:
+    seed = tmp_path / "seed"
+    seed.mkdir(mode=0o700)
+    pki = seed / "pki"
+    _inventory(pki, "ok-service", authority_certificates)
+    _write(pki / "services/ok-service/certs/tls.crt", "", 0o644)
+    fake_bin = tmp_path / "differential-fake-bin"
+    _write(fake_bin / "openssl", FAKE_OPENSSL, 0o755)
+    _write(fake_bin / "date", FAKE_DATE, 0o755)
+    _write(fake_bin / "sed", FAKE_SED, 0o755)
+    log = tmp_path / "expiry-child.log"
+    environment = dict(
+        os.environ,
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(ROOT / "lib"),
+        EXPIRY_LOG=os.fspath(log),
+    )
+
+    result = run_differential_case(
+        seed,
+        tmp_path / "case",
+        Path("pki"),
+        lambda root: (ORACLE, "--pki-dir", root / "pki"),
+        lambda root: (UNIFIED, "list-expiry", "--pki-dir", root / "pki"),
+        environment,
+        run_options={"timeout": 30},
+    )
+
+    result.assert_equivalent()
+    assert log.read_text(encoding="utf-8") == (
+        "sed s/^notAfter=//\nsed s/^notAfter=//\n"
+        "sed s/^notAfter=//\nsed s/^notAfter=//\n"
     )
 
 

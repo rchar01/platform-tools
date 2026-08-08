@@ -6,8 +6,8 @@ import os
 import sys
 
 from .errors import ApplicationError
-from .locks import acquire_pki_locks
 from .operational import (
+    acquire_operational_locks,
     load_active_issuer,
     load_inventory,
     prepare_control_state,
@@ -46,7 +46,7 @@ def print_certificate(parsed: ParseResult) -> int:
     inventory_path = require_inventory_readable(paths.pki_dir)
     require_program("flock", environment)
 
-    with acquire_pki_locks(paths.pki_dir, "inventory"):
+    with acquire_operational_locks(paths.pki_dir, "inventory"):
         require_generation_layout(paths.pki_dir)
         load_active_issuer(paths.pki_dir, environment)
         inventory = load_inventory(inventory_path)
