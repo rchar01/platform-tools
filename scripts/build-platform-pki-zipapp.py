@@ -92,9 +92,9 @@ def verify_archive(source: Path, version_file: Path, output: Path) -> None:
         if not output.is_file() or output.is_symlink():
             raise RuntimeError(f"generated platform-pki zipapp is missing or unsafe: {output}")
         if first.read_bytes() != output.read_bytes():
-            raise RuntimeError("bin/platform-pki is stale; run make generate-python")
+            raise RuntimeError(f"{output} is stale; run make generate-python")
         if output.stat().st_mode & 0o777 != 0o755:
-            raise RuntimeError("bin/platform-pki must have mode 755")
+            raise RuntimeError(f"{output} must have mode 755")
 
 
 def _parser() -> argparse.ArgumentParser:

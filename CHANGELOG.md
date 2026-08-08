@@ -28,12 +28,15 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   transaction test hooks, secret-safe errors, no-state parser behavior, and
   installed-layout verification. Replacement requires explicit source and
   destination identities under cooperative locks and exclusive stage ownership,
-  returns immutable disposition evidence, and never claims rollback. Existing
-  operational `platform-pki-*` commands remain on their Bash implementations
-  during migration.
+  returns immutable disposition evidence, and never claims rollback.
 
 ### Changed
 
+- Changed `platform-pki-print-cert` to use the same Python 3.14 operational
+  handler as `platform-pki print-cert`, preserving its command name, parser and
+  help contract, output and status behavior, lifecycle-through-inventory locks,
+  OpenSSL invocation order, shared-asset lookup, and legacy-state rejection.
+  Other operational PKI commands remain on Bash during migration.
 - Separated the Bashly development image from a pinned Python 3.14 test image.
   `make container-check` now verifies generated artifacts and runs ShellCheck in
   the development image, then runs syntax checks, one complete pytest aggregate,

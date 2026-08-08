@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import tempfile
@@ -9,10 +10,16 @@ from pathlib import Path
 import pytest
 
 from ..harness import ProcessResult
+from .migration_harness import run_differential_case
 
 
 ROOT = Path(__file__).resolve().parents[2]
+PTY_CAPTURE = ROOT / "tests/cli/pty-capture.py"
 TOOL = ROOT / "bin/platform-pki-print-cert"
+ORACLE = ROOT / "tests/pki/oracles/platform-pki-print-cert/platform-pki-print-cert"
+ORACLE_COMMIT = "4cd6b2294760571ffed632295de441c34a4c0eb1"
+ORACLE_SHA256 = "544b14fd0a006d96feb9bd9383cf57bdb6bb6ea4c3312b0324220c5ebcb07e92"
+UNIFIED = ROOT / "bin/platform-pki"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 INVENTORY = """services:
   platform-example:
@@ -23,6 +30,18 @@ INVENTORY = """services:
 FAKE_OPENSSL = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >>"$OPENSSL_LOG"
+if [[ $1 == verify && ${OPENSSL_FAIL_VERIFY:-} == 1 ]]; then
+  printf '%s\\n' 'active issuer verify failed' >&2
+  exit 7
+fi
+if [[ $1 == verify && ${OPENSSL_VERIFY_STDERR:-} == 1 ]]; then
+  printf '%s\\n' 'active issuer verify warning' >&2
+fi
+if [[ $1 == x509 && $* != *'-ext '* && ${OPENSSL_FAIL_DETAILS:-} == 1 ]]; then
+  printf '%s\\n' 'partial certificate details'
+  printf '%s\\n' 'certificate detail read failed' >&2
+  exit 7
+fi
 case $* in
   *'-ext subjectAltName') printf '%s\\n' 'X509v3 Subject Alternative Name:' '    DNS:platform.example.internal' ;;
   *'-ext extendedKeyUsage') printf '%s\\n' 'X509v3 Extended Key Usage:' '    TLS Web Server Authentication' ;;
@@ -95,9 +114,21 @@ def _run(
     process_runner: Callable[..., ProcessResult],
     arguments: Sequence[str | Path],
     environment: Mapping[str, str] | None = None,
-    tool: Path = TOOL,
+    tool: Path | Sequence[str | Path] = TOOL,
 ) -> ProcessResult:
-    return process_runner([tool, *arguments], env=environment)
+    command = (tool,) if isinstance(tool, Path) else tuple(tool)
+    effective_environment = environment
+    if command == (ORACLE,):
+        effective_environment = dict(os.environ if environment is None else environment)
+        effective_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ROOT / "lib")
+    return process_runner([*command, *arguments], env=effective_environment)
+
+
+OPERATIONAL_TOOLS = (
+    pytest.param((ORACLE,), id="bash-oracle"),
+    pytest.param((TOOL,), id="python-compatibility"),
+    pytest.param((UNIFIED, "print-cert"), id="python-unified"),
+)
 
 
 def test_help(process_runner: Callable[..., ProcessResult]) -> None:
@@ -115,6 +146,33 @@ def test_version(process_runner: Callable[..., ProcessResult]) -> None:
     assert result == ProcessResult(
         result.args, 0, f"platform-pki-print-cert {VERSION}\n", ""
     )
+
+
+def test_frozen_oracle_matches_recorded_provenance() -> None:
+    digest = hashlib.sha256(ORACLE.read_bytes()).hexdigest()
+    plan = (ROOT / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert digest == ORACLE_SHA256
+    assert ORACLE_COMMIT in plan
+
+
+def test_tty_help_color_and_no_color(
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    colored = process_runner(["python3", PTY_CAPTURE, TOOL, "--help"])
+    uncolored = process_runner(
+        ["python3", PTY_CAPTURE, TOOL, "--help"],
+        env={**os.environ, "NO_COLOR": "1"},
+    )
+
+    assert colored.status == 0
+    assert "\x1b" in colored.stdout
+    assert colored.stderr == ""
+    assert uncolored.status == 0
+    assert "\x1b" not in uncolored.stdout
+    assert uncolored.stderr == ""
 
 
 @pytest.mark.parametrize(
@@ -137,14 +195,19 @@ def test_parser_errors(
     assert message in result.stderr
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_missing_inventory_does_not_invoke_openssl(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
 ) -> None:
     environment, log = _fake_environment(tmp_path, "missing-inventory-openssl.log")
     pki = tmp_path / "missing-inventory"
     pki.mkdir(mode=0o700)
 
-    result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment)
+    result = _run(
+        process_runner, ["platform-example", "--pki-dir", pki], environment, tool
+    )
 
     assert result.status == 1
     assert result.stdout == ""
@@ -152,39 +215,54 @@ def test_missing_inventory_does_not_invoke_openssl(
     assert not log.exists()
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_unknown_service(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, _ = _fake_environment(tmp_path, "unknown-service-openssl.log")
 
-    result = _run(process_runner, ["unknown-service", "--pki-dir", pki], environment)
+    result = _run(
+        process_runner, ["unknown-service", "--pki-dir", pki], environment, tool
+    )
 
     assert result.status == 1
     assert result.stdout == ""
     assert "Service is not defined in" in result.stderr
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_missing_certificate(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
 ) -> None:
     pki = _pki_tree(tmp_path, certificate=False)
     environment, _ = _fake_environment(tmp_path, "missing-cert-openssl.log")
 
-    result = _run(process_runner, ["--pki-dir", pki, "platform-example"], environment)
+    result = _run(
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, tool
+    )
 
     assert result.status == 1
     assert result.stdout == ""
     assert "Required file is missing:" in result.stderr
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_prints_certificate_details_in_command_order(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, log = _fake_environment(tmp_path, "openssl.log")
 
-    result = _run(process_runner, ["--pki-dir", pki, "platform-example"], environment)
+    result = _run(
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, tool
+    )
 
     assert result.status == 0
     assert result.stderr == ""
@@ -206,20 +284,197 @@ def test_prints_certificate_details_in_command_order(
     assert len(log.read_text(encoding="utf-8").splitlines()) == 5
 
 
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
 def test_missing_optional_extension_preserves_openssl_diagnostic(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, _ = _fake_environment(tmp_path, "missing-extension-openssl.log")
     environment = dict(environment, OPENSSL_MISSING_EXTENSION="keyUsage")
 
-    result = _run(process_runner, ["--pki-dir", pki, "platform-example"], environment)
+    result = _run(
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, tool
+    )
 
     assert result.status == 0
     assert result.stdout.startswith("Service: platform-example\nsubject=")
     assert "X509v3 Key Usage:" not in result.stdout
     assert result.stdout.endswith("    TLS Web Server Authentication\n")
     assert result.stderr == "No extensions in certificate\n"
+
+
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
+def test_active_issuer_failure_precedes_service_output(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
+) -> None:
+    pki = _pki_tree(tmp_path)
+    environment, _ = _fake_environment(tmp_path, "failed-issuer-openssl.log")
+    environment = dict(environment, OPENSSL_FAIL_VERIFY="1")
+
+    result = _run(
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, tool
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "active issuer verify failed\n"
+        "[ERROR] Active intermediate does not verify against its recorded root\n"
+    )
+
+
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
+def test_successful_active_issuer_stderr_is_preserved(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
+) -> None:
+    pki = _pki_tree(tmp_path)
+    environment, _ = _fake_environment(tmp_path, "issuer-warning-openssl.log")
+    environment = dict(environment, OPENSSL_VERIFY_STDERR="1")
+
+    result = _run(
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, tool
+    )
+
+    assert result.status == 0
+    assert result.stdout.startswith("Service: platform-example\nsubject=")
+    assert result.stderr == "active issuer verify warning\n"
+
+
+@pytest.mark.parametrize("tool", OPERATIONAL_TOOLS)
+def test_required_detail_failure_preserves_child_status_and_output(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tool: tuple[Path | str, ...],
+) -> None:
+    pki = _pki_tree(tmp_path)
+    environment, log = _fake_environment(tmp_path, "failed-details-openssl.log")
+    environment = dict(environment, OPENSSL_FAIL_DETAILS="1")
+
+    result = _run(
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, tool
+    )
+
+    assert result.status == 7
+    assert result.stdout == "Service: platform-example\npartial certificate details\n"
+    assert result.stderr == "certificate detail read failed\n"
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_bash_python_success_state_and_output_are_equivalent(tmp_path: Path) -> None:
+    seed = tmp_path / "seed"
+    seed.mkdir(mode=0o700)
+    _pki_tree(seed)
+    environment, _ = _fake_environment(tmp_path, "differential-openssl.log")
+    environment = dict(
+        environment,
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(ROOT / "lib"),
+    )
+
+    result = run_differential_case(
+        seed,
+        tmp_path / "case",
+        Path("pki"),
+        lambda root: (
+            ORACLE,
+            "--pki-dir",
+            root / "pki",
+            "platform-example",
+        ),
+        lambda root: (
+            UNIFIED,
+            "print-cert",
+            "--pki-dir",
+            root / "pki",
+            "platform-example",
+        ),
+        environment,
+        run_options={"timeout": 30},
+    )
+
+    result.assert_equivalent()
+
+
+def _normalize_case_root(root: Path, output: str) -> str:
+    return output.replace(os.fspath(root), "<CASE>")
+
+
+@pytest.mark.parametrize(
+    ("relative", "content"),
+    (
+        pytest.param(
+            "state/csr/finalization-recovery-journal",
+            "operation=csr-finalize\n",
+            id="finalization",
+        ),
+        pytest.param(
+            "state/csr/recovery-journal",
+            "operation=csr-sign\n",
+            id="signing",
+        ),
+        pytest.param(
+            "state/rollover/recovery-required",
+            "recovery required\n",
+            id="rollover-marker",
+        ),
+        pytest.param(
+            "state/rollover/journal",
+            "operation=rollover-prepare\ncommitted=false\n",
+            id="rollover-journal",
+        ),
+        pytest.param(
+            "state/csr/finalization-recovery-journal",
+            "invalid record\n",
+            id="malformed-finalization",
+        ),
+        pytest.param(
+            "state/rollover/journal",
+            "operation=other\rcommitted=true\r",
+            id="control-delimited-rollover-journal",
+        ),
+    ),
+)
+def test_bash_python_recovery_gates_are_equivalent(
+    tmp_path: Path, relative: str, content: str
+) -> None:
+    seed = tmp_path / "seed"
+    seed.mkdir(mode=0o700)
+    pki = _pki_tree(seed)
+    _write(pki / relative, content)
+    environment, _ = _fake_environment(tmp_path, "recovery-gate-openssl.log")
+    environment = dict(
+        environment,
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(ROOT / "lib"),
+    )
+
+    result = run_differential_case(
+        seed,
+        tmp_path / "case",
+        Path("pki"),
+        lambda root: (
+            ORACLE,
+            "--pki-dir",
+            root / "pki",
+            "platform-example",
+        ),
+        lambda root: (
+            UNIFIED,
+            "print-cert",
+            "--pki-dir",
+            root / "pki",
+            "platform-example",
+        ),
+        environment,
+        output_normalizers=(_normalize_case_root,),
+        run_options={"timeout": 30},
+    )
+
+    result.assert_equivalent()
 
 
 def test_explicit_library_directory_layout(

@@ -14,6 +14,14 @@ from .parser import (
 )
 
 
+def _handler(route: tuple[str, ...]):
+    if route == ("print-cert",):
+        from .print_cert import print_certificate
+
+        return print_certificate
+    return None
+
+
 def _color(text: str, code: str) -> str:
     if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
         return f"\033[{code}m{text}\033[0m"
@@ -58,6 +66,34 @@ def _error(message: str) -> int:
 
 
 def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> None:
+    if route == ("print-cert",) and not unified:
+        print(
+            f"{name} - Print readable details for a generated service certificate\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} SERVICE [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICE', '34')}\n"
+            "    Inventory service name\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} platform-example\n"
+            f"  {name} platform-example --pki-dir /tmp/platform-pki\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n",
+            end="",
+        )
+        return
     text = render_route_help(name, ROUTE_SPECS[route], compatibility=not unified)
     text = text.replace("Usage:", _color("Usage:", "1;33"), 1)
     text = text.replace("Options:", _color("Options:", "1;33"), 1)
@@ -92,14 +128,21 @@ def _dispatch(name: str, command: str, arguments: list[str], *, unified: bool) -
         _print_route_help(name, route, unified=unified)
         return 0
     try:
-        parse_route(
+        parsed = parse_route(
             route,
             arguments,
             interactive=sys.stdin.isatty() and sys.stdout.isatty(),
         )
     except ParserError as error:
         return _parser_error(error)
-    return _error(f"Command is not available in the Python foundation: {' '.join(route)}")
+    handler = _handler(route)
+    if handler is None:
+        return _error(f"Command is not available in the Python foundation: {' '.join(route)}")
+    try:
+        return handler(parsed)
+    except ApplicationError as error:
+        print(render_error(error), file=sys.stderr, end="")
+        return error.status
 
 
 def main(argv: Sequence[str] | None = None) -> int:

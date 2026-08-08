@@ -289,7 +289,12 @@ def test_python_command_map_matches_frozen_command_inventory() -> None:
 
 def test_command_inventory_matches_make_and_bashly_sources() -> None:
     expected = {contract.compatibility_name for contract in PKI_COMMAND_CONTRACTS}
-    maintained = {name for name in _make_words("SHELL_TOOLS") if name.startswith("platform-pki-")}
+    maintained = {
+        name
+        for variable in ("SHELL_TOOLS", "PYTHON_ZIPAPPS")
+        for name in _make_words(variable)
+        if name.startswith("platform-pki-")
+    }
     bashly = {
         definition.parents[1].name
         for definition in (ROOT / "bashly").glob("platform-pki-*/src/bashly.yml")

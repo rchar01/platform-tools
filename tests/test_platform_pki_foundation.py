@@ -32,8 +32,10 @@ EXPECTED_MEMBERS = (
     "platform_pki/filesystem.py",
     "platform_pki/inventory.py",
     "platform_pki/locks.py",
+    "platform_pki/operational.py",
     "platform_pki/parser.py",
     "platform_pki/paths.py",
+    "platform_pki/print_cert.py",
     "platform_pki/publication.py",
     "platform_pki/records.py",
     "platform_pki/subprocesses.py",
@@ -246,10 +248,15 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
     )
     assert result.status == 1
     assert result.stdout == ""
-    assert result.stderr == (
-        "[ERROR] Command is not available in the Python foundation: "
-        f"{' '.join(route.unified_route)}\n"
-    )
+    if route.unified_route == ("print-cert",):
+        assert result.stderr.startswith(
+            "[ERROR] PKI directory does not exist; run platform-pki-init first: "
+        )
+    else:
+        assert result.stderr == (
+            "[ERROR] Command is not available in the Python foundation: "
+            f"{' '.join(route.unified_route)}\n"
+        )
 
 
 @pytest.mark.parametrize(
@@ -347,7 +354,12 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
 
     help_result = _run(process_runner, clean_environment, copied, "--help", cwd=tmp_path)
     _assert_success(help_result)
-    if contract.nested_commands:
+    if contract.unified_route == "print-cert":
+        expected_usage = (
+            "platform-pki-print-cert - Print readable details for a generated "
+            "service certificate\n"
+        )
+    elif contract.nested_commands:
         expected_usage = f"Usage: {contract.compatibility_name} COMMAND [OPTIONS]\n"
     else:
         expected_usage = render_usage(
@@ -382,7 +394,10 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     )
     assert unavailable.status == 1
     assert unavailable.stdout == ""
-    assert "not available in the Python foundation" in unavailable.stderr
+    if contract.unified_route == "print-cert":
+        assert unavailable.stderr == "[ERROR] platform-pki-common.sh not found\n"
+    else:
+        assert "not available in the Python foundation" in unavailable.stderr
 
     for nested in contract.nested_commands:
         nested_help = _run(

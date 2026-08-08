@@ -20,8 +20,11 @@ This file gives a short, release-oriented view of what changed between versions.
   Existing-destination replacement requires explicit exact identities, uses
   forward-only `RENAME_EXCHANGE`, exact-unlinks only displaced regular files,
   and retains complete displaced directories with readiness evidence for later
-  caller-journaled cleanup. All operational `platform-pki-*` commands remain
-  unchanged on Bash.
+  caller-journaled cleanup. `platform-pki-print-cert` and `platform-pki
+  print-cert` now use one Python operational handler while preserving the
+  existing command name, output, status, locking, OpenSSL order, installed
+  shared-asset lookup, and legacy-state rejection. Other operational
+  `platform-pki-*` commands remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

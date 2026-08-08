@@ -48,9 +48,8 @@ additional interface.
   Bash implementation.
 - Recovery compatibility is forward-only: the previous Bash release is not
   required to recover transactions started by Python.
-- Downgrade to a Bash release is permitted only after Python verifies that no
-  journal, recovery marker, migration, rollover, or recovery-required state is
-  unresolved.
+- After the first operational command cuts over, installing an older Bash
+  release is unsupported even when no transaction appears unresolved.
 - Build the maintained Python source into a deterministic standard-library
   zipapp for checkout and installed execution.
 - Require Python 3.14 or newer.
@@ -157,7 +156,8 @@ Tasks:
   checkpoint, and schema.
 - [x] Freeze exact ordered fields, schema values, and final-newline rules for
   persisted records written from literal or dynamically assembled shell text.
-- [x] Define the forward-only upgrade and clean-state downgrade procedure.
+- [x] Define the forward-only package and recovery policy; Python-to-Bash
+  downgrade is unsupported.
 - [x] Define metadata-aware state-tree comparison that excludes raw inode values
   while preserving identity relationships and mutation behavior.
 - [x] Add a differential harness capable of running Bash and Python commands on
@@ -175,8 +175,8 @@ Validation gate:
   the migration inventory.
 - [x] Every persisted record's exact field order, schema value, and final
   newline is source-backed by an executable contract test.
-- [x] Every fail-closed clean-downgrade condition is represented in the contract
-  inventory; executable enforcement is a Phase 2 validation gate.
+- [x] The contract explicitly excludes Python-to-Bash package rollback and does
+  not imply it from byte-compatible persisted records.
 
 ### Bash Oracle Retention
 
@@ -194,6 +194,12 @@ Validation gate:
   Bash/Python differential cases requires a checkout of the recorded oracle
   commit and is a release or compatibility investigation workflow, not an
   installed-runtime dependency.
+
+Recorded cutovers:
+
+| Command | Final Bash commit | Retained executable |
+| --- | --- | --- |
+| `platform-pki-print-cert` | `4cd6b2294760571ffed632295de441c34a4c0eb1` | `tests/pki/oracles/platform-pki-print-cert/platform-pki-print-cert` |
 
 ## Phase 1: Build the Python Foundation
 
@@ -249,10 +255,8 @@ Tasks:
   directory with forward-only exchange, durability, exact regular cleanup, and
   complete retained-directory readiness evidence.
 - [x] Preserve deterministic fault and pause barriers for race tests.
-- [ ] Add the read-only `platform-pki doctor` command after the path and lock
-  primitives it depends on are proven.
-- [ ] Make `doctor` report runtime prerequisites, path safety, unresolved state,
-  and clean-downgrade eligibility.
+- [x] Remove the proposed clean-downgrade `doctor` route after package rollback
+  was excluded from the supported migration model.
 
 Validation gate:
 
@@ -264,8 +268,6 @@ Validation gate:
   exchange checkpoint, including simultaneous publishers, content/metadata
   mutation, readiness, parent binding, process death, and durability failures.
 - [x] Lock acquisition and reverse release match the Bash implementation.
-- [ ] `doctor` creates no state and fails closed on contention, unsafe paths,
-  malformed state, unknown schemas, or any unresolved state.
 - [x] Unit tests supplement rather than replace subprocess-backed tests.
 
 ## Phase 3: Migrate Read-Oriented Commands
@@ -389,7 +391,8 @@ Validation gate:
 
 - [ ] Every Bash crash checkpoint can be recovered by Python.
 - [ ] Every Python crash checkpoint can be recovered by Python.
-- [ ] Python refuses clean downgrade while any unresolved state exists.
+- [ ] Python rejects unresolved or unsupported transaction state before each
+  affected operation reads or mutates operational snapshots.
 - [ ] Successful, invalid, no-op, replay, signal, race, and recovery state trees
   match the frozen compatibility contract.
 
@@ -484,7 +487,7 @@ Use independently deployable releases rather than one large cutover:
 | Release tranche | Scope |
 | --- | --- |
 | Foundation | Python package and unified CLI; no command replacement |
-| Safety | Filesystem/locking primitives and `doctor`; no command replacement |
+| Safety | Filesystem, locking, and publication primitives; no command replacement |
 | Pilot | Print, expiry, and service verification commands |
 | Publication | Init, inventory installation, and Ansible export |
 | Utilities | Custody report, passphrase verification, and backup |
@@ -546,8 +549,9 @@ implementation.
 - Parser compatibility requires more than default `argparse` behavior.
 - The current strict inventory language is not equivalent to general YAML
   loading.
-- Forward-only recovery requires an enforced clean-state downgrade gate and
-  operator documentation.
+- Forward-only package migration requires release documentation to state that
+  older Bash implementations must not be used with Python-written transaction
+  state and are not guaranteed to interpret it.
 - Target-host Python 3.14 availability remains a release-readiness check.
 
 ## Open Questions
@@ -556,9 +560,6 @@ implementation.
   Python-backed release?
 - [ ] How long should the final Bash implementation remain in the repository as
   a differential oracle after each command migrates?
-- [ ] Which Python-written persisted states, if any, may deliberately retain
-  byte-for-byte compatibility with Bash despite the forward-only downgrade
-  policy?
 
 ## Progress Log
 
@@ -573,23 +574,28 @@ implementation.
 | 2026-08-07 | Differential execution foundation and Bash-oracle retention policy completed. | `run_differential_case` executes real commands on isolated private copies and compares normalized process observations, semantic trees, and identity-sensitive transitions; focused harness run: 16 passed. Per-command oracle commits are recorded at cutover. |
 | 2026-08-07 | Shared parser-edge behavior was frozen across all retained PKI leaves. | `tests/test_command_contract.py` drives help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the 24-route source-backed inventory. |
 | 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | Source- and test-backed inventories cover `print-cert`, `list-expiry`, and `service-verify`; exhaustive expansion to the remaining routes stays open. |
-| 2026-08-07 | Minimum runtime raised to Python 3.14 and `doctor` moved behind secure path/lock primitives. | The pinned test image provides Python 3.14.7; the downgrade scanner must not precede the safety boundaries it assesses. |
+| 2026-08-07 | Minimum runtime raised to Python 3.14. | The pinned test image provides Python 3.14.7, avoiding an unverified older-runtime claim. |
 | 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, 24 unified help routes, installed-layout execution, and no-state parser behavior are covered in the pinned Python 3.14 test image. |
 | 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed 24-route parsing, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics pass 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remain unavailable. |
 | 2026-08-07 | Phase 2 path, filesystem, and deterministic fault primitives implemented. | Lexical path policy, full-component descriptor bindings, exact identity and policy models, checked bounded reads, trusted ancestors, file and directory synchronization, and pinned pause controls pass 91 focused real-filesystem/process tests; locking and publication remain open. |
-| 2026-08-07 | Phase 2 ordered advisory-lock checkpoint implemented and independently hardened. | `acquire_pki_locks` provides descriptor-bound lifecycle-through-export prefix profiles, exact lock policy, no-state behavior, fork-safe descriptor/registry handling, validated anonymous `O_TMPFILE` no-clobber creation, thread-safe duplicate rejection, finite race hooks, primary-exception preservation, and reverse cleanup. The focused pinned-container suite passed 42 tests and the integrated foundation suite passed 562 tests across real Python/Python, Python/util-linux, fork, exec, descriptor-reuse, process-death, and replacement boundaries; general publication primitives and `doctor` remain open. |
-| 2026-08-07 | Bounded Phase 2 durable-publication checkpoint implemented and review-hardened. | Owned exact-byte stages, source-file synchronization/content observations, parent-bound immutable tree readiness, exact unlink, Linux no-clobber file/directory rename, file/directory exchange, absent-only atomic writes, operation-lifetime pins, and recursive tree synchronization have finite race hooks and retain ambiguous post-mutation state. The pinned focused suite passed 87 tests and the integrated foundation suite passed 649 tests; guarded existing-destination replacement and `doctor` remain open. |
-| 2026-08-07 | Guarded existing-destination replacement completed the next Phase 2 publication checkpoint and was narrowed after review. | Exact file/directory replacement uses forward-only `RENAME_EXCHANGE`, synchronized content/tree observations, six finite replacement checkpoints, exact regular-file cleanup, complete retained-directory readiness evidence, static ambiguity classes, and a documented cooperative same-UID boundary. The pinned focused suite passed 160 tests, 20 dedicated concurrent cases passed, the integrated foundation suite passed 722 tests, and infrastructure passed 139 tests; command-specific recovery and `doctor` remain open. |
+| 2026-08-07 | Phase 2 ordered advisory-lock checkpoint implemented and independently hardened. | `acquire_pki_locks` provides descriptor-bound lifecycle-through-export prefix profiles, exact lock policy, no-state behavior, fork-safe descriptor/registry handling, validated anonymous `O_TMPFILE` no-clobber creation, thread-safe duplicate rejection, finite race hooks, primary-exception preservation, and reverse cleanup. The focused pinned-container suite passed 42 tests and the integrated foundation suite passed 562 tests across real Python/Python, Python/util-linux, fork, exec, descriptor-reuse, process-death, and replacement boundaries; general publication primitives remained open. |
+| 2026-08-07 | Bounded Phase 2 durable-publication checkpoint implemented and review-hardened. | Owned exact-byte stages, source-file synchronization/content observations, parent-bound immutable tree readiness, exact unlink, Linux no-clobber file/directory rename, file/directory exchange, absent-only atomic writes, operation-lifetime pins, and recursive tree synchronization have finite race hooks and retain ambiguous post-mutation state. The pinned focused suite passed 87 tests and the integrated foundation suite passed 649 tests; guarded existing-destination replacement remained open. |
+| 2026-08-07 | Guarded existing-destination replacement completed the next Phase 2 publication checkpoint and was narrowed after review. | Exact file/directory replacement uses forward-only `RENAME_EXCHANGE`, synchronized content/tree observations, six finite replacement checkpoints, exact regular-file cleanup, complete retained-directory readiness evidence, static ambiguity classes, and a documented cooperative same-UID boundary. The pinned focused suite passed 160 tests, 20 dedicated concurrent cases passed, the integrated foundation suite passed 722 tests, and infrastructure passed 139 tests. |
+| 2026-08-07 | A proposed `doctor` contract was investigated before implementation. | Source inventory and review exposed incomplete positive-eligibility grammars and the lack of an exclusive assessment-to-package-replacement handoff. No route or runtime code was added. |
+| 2026-08-08 | Python-to-Bash package rollback and the proposed `doctor` route were removed from scope. | The user selected a forward-only operating model; Python still recovers final Bash transactions, while using older Bash releases with Python-written state is unsupported. |
+| 2026-08-08 | `platform-pki-print-cert` became the first Python-backed operational compatibility command. | The frozen Bash oracle is recorded at `4cd6b2294760571ffed632295de441c34a4c0eb1`; focused Bash/Python output and state comparison passed, and command-contract, installed-tool, and legacy-gating verification passed 702 tests. |
 
 ## Decision Log
 
 | Date | Decision | Reason |
 | --- | --- | --- |
 | 2026-08-07 | Preserve existing command names and add a unified alias. | Maintain automation compatibility while providing a coherent new interface. |
-| 2026-08-07 | Require forward-only cross-version recovery. | Python must recover Bash state; rollback is allowed only after Python establishes clean state. |
+| 2026-08-07 | Require forward-only cross-version recovery. | Python must recover Bash state; older Bash implementations are not required to recover Python state. |
 | 2026-08-07 | Migrate incrementally and move rollover last. | Reduce simultaneous parser, filesystem, transaction, and recovery risk. |
 | 2026-08-07 | Build and install a deterministic standard-library zipapp. | Keep maintained source modular while avoiding Python package/import skew and unnecessary PEX dependencies. |
 | 2026-08-07 | Require Python 3.12 or newer. | Use a modern standard-library baseline while retaining a clear target-host provisioning contract. |
 | 2026-08-07 | Use shallow unified command names. | Mirror existing executable suffixes and minimize parser and documentation divergence. |
 | 2026-08-07 | Retain the final Bash source through migration acceptance and record each command's pre-cutover commit. | Keep differential evidence reproducible without shipping a production runtime language switch or duplicate oracle installation. |
 | 2026-08-07 | Raise the minimum from Python 3.12 to 3.14. | Align the application contract with the pinned Python 3.14.7 test environment instead of maintaining an unverified older-runtime claim. |
+| 2026-08-07 | Design and review the `doctor` contract before exposing a public route. | The review exposed missing positive-eligibility and package-handoff contracts before runtime code was added; this decision was superseded on 2026-08-08. |
+| 2026-08-08 | Make package migration forward-only and do not add `doctor`. | Supported rollback would require exhaustive historical-state validation and a guarded package-replacement workflow; neither is needed when using older Bash releases with Python-written state is outside the supported model. |

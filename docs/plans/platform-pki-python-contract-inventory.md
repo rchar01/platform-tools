@@ -2,9 +2,10 @@
 
 ## Status
 
-Phase 0 baseline. This inventory records the compatibility surface that the
-Python migration must preserve. Maintained Bash source and existing tests remain
-the authoritative oracle until each command is cut over.
+Active incremental-migration contract. This inventory records the compatibility
+surface that the Python migration must preserve. Retained Bash source and
+existing tests remain the authoritative oracle until each command is cut over;
+`platform-pki-print-cert` is the first Python-backed operational command.
 
 ## Runtime and Interfaces
 
@@ -15,7 +16,8 @@ the authoritative oracle until each command is cut over.
 - Existing nested subcommands and options remain unchanged beneath each shallow
   command.
 - Python must recover supported interrupted transactions written by Bash.
-- Downgrade to Bash requires an implementation-independent clean-state check.
+- Package migration is forward-only after the first operational command cuts
+  over; installing an older Bash implementation is unsupported.
 
 ## Command Mapping
 
@@ -52,7 +54,7 @@ the authoritative oracle until each command is cut over.
 - Nonempty `--option=value` is accepted where the option accepts a value.
 - Empty equals-form values are rejected.
 - Help, version, and parser failures create no state.
-- Generated help is colored only on a TTY.
+- Help is colored only on a TTY.
 - Any nonempty `NO_COLOR` suppresses help color.
 - Application log messages remain uncolored.
 - Duplicate-option behavior is command- and option-specific; Python must follow
@@ -369,27 +371,27 @@ Required recovery matrix:
 | Python | Python | required |
 | Python | Bash | deliberately unsupported |
 
-## Clean-Downgrade Contract
+## Forward-Only Package Migration
 
-`platform-pki doctor --require-clean-downgrade` is a read-only point-in-time
-assessment, not a durable authorization receipt.
+Cross-version recovery and package rollback are deliberately asymmetric:
 
-The gate must:
+- Python must recover every supported interrupted transaction written by the
+  final Bash implementation.
+- Each supported Python release must recover transactions written by itself and
+  by the preceding supported Python release.
+- Installing or running an older Bash implementation after cutover is
+  unsupported; it is not guaranteed to recover or interpret Python-written
+  transaction state.
+- After the first operational compatibility command cuts over to Python,
+  replacing the installed release with an older Bash implementation is outside
+  the supported operating model, even when no journal appears unresolved.
 
-- Create no state.
-- Fail closed on contention, unsafe paths, malformed state, or unknown schemas.
-- Acquire every required pre-existing lock in standard order and release in
-  reverse order.
-- Reject unresolved CSR signing or finalization journals.
-- Reject rollover recovery markers and nonterminal rollover journals.
-- Reject active prepared rollover state for the initial policy.
-- Reject legacy, mixed, incomplete, or ambiguous authority layouts.
-- Reject unexplained transaction or staging objects.
-- Allow validated terminal history, consumed/abandoned reservations, and
-  supported committed bootstrap or migration evidence.
-
-Downgrade operations must quiesce PKI automation so no lifecycle operation can
-start between the assessment and package replacement.
+The migration therefore has no clean-downgrade eligibility state, downgrade
+receipt, package-replacement handoff, or planned `platform-pki doctor` route.
+Exact byte compatibility remains required where this inventory says so for
+incremental cutover, mixed-command operation within one release, Bash-to-Python
+recovery, and differential testing. It does not imply Python-to-Bash package
+rollback support.
 
 ## Verification Index
 
