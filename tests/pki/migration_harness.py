@@ -5,6 +5,7 @@ import stat
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 from ..harness import ProcessResult, copy_tree, run_process
 
@@ -12,6 +13,7 @@ from ..harness import ProcessResult, copy_tree, run_process
 ContentNormalizer = Callable[[str, bytes], bytes]
 OutputNormalizer = Callable[[Path, str], str]
 ArgvFactory = Callable[[Path], Sequence[str | os.PathLike[str]]]
+PreparationCallback = Callable[[Path, Mapping[str, str]], None]
 
 _MANAGED_OPENSSL_CONFIG = re.compile(
     r"(?:(?:^|.*/)pki/|^)(?:authorities/(?:roots|intermediates)/[^/]+|root-ca|intermediate-ca)/openssl\.cnf$"
@@ -366,6 +368,8 @@ def run_differential_case(
     runner: Callable[..., ProcessResult] = run_process,
     run_options: Mapping[str, object] | None = None,
     cwd_relative: Path = Path("."),
+    bash_prepare: PreparationCallback | None = None,
+    python_prepare: PreparationCallback | None = None,
 ) -> DifferentialResult:
     _require_relative_path(pki_relative, "PKI path")
     if cwd_relative.is_absolute() or ".." in cwd_relative.parts:
@@ -387,7 +391,14 @@ def run_differential_case(
     if "cwd" in options or "env" in options:
         raise ValueError("run_options must not override cwd or env")
 
-    def observe(root: Path, argv_factory: ArgvFactory) -> DifferentialObservation:
+    def observe(
+        root: Path,
+        argv_factory: ArgvFactory,
+        prepare: PreparationCallback | None,
+    ) -> DifferentialObservation:
+        root_identity = root.lstat()
+        if not stat.S_ISDIR(root_identity.st_mode) or stat.S_ISLNK(root_identity.st_mode):
+            raise ValueError(f"Copied workspace is not a real directory: {root}")
         state_root = root / pki_relative
         try:
             working_directory = _require_directory_components(root, cwd_relative)
@@ -396,6 +407,23 @@ def run_differential_case(
                 f"Copied working directory does not exist: {root / cwd_relative}"
             ) from None
         environment = _case_environment(root, base_environment)
+        if prepare is not None:
+            prepare(root, MappingProxyType(environment))
+            current_root = root.lstat()
+            if (
+                not stat.S_ISDIR(current_root.st_mode)
+                or stat.S_ISLNK(current_root.st_mode)
+                or (current_root.st_dev, current_root.st_ino)
+                != (root_identity.st_dev, root_identity.st_ino)
+            ):
+                raise ValueError(f"Copied workspace changed during preparation: {root}")
+            state_root = _require_directory_components(root, pki_relative)
+            try:
+                working_directory = _require_directory_components(root, cwd_relative)
+            except OSError:
+                raise ValueError(
+                    f"Copied working directory does not exist: {root / cwd_relative}"
+                ) from None
         before = snapshot_state(state_root, normalizers)
         result = runner(
             tuple(argv_factory(root)),
@@ -417,6 +445,6 @@ def run_differential_case(
         )
 
     return DifferentialResult(
-        observe(bash_root, bash_argv),
-        observe(python_root, python_argv),
+        observe(bash_root, bash_argv, bash_prepare),
+        observe(python_root, python_argv, python_prepare),
     )

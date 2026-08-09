@@ -275,6 +275,130 @@ def test_differential_runner_uses_private_state_and_environments(tmp_path: Path)
     assert dict(result.bash.transitions)["result"] == "created"
 
 
+def test_differential_runner_prepares_identity_bound_side_copies(
+    tmp_path: Path,
+) -> None:
+    seed = tmp_path / "seed"
+    pki = seed / "namespace/pki"
+    pki.mkdir(parents=True)
+    config = pki / "authorities/roots/g1/openssl.cnf"
+    _write_config(config, config.parent)
+    script = tmp_path / "recover.py"
+    script.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "pki = Path(sys.argv[1])\n"
+        "interrupted = pki / 'interrupted'\n"
+        "expected = tuple(map(int, (interrupted / 'journal').read_text().split(':')))\n"
+        "for name in ('source', 'alias'):\n"
+        "    value = (interrupted / name).stat()\n"
+        "    assert (value.st_dev, value.st_ino) == expected\n"
+        "(pki / 'recovered').write_text('recovered\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    prepared = []
+
+    def prepare(side: str, root: Path, environment) -> None:
+        assert root.name == side
+        assert Path(environment["HOME"]) == root / ".differential-environment/home"
+        assert Path(environment["HOME"]).is_dir()
+        copied_config = root / config.relative_to(seed)
+        assert f"dir = {copied_config.parent}\n" in copied_config.read_text(
+            encoding="utf-8"
+        )
+        interrupted = root / "namespace/pki/interrupted"
+        interrupted.mkdir()
+        source = interrupted / "source"
+        source.write_text("pending\n", encoding="utf-8")
+        os.link(source, interrupted / "alias")
+        source_stat = source.stat()
+        (interrupted / "journal").write_text(
+            f"{source_stat.st_dev}:{source_stat.st_ino}", encoding="utf-8"
+        )
+        prepared.append((side, root))
+
+    def argv(root: Path) -> tuple[str | os.PathLike[str], ...]:
+        return (sys.executable, script, root / "namespace/pki")
+
+    def normalize_identity(relative: str, content: bytes) -> bytes:
+        if relative == "interrupted/journal":
+            return b"<IDENTITY>"
+        return content
+
+    result = run_differential_case(
+        seed,
+        tmp_path / "case",
+        Path("namespace/pki"),
+        argv,
+        argv,
+        {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+        content_normalizers=(normalize_identity,),
+        bash_prepare=lambda root, environment: prepare("bash", root, environment),
+        python_prepare=lambda root, environment: prepare("python", root, environment),
+    )
+
+    result.assert_equivalent()
+    assert prepared == [
+        ("bash", tmp_path / "case/bash"),
+        ("python", tmp_path / "case/python"),
+    ]
+    before = {entry.path: entry for entry in result.bash.before}
+    assert before["interrupted/source"].object_class == (
+        "interrupted/alias",
+        "interrupted/source",
+    )
+    assert before["interrupted/alias"].object_class == (
+        "interrupted/alias",
+        "interrupted/source",
+    )
+    assert dict(result.bash.transitions)["recovered"] == "created"
+
+
+def test_differential_runner_revalidates_paths_after_preparation(
+    tmp_path: Path,
+) -> None:
+    seed = tmp_path / "seed"
+    (seed / "namespace/pki").mkdir(parents=True)
+
+    def replace_namespace(root: Path, _environment) -> None:
+        namespace = root / "namespace"
+        retained = root / "retained-namespace"
+        namespace.rename(retained)
+        namespace.symlink_to(retained, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="path component is not a real directory"):
+        run_differential_case(
+            seed,
+            tmp_path / "case",
+            Path("namespace/pki"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+            bash_prepare=replace_namespace,
+        )
+
+
+def test_differential_runner_rejects_replaced_side_root(tmp_path: Path) -> None:
+    seed = tmp_path / "seed"
+    (seed / "namespace/pki").mkdir(parents=True)
+
+    def replace_root(root: Path, _environment) -> None:
+        retained = root.with_name(f"{root.name}-retained")
+        root.rename(retained)
+        root.symlink_to(retained, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="workspace changed during preparation"):
+        run_differential_case(
+            seed,
+            tmp_path / "case",
+            Path("namespace/pki"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            lambda _root: (sys.executable, "-c", "pass"),
+            {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+            bash_prepare=replace_root,
+        )
+
+
 def test_differential_runner_reports_process_divergence_without_output(tmp_path: Path) -> None:
     seed = tmp_path / "seed"
     (seed / "pki").mkdir(parents=True)
