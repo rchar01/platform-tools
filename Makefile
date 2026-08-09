@@ -147,6 +147,7 @@ test-platform-pki-foundation:
 		tests/test_platform_pki_foundation.py \
 		tests/test_platform_pki_parser.py \
 		tests/test_platform_pki_records.py \
+		tests/test_platform_pki_recovery_foundation.py \
 		tests/test_platform_pki_inventory.py \
 		tests/test_platform_pki_subprocesses.py \
 		tests/test_platform_pki_paths.py \

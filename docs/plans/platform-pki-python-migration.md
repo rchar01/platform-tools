@@ -207,6 +207,23 @@ Recorded cutovers:
 | `platform-pki-inventory-install` | `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1` | `tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install` |
 | `platform-pki-export-ansible` | `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b` | `tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible` |
 
+The CA recovery foundation also freezes the final Bash recovery and authority
+writer assets from `ba9dd57214cae18f82c83dfb54b6ddce13882280` under
+`tests/pki/oracles/platform-pki-ca-rollover/`. This is compatibility evidence,
+not a command cutover: public recovery dispatch and production mutation behavior
+remain Bash.
+
+Recorded SHA-256 provenance for that oracle set is
+`7e9430e6d17969d5d1779e8073b9757e08157625e16b91969991e611953b806b`
+for `platform-pki-ca-rollover`,
+`44f12eae381eedfb6414b6135ebc2bd8ff5fa2a99731adbc80c4a3201b107a3b`
+for `platform-pki-root-create`,
+`efd59fff7a0913f048f1799ce6d91caa751e477fc1c29884f868a95b37fbcdf7`
+for `platform-pki-intermediate-create`, and
+`dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`
+for the private `lib/platform-pki-common.sh` copy. Executables retain mode 755;
+the library remains non-executable at mode 644.
+
 ## Phase 1: Build the Python Foundation
 
 Goal: Introduce shared Python infrastructure without switching existing PKI
@@ -373,6 +390,14 @@ Validation gate:
 
 Goal: Move related transaction protocols together after their shared primitives
 are proven.
+
+Approved sequencing exception: complete the `platform-pki-ca-rollover recover`
+leaf before migrating the Phase 6 root and intermediate authority writers. The
+leaf may temporarily coexist with Bash sibling leaves, matching the leaf-level
+Phase 7 migration order, but public recover dispatch must remain Bash until the
+complete Python recovery state machines and differential gates are ready. The
+foundation checkpoint may add codecs, strict record models, frozen oracles, and
+tests only; it must not mutate production recovery behavior.
 
 Migration groups:
 
@@ -614,6 +639,7 @@ implementation.
 | 2026-08-09 | `platform-pki-custody-report` completed Phase 5 utility migration. | The final Bash commit is `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`; the frozen mode-755 oracle has SHA-256 `f17aa588e5d6d200f16c3ae416da15a18c839f29ae97963704d5f11b27f822e4`, and the retained common library has SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified routes share one Python handler with descriptor-relative scans and bounded reads/helpers. Final `make container-check` passed 2,768 tests in the pinned containers. |
 | 2026-08-09 | `platform-pki-ca-passphrase-verify` completed Phase 5 secret-descriptor migration. | The final Bash commit is `95c0b277af77375d00f23585282dcf3aed83b119`; its frozen mode-755 oracle has SHA-256 `cdf4cb3f018e8b6c723310933691d2c433992fc74321e3d1e60bff2a99e88be1`. Compatibility and unified routes share one Python handler with fresh minimal passphrase descriptors, retained input identities, final locked rechecks and output, locale-compatible secret validation, bounded in-memory public-key comparison, and no temporary verification state. The focused suite passed 78 tests, independent final review found no concrete defect, and final `make container-check` passed 2,818 tests in the pinned containers. |
 | 2026-08-09 | `platform-pki-backup` completed Phase 5 archive migration. | The final Bash commit is `3d5e3b4ecd4c137f97748b4066c7e4c508e99655`; its frozen mode-755 oracle has SHA-256 `beac1204e2014e41be39254389ebc18a9db4b5a7b699197bf25187d5a8b6deea`, and the retained common library has SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified routes share one Python handler with external GNU `tar`, inherited-terminal `age -p`, exact in-tree exclusions, canonical schema-2 receipts, full lock coverage, durable no-clobber publication, final source/archive/receipt rechecks, and explicit retained or uncertain publication evidence. The focused suite passed 31 tests, the complete 224-test rollover suite accepted Python receipts, independent final review found no concrete defect, and final `make container-check` passed 2,834 tests in the pinned containers. |
+| 2026-08-09 | First behavior-neutral CA recovery foundation checkpoint added. | Final Bash rollover/root/intermediate/common assets from `ba9dd57214cae18f82c83dfb54b6ddce13882280` are frozen with provenance tests; Python adds strict persisted GNU-stat codecs, exact schema-2/3 structural record parsing, bounded private journal loading, and generic schema-5 structure parsing. Operation-specific phase, path, identity, and transition semantics remain pending; public recover dispatch and all recovery mutation behavior remain unchanged. Schema 5 remains semantically pending because the writer has 206 declared keys plus 13 cumulatively introduced successful-copy identity keys rather than one fixed 208-field shape. The integrated foundation passed 785 tests, the authoritative rollover parser passed 61 tests, deterministic generation and static verification passed, and independent final review found no concrete defect. |
 
 ## Decision Log
 
@@ -629,3 +655,4 @@ implementation.
 | 2026-08-07 | Raise the minimum from Python 3.12 to 3.14. | Align the application contract with the pinned Python 3.14.7 test environment instead of maintaining an unverified older-runtime claim. |
 | 2026-08-07 | Design and review the `doctor` contract before exposing a public route. | The review exposed missing positive-eligibility and package-handoff contracts before runtime code was added; this decision was superseded on 2026-08-08. |
 | 2026-08-08 | Make package migration forward-only and do not add `doctor`. | Supported rollback would require exhaustive historical-state validation and a guarded package-replacement workflow; neither is needed when using older Bash releases with Python-written state is outside the supported model. |
+| 2026-08-09 | Pull the complete recover leaf ahead of Phase 6 authority writers. | A temporary leaf-level Bash/Python mix is approved and follows the Phase 7 leaf migration strategy; no public dispatch changes until the complete recovery leaf passes Bash-to-Python recovery acceptance. |

@@ -39,6 +39,7 @@ from .migration_contract import (
     ROLLOVER_PREPARE_PREPARTIAL_FIELDS,
     ROLLOVER_PREPARE_PREPARTIAL_NAMES,
     ROLLOVER_PREPARE_ROOT_DB_FIELDS,
+    ROLLOVER_PREPARE_RUNTIME_IDENTITY_FIELDS,
     ROLLOVER_PREPARED_MANIFEST_FIELDS,
     ROOT_BOOTSTRAP_JOURNAL_FIELDS,
     ROOT_BOOTSTRAP_RECOVERY_FIELDS,
@@ -816,6 +817,15 @@ def test_rollover_prepare_journal_matches_source_groups_and_sorting() -> None:
                     words[3].replace("${key}", key).replace("$key", key)
                 )
     assert helper_fields == set(ROLLOVER_PREPARE_PREPARTIAL_NAMES)
+    runtime_identity_fields = tuple(sorted(
+        f"{field}_identity"
+        for field in helper_fields
+        if f"{field}_identity" not in ROLLOVER_PREPARE_JOURNAL_FIELDS
+    ))
+    assert runtime_identity_fields == ROLLOVER_PREPARE_RUNTIME_IDENTITY_FIELDS
+    assert len(ROLLOVER_PREPARE_JOURNAL_FIELDS) == 206
+    assert len(runtime_identity_fields) == 13
+    assert len(set(ROLLOVER_PREPARE_JOURNAL_FIELDS) | set(runtime_identity_fields)) == 219
 
     failure_loop = next(
         loop

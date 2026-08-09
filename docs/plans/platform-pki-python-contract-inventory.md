@@ -300,6 +300,24 @@ export/candidate declarations remain equal. Exact executable extraction of the
 remaining literal and dynamically assembled writers, including schema values
 and final-newline behavior, remains a Phase 0 item.
 
+CA recovery field tuples are now authoritative in
+`src/platform_pki/ca_rollover_recovery.py` and are re-exported by
+`tests/pki/migration_contract.py`; source-extraction tests keep the runtime
+models aligned with the frozen Bash writers. This checkpoint validates exact
+schema-2/3 field sets and accepted ordering plus core schema, operation,
+transaction, action, committed, and boolean structure; operation-specific phase,
+recovery-step, path, identity, and transition semantics remain with the pending
+typed state machines. Schema 2 has 56-field writer and
+sorted recovery forms plus a 58-field sorted checkpoint form. Schema 3 has the
+exact 20-field root and 56-field intermediate writer/sorted forms. Schema 5 is
+not one fixed 208-field record: the associative array starts with 206 declared
+keys and successful `prepare_copy_file` calls can cumulatively add 13 identity
+keys, for source-valid sorted variants up to 219 keys; the requested 208-key
+shape is one intermediate successful-copy checkpoint, not the complete family.
+This checkpoint therefore parses schema 5 only as a strict C-sorted generic
+record; operation-specific schema-5 field and state-machine validation remains
+pending.
+
 For initial migration, the following remain byte-identical:
 
 - Inventory canonical output.
@@ -457,5 +475,7 @@ of the ordinary non-rollover Make pool.
   `3d5e3b4ecd4c137f97748b4066c7e4c508e99655`.
 - Freeze exact ordered fields, schema values, and final-newline behavior for the
   remaining literal and dynamically assembled persisted-record writers.
+- Complete typed schema-5 rollover preparation validation across the 206
+  declared keys and 13 runtime-added successful-copy identity keys.
 - Extend output/status, runtime-boundary, and installed-asset contracts from the
   three pilot commands to the remaining PKI routes.
