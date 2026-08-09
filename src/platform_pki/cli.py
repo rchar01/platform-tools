@@ -27,6 +27,10 @@ def _handler(route: tuple[str, ...]):
         from .export_ansible import export_ansible
 
         return export_ansible
+    if route == ("custody-report",):
+        from .custody_report import custody_report
+
+        return custody_report
     if route == ("list-expiry",):
         from .list_expiry import list_expiry
 
@@ -271,6 +275,38 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "Explicit host-local service selection fails; all-service export skips\n"
             "host-local inventory entries because this export is managed-key-only.\n"
             "Legacy singleton CA state must be migrated before this command can run.\n\n",
+            end="",
+        )
+        return
+    if route == ("custody-report",) and not unified:
+        print(
+            f"{name} - Report PKI encryption, custody, and backup-policy findings\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--format VALUE', '35')}\n"
+            "    Report format\n"
+            "    Default: text\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name}\n"
+            f"  {name} --format json\n\n"
+            "The report inspects managed PKI paths, file metadata, storage ancestry, age\n"
+            "headers, and only the first PEM header line of validated private-key files.\n"
+            "It never decrypts, parses, hashes, copies, or prints private-key content.\n\n"
+            "Report exit codes:\n"
+            "  0 no structural custody findings\n"
+            "  1 parser, configuration, or unsafe-layout error\n"
+            "  2 one or more custody or encryption findings\n\n",
             end="",
         )
         return

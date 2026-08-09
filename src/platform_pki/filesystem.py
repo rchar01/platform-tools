@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
@@ -85,6 +86,11 @@ class FilesystemReadError(FilesystemError):
 class FilesystemReadLimitError(FilesystemError):
     def __init__(self) -> None:
         super().__init__("Filesystem file exceeds its read limit")
+
+
+class FilesystemTraversalError(FilesystemError):
+    def __init__(self) -> None:
+        super().__init__("Filesystem tree could not be enumerated")
 
 
 class FilesystemSyncError(FilesystemError):
@@ -168,6 +174,22 @@ class DirectoryIdentity:
     uid: int
     permissions: int
     kind: Literal["directory"]
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataEntry:
+    """Metadata for one descriptor-relative tree entry without content."""
+
+    relative: tuple[str, ...]
+    dev: int
+    ino: int
+    uid: int
+    permissions: int
+    links: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    kind: str
 
 
 def _policy_integer(
@@ -755,6 +777,17 @@ class OpenedFile(_OpenedObject):
         self.recheck()
         return bytes(data)
 
+    def read_prefix(self, max_bytes: int) -> bytes:
+        """Read no more than ``max_bytes`` from offset zero and recheck identity."""
+
+        _policy_integer(max_bytes, "max_bytes", minimum=0)
+        try:
+            data = os.pread(self.fileno(), max_bytes, 0)
+        except OSError:
+            raise FilesystemReadError() from None
+        self.recheck()
+        return data
+
 
 class OpenedDirectory(_OpenedObject):
     """A validated directory used as a stable descriptor-relative parent."""
@@ -809,6 +842,149 @@ class OpenedDirectory(_OpenedObject):
             expected_identity=expected_identity,
             dir_fd=self,
         )
+
+
+def open_descendant_file(
+    root: OpenedDirectory,
+    components: Sequence[str],
+    *,
+    directory_policy: DirectoryPolicy | None = None,
+    file_policy: FilePolicy | None = None,
+    expected_identity: ExpectedIdentity | None = None,
+) -> OpenedFile:
+    """Open a descendant while applying one policy to every child directory."""
+
+    if not isinstance(root, OpenedDirectory):
+        raise TypeError("root must be an OpenedDirectory")
+    names = tuple(components)
+    if not names:
+        raise ValueError("components must contain a file name")
+    if any(not isinstance(name, str) for name in names):
+        raise TypeError("components must contain strings")
+
+    current = root
+    owned: OpenedDirectory | None = None
+    try:
+        for name in names[:-1]:
+            child = current.open_directory(name, policy=directory_policy)
+            if owned is not None:
+                owned.close()
+            owned = child
+            current = child
+        return current.open_file(
+            names[-1],
+            policy=file_policy,
+            expected_identity=expected_identity,
+        )
+    finally:
+        if owned is not None:
+            owned.close()
+
+
+def _metadata_kind(mode: int) -> str:
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISREG(mode):
+        return "regular"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISCHR(mode):
+        return "character-device"
+    if stat.S_ISBLK(mode):
+        return "block-device"
+    return "unknown"
+
+
+def _metadata(relative: tuple[str, ...], result: os.stat_result) -> MetadataEntry:
+    return MetadataEntry(
+        relative=relative,
+        dev=result.st_dev,
+        ino=result.st_ino,
+        uid=result.st_uid,
+        permissions=stat.S_IMODE(result.st_mode),
+        links=result.st_nlink,
+        size=result.st_size,
+        mtime_ns=result.st_mtime_ns,
+        ctime_ns=result.st_ctime_ns,
+        kind=_metadata_kind(result.st_mode),
+    )
+
+
+def _stat_metadata(
+    directory: OpenedDirectory,
+    name: str,
+    relative: tuple[str, ...],
+) -> tuple[MetadataEntry, os.stat_result]:
+    try:
+        result = os.stat(name, dir_fd=directory.fileno(), follow_symlinks=False)
+    except OSError:
+        raise FilesystemTraversalError() from None
+    return _metadata(relative, result), result
+
+
+def _walk_metadata(
+    directory: OpenedDirectory,
+    relative: tuple[str, ...],
+    root_device: int,
+    xdev: bool,
+) -> Iterator[MetadataEntry]:
+    try:
+        names = sorted(os.listdir(directory.fileno()), key=os.fsencode)
+    except OSError:
+        raise FilesystemTraversalError() from None
+
+    for name in names:
+        child_relative = (*relative, name)
+        before, before_stat = _stat_metadata(directory, name, child_relative)
+        yield before
+        if before.kind == "directory" and (not xdev or before.dev == root_device):
+            try:
+                expected = identity_from_stat(before_stat)
+                child = directory.open_directory(name, expected_identity=expected)
+            except FilesystemError:
+                raise FilesystemTraversalError() from None
+            try:
+                yield from _walk_metadata(child, child_relative, root_device, xdev)
+                child.recheck()
+            except FilesystemTraversalError:
+                raise
+            except FilesystemError:
+                raise FilesystemTraversalError() from None
+            finally:
+                child.close()
+        after, _after_stat = _stat_metadata(directory, name, child_relative)
+        if after != before:
+            raise FilesystemTraversalError()
+    try:
+        directory.recheck()
+    except FilesystemError:
+        raise FilesystemTraversalError() from None
+
+
+def walk_metadata(
+    root: OpenedDirectory,
+    *,
+    xdev: bool = True,
+) -> Iterator[MetadataEntry]:
+    """Enumerate a pinned tree without following links or reading file content."""
+
+    if not isinstance(root, OpenedDirectory):
+        raise TypeError("root must be an OpenedDirectory")
+    if not isinstance(xdev, bool):
+        raise TypeError("xdev must be a boolean")
+    try:
+        root_identity = root.recheck()
+        yield _metadata((), os.fstat(root.fileno()))
+        yield from _walk_metadata(root, (), root_identity.dev, xdev)
+        root.recheck()
+    except FilesystemTraversalError:
+        raise
+    except (OSError, FilesystemError):
+        raise FilesystemTraversalError() from None
 
 
 def read_bounded(opened_file: OpenedFile, max_bytes: int) -> bytes:

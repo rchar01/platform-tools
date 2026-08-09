@@ -449,8 +449,9 @@ of the ordinary non-rollover Make pool.
 - Determine which target hosts require Python 3.14 provisioning.
 - Define the exact installation representation for compatibility aliases to the
   zipapp.
-- Record each command's exact final-Bash commit immediately before cutover and
-  add its command-specific differential cases.
+- Record each remaining command's exact final-Bash commit immediately before
+  cutover and add its command-specific differential cases. Custody report uses
+  `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4` and its frozen executable oracle.
 - Freeze exact ordered fields, schema values, and final-newline behavior for the
   remaining literal and dynamically assembled persisted-record writers.
 - Extend output/status, runtime-boundary, and installed-asset contracts from the

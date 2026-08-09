@@ -94,9 +94,8 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- `python3` for byte-bounded `platform-pki-custody-report` header and receipt inspection
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, and `platform-pki-export-ansible`; other operational PKI commands remain on their existing Bash executables during migration
-- Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for the currently disconnected Python ordered-lock primitive
+- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, and `platform-pki-custody-report`; other operational PKI commands remain on their existing Bash executables during migration
+- Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
 SSH and Proxmox helpers require:
@@ -529,7 +528,12 @@ public-artifact roles. It inspects metadata, storage ancestry, `age` headers,
 and only the first PEM header line of validated private-key files. It reports
 offline custody, recipient separation, offsite copies, restore rehearsal, and
 target-host leaf custody as `unknown` because filesystem structure cannot prove
-those operational controls.
+those operational controls. The compatibility command and
+`platform-pki custody-report` use the same Python handler. Metadata-only scans
+are descriptor-relative, stay on the PKI filesystem, and do not stage private
+path lists. Header reads consume at most 257 bytes, receipt reads reject content
+above 65,536 bytes, and receipt archive digests are recorded compatibility
+fields rather than values verified by this report.
 
 Service renewal requires an existing private key, reuses it unless
 `--rotate-key` is requested, and archives previous service material while

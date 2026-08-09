@@ -41,8 +41,14 @@ This file gives a short, release-oriented view of what changed between versions.
   be completed. Custom marker authorization remains descriptor-pinned through
   exchange, cleanup rechecks each exact entry immediately before mutation, and
   prepublication stages without complete cleanup readiness are retained and
-  reported rather than traversed destructively. Other operational
-  `platform-pki-*` commands remain on Bash.
+  reported rather than traversed destructively. `platform-pki-custody-report`
+  and `platform-pki custody-report` now share one Python handler with exact text
+  and schema-1 JSON output, first-line-only 257-byte key and age inspection,
+  compatible unordered schema-2 receipt parsing, descriptor-relative xdev
+  metadata enumeration without temporary path lists, bounded suppressed storage
+  helpers, and lifecycle-through-export locking. Receipt digests remain recorded
+  evidence and are not recalculated. Other operational `platform-pki-*`
+  commands remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

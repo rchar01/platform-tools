@@ -26,7 +26,9 @@ from src.platform_pki.filesystem import (
     FilesystemPolicyError,
     FilesystemReadLimitError,
     FilesystemSymlinkError,
+    FilesystemTraversalError,
     FilesystemTypeError,
+    MetadataEntry,
     OpenedDirectory,
     OpenedFile,
     TrustedAncestorError,
@@ -34,6 +36,8 @@ from src.platform_pki.filesystem import (
     fsync_rename_parents,
     identity_at,
     open_trusted_directory,
+    open_descendant_file,
+    walk_metadata,
 )
 
 
@@ -227,6 +231,68 @@ def test_bounded_read_accepts_boundary_and_reads_only_limit_plus_one(
             opened.read(4)
     assert max(requests) <= 6
     assert 5 in requests
+
+
+def test_prefix_read_never_requests_more_than_the_explicit_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "value"
+    path.write_bytes(b"header\n" + b"tail" * 100000)
+    requests: list[tuple[int, int]] = []
+    real_pread = os.pread
+
+    def recording_pread(fd: int, size: int, offset: int) -> bytes:
+        requests.append((size, offset))
+        return real_pread(fd, size, offset)
+
+    monkeypatch.setattr(filesystem.os, "pread", recording_pread)
+    with OpenedFile(path) as opened:
+        assert opened.read_prefix(7) == b"header\n"
+    assert requests == [(7, 0)]
+
+
+def test_open_descendant_file_applies_every_directory_policy(tmp_path: Path) -> None:
+    root_path = tmp_path / "root"
+    child = root_path / "child/private"
+    child.mkdir(mode=0o700, parents=True)
+    root_path.chmod(0o700)
+    (root_path / "child").chmod(0o755)
+    path = child / "value"
+    path.write_bytes(b"value")
+    path.chmod(0o600)
+    with OpenedDirectory(root_path) as root:
+        with pytest.raises(FilesystemPolicyError):
+            open_descendant_file(
+                root,
+                ("child", "private", "value"),
+                directory_policy=DirectoryPolicy(mode=0o700),
+                file_policy=FilePolicy(mode=0o600),
+            )
+
+
+def test_metadata_walk_is_descriptor_relative_and_does_not_follow_types(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "root"
+    directory = root_path / "directory"
+    directory.mkdir(parents=True)
+    (directory / "file").write_bytes(b"content")
+    (root_path / "link").symlink_to(directory, target_is_directory=True)
+    os.mkfifo(root_path / "fifo")
+
+    entries: tuple[MetadataEntry, ...] = ()
+    with OpenedDirectory(root_path) as root:
+        entries = tuple(walk_metadata(root))
+    assert all(isinstance(entry, MetadataEntry) for entry in entries)
+    observed = {entry.relative: entry.kind for entry in entries}
+    assert observed == {
+        (): "directory",
+        ("directory",): "directory",
+        ("directory", "file"): "regular",
+        ("fifo",): "fifo",
+        ("link",): "symlink",
+    }
+    assert ("link", "file") not in observed
 
 
 def test_bounded_read_rejects_in_place_change_during_read(

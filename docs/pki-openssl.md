@@ -1098,12 +1098,21 @@ field set plus the bound archive path, device, inode, size, mode, and owner. It
 does not hash the archive payload. Visible and hidden backup entries are both
 inspected, and orphan receipts are reported.
 
+The compatibility command and `platform-pki custody-report` invoke the same
+Python 3.14 handler. Recursive metadata and unexpected-key enumeration is
+descriptor-relative, does not cross filesystems, follows no symlinks, and keeps
+private path names out of temporary files and report diagnostics. Receipt fields
+may be unordered and need no final newline; all 14 nonempty schema-2 fields must
+still be unique and archive identity-bound. The recorded archive digest is not
+recomputed or described as verified.
+
 When available, util-linux `findmnt` and `lsblk` report whether the PKI mount's
 block-device ancestry includes `crypto_LUKS`. The evidence values are
 `luks-ancestor`, `no-luks-ancestor`, and `unknown`; absence of a LUKS ancestor
 does not claim absence of native filesystem or directory encryption. Overlay,
 network, unavailable-command, and unsupported storage stacks are reported as
-`unknown`. A recognized header or LUKS ancestor does not prove recipient
+`unknown`. Helper output and runtime are bounded, and helper diagnostics are
+suppressed. A recognized header or LUKS ancestor does not prove recipient
 custody, archive recoverability, or protection while mounted.
 
 Operational controls that cannot be established from local structure remain

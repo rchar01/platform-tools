@@ -122,14 +122,13 @@ verification before copying any command. The executable uses isolated Python
 startup (`-I -S`) so checkout modules, `PYTHONPATH`, and user or system site
 packages cannot alter application imports.
 
-During the foundation stage, `platform-pki` provides the unified hierarchy,
-help, version, the frozen 24-route parser contract, and a fail-closed
-unavailable-handler result. Shared modules provide safe diagnostics, strict
+`platform-pki` provides the unified hierarchy, help, version, and frozen
+24-route parser contract. Migrated compatibility commands dispatch to the same
+handlers as their unified routes; unavailable handlers fail closed. Shared
+modules provide safe diagnostics, strict
 ordered `key=value` records, strict inventory parsing, and bounded exact-argv
-subprocess execution. The existing `platform-pki-*` commands remain
-Bashly-generated and continue to provide all operational behavior; temporary
-copied zipapps prove compatibility-name dispatch without changing installed
-compatibility commands.
+subprocess execution. The Make inventories distinguish remaining Bashly tools
+from committed Python compatibility zipapps.
 
 The foundation also provides `acquire_pki_locks`, a standard-library
 `fcntl.flock` context manager for the fixed lifecycle-through-export prefix
@@ -150,7 +149,14 @@ source. It does not fall back to a path-reopened or overwrite-capable sequence.
 
 For each lock name, the finite checkpoints are `after-pre-stat`,
 `after-stage-init`, `after-open`, `after-acquire`, `before-release`, and
-`after-release`, prefixed as `lock-<name>-<checkpoint>`.
+`after-release`, prefixed as `lock-<name>-<checkpoint>`. Migrated operational
+handlers use these profiles, including lifecycle-through-export locking for the
+custody report.
+
+The reusable filesystem layer also provides descriptor-relative metadata-only
+tree enumeration and policy-checked descendant file opening. Custody reporting
+uses these helpers for no-follow xdev scans and reads key or age prefixes with a
+single at-most-257-byte `pread`; it never creates path-list temporary files.
 
 The bounded publication checkpoint provides owned same-parent regular-file
 staging, exact-byte absent-destination atomic writes, identity-matched regular

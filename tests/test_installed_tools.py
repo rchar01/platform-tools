@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -306,6 +307,59 @@ def test_installed_inventory_install_uses_shared_library(
     destination = namespace / "pki/inventory/services.yml"
     assert destination.read_bytes() == source.read_bytes()
     assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "command",
+    (("platform-pki-custody-report",), ("platform-pki", "custody-report")),
+    ids=("compatibility", "unified"),
+)
+def test_installed_custody_report_uses_shared_library(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    pki = install.state / f"custody-pki-{command[0]}"
+    for directory in (
+        pki / "authorities/roots/g1/private",
+        pki / "authorities/intermediates/g1-i1/private",
+        pki / "state",
+        pki / "locks",
+    ):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for directory in (pki, *(path for path in pki.rglob("*") if path.is_dir())):
+        directory.chmod(0o700)
+    files = {
+        pki / "state/active-issuer": b"root=g1\nintermediate=g1-i1\n",
+        pki / "authorities/roots/g1/private/root-ca.key": (
+            b"-----BEGIN ENCRYPTED " b"PRIVATE KEY-----\nprivate-root-tail\n"
+        ),
+        pki / "authorities/intermediates/g1-i1/private/intermediate-ca.key": (
+            b"-----BEGIN ENCRYPTED " b"PRIVATE KEY-----\nprivate-intermediate-tail\n"
+        ),
+    }
+    for path, data in files.items():
+        path.write_bytes(data)
+        path.chmod(0o600)
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "--pki-dir",
+        pki,
+        "--format",
+        "json",
+    )
+
+    assert result.status == 0, result.stderr
+    assert result.stderr == ""
+    report = json.loads(result.stdout)
+    assert report["status"] == "ok"
+    assert report["layout"] == "generation"
+    assert report["storage_encryption_evidence"] == "unknown"
+    assert "private-root-tail" not in result.stdout
 
 
 def _prepare_export_state(

@@ -353,7 +353,8 @@ Migration order:
 
 Tasks:
 
-- [ ] Preserve byte-bounded identity-checked inspection and secret-free output.
+- [x] Preserve byte-bounded identity-checked custody inspection and secret-free
+  output, including receipt compatibility and metadata-only recursive scans.
 - [ ] Preserve minimal inherited-descriptor passphrase transport.
 - [ ] Preserve suppressed OpenSSL diagnostics and certificate/key matching.
 - [ ] Preserve archive exclusions, `age` behavior, plain-backup opt-in, receipts,
@@ -364,6 +365,9 @@ Validation gate:
 - [ ] Passphrases never appear in argv, environment variables, output,
   exceptions, process listings, or persisted state.
 - [ ] Backup archives and receipts remain compatible with existing consumers.
+- [x] Custody report output, status, layout, receipt acceptance, and storage
+  evidence match the frozen Bash oracle; Python-only tests cover strengthened
+  no-follow read and traversal races.
 
 ## Phase 6: Migrate CA and CSR Transactions
 
@@ -607,6 +611,7 @@ implementation.
 | 2026-08-08 | `platform-pki-init` started Phase 4 bounded-publication command migration. | The frozen Bash oracle is recorded at `ee03cddc626338ea7d066dd71519204bddb46db3`; the compatibility and unified routes share one Python handler and retain the existing template and path contract. |
 | 2026-08-08 | `platform-pki-inventory-install` migrated to one Python publication handler. | The frozen Bash oracle is recorded at `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1`; Bash/Python differentials cover installation, no-op, normalization, invalid input, physical-CWD resolution, legacy and recovery gates, replacement, fallback, overlap, and lock contention, while Python-specific tests exercise descriptor-bound races and retained ambiguity. |
 | 2026-08-08 | `platform-pki-export-ansible` completed Phase 4 bounded-publication migration and independent cleanup review. | The frozen Bash oracle is recorded at `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b`; compatible output/final-state differentials cover success, custom marker authorization, reversed explicit selection order, warnings, path boundaries, host-local rejection, issuer diagnostics, and generation gating. Python-specific subprocess tests prove the exact export manifest, whole-tree atomicity, descriptor-pinned marker authorization, late pre-publication preservation, exact readiness-bound stage cleanup or reported private retention, competing-publisher no-clobber behavior, forward-only replacement, pre/post-commit crashes, mutation-boundary exact-name cleanup, retained displaced-tree evidence, and no-follow hostile-symlink cleanup. Final `make container-check` passed 2,703 tests in the pinned containers. |
+| 2026-08-09 | `platform-pki-custody-report` completed Phase 5 utility migration. | The final Bash commit is `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`; the frozen mode-755 oracle has SHA-256 `f17aa588e5d6d200f16c3ae416da15a18c839f29ae97963704d5f11b27f822e4`, and the retained common library has SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified routes share one Python handler with descriptor-relative scans and bounded reads/helpers. Final `make container-check` passed 2,768 tests in the pinned containers. |
 
 ## Decision Log
 

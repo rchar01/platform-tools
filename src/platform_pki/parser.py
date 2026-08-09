@@ -551,8 +551,8 @@ def _validate_value(option: OptionSpec, value: str) -> None:
             )
     if option.validator == "format" and value not in ("text", "json"):
         raise ParserError(
-            f"validation error in {option.name} {option.metavar}:\n"
-            "format must be text or json"
+            f"validation error in {option.name} VALUE:\n"
+            f"Format must be text or json: {_safe_text(value)}"
         )
     if option.choices and value and value not in option.choices:
         choices = ", ".join(option.choices)

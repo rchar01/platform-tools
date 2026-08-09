@@ -63,6 +63,15 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lifecycle-through-inventory locks, OpenSSL child behavior, shared-asset
   lookup, and legacy-state rejection. Other operational PKI commands remain on
   Bash during migration.
+- Changed `platform-pki-custody-report` to use one Python 3.14 handler for its
+  compatibility command and unified `platform-pki custody-report` route. It
+  preserves exact text and compact schema-1 JSON bytes, ordering, findings,
+  statuses, legacy/generation support, receipt compatibility, storage evidence,
+  installed common-library lookup, and lifecycle-through-export locking. It
+  strengthens no-follow identity and ancestry checks, enumerates metadata
+  descriptor-relatively without sensitive temporary path lists, bounds helper
+  output and runtime, and still never decrypts, cryptographically parses, hashes,
+  copies, or prints private key or archive content.
 - Separated the Bashly development image from a pinned Python 3.14 test image.
   `make container-check` now verifies generated artifacts and runs ShellCheck in
   the development image, then runs syntax checks, one complete pytest aggregate,

@@ -275,7 +275,7 @@ def test_parser_validation_precedes_command_level_duplicate_guards() -> None:
             ),
         )
     assert not caught.value.application
-    assert "format must be text or json" in caught.value.message
+    assert "Format must be text or json: yaml" in caught.value.message
 
 
 def test_parser_diagnostics_replace_terminal_controls() -> None:

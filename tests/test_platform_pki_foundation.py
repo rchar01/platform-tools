@@ -27,6 +27,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/_version.py",
     "platform_pki/cli.py",
     "platform_pki/compat.py",
+    "platform_pki/custody_report.py",
     "platform_pki/errors.py",
     "platform_pki/export_ansible.py",
     "platform_pki/faults.py",
@@ -262,6 +263,7 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
             "[ERROR] Private repository ancestor "
         )
     elif route.unified_route in {
+        ("custody-report",),
         ("list-expiry",),
         ("print-cert",),
         ("service-verify",),
@@ -379,6 +381,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
         "print-cert": "Print readable details for a generated service certificate",
         "service-verify": "Verify a generated service certificate",
         "export-ansible": "Export generated PKI files into an Ansible-consumable layout",
+        "custody-report": "Report PKI encryption, custody, and backup-policy findings",
     }
     if contract.unified_route in operational_descriptions:
         expected_usage = (
