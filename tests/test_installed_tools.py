@@ -38,7 +38,25 @@ def make_tools() -> tuple[str, ...]:
 
 
 TOOLS = make_tools()
-DEPENDENCIES = ("bash", "python3", "dirname", "mkdir", "chmod", "id", "stat", "find", "mktemp", "cp", "mv", "rm", "ln", "pwd", "flock", "openssl")
+DEPENDENCIES = (
+    "bash",
+    "python3",
+    "dirname",
+    "mkdir",
+    "chmod",
+    "id",
+    "stat",
+    "find",
+    "mktemp",
+    "cp",
+    "mv",
+    "rm",
+    "ln",
+    "pwd",
+    "flock",
+    "openssl",
+    "cmp",
+)
 LEGACY_MIGRATION_ERROR = (
     "[ERROR] Legacy PKI state requires migration; create a fresh backup and "
     "follow platform-pki-ca-rollover status/migrate\n"
@@ -360,6 +378,43 @@ def test_installed_custody_report_uses_shared_library(
     assert report["layout"] == "generation"
     assert report["storage_encryption_evidence"] == "unknown"
     assert "private-root-tail" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        ("platform-pki-ca-passphrase-verify",),
+        ("platform-pki", "ca-passphrase-verify"),
+    ),
+    ids=("compatibility", "unified"),
+)
+def test_installed_ca_passphrase_verify_uses_shared_library(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    passphrase = install.state / f"passphrase-{command[0]}"
+    passphrase.write_text("installed-passphrase-value\n", encoding="utf-8")
+    passphrase.chmod(0o600)
+    pki = install.state / f"missing-passphrase-pki-{command[0]}"
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "--pki-dir",
+        pki,
+        "--root-pass-file",
+        passphrase,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] PKI directory does not exist; run platform-pki-init first: "
+        f"{pki}\n"
+    )
 
 
 def _prepare_export_state(

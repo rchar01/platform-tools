@@ -36,7 +36,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
-| `platform-pki` | Unified Python PKI interface; `init`, `inventory-install`, `print-cert`, `list-expiry`, `service-verify`, and `export-ansible` are operational while later migration routes remain fail-closed. |
+| `platform-pki` | Unified Python PKI interface; migrated operational routes run directly while later migration routes remain fail-closed. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
@@ -94,7 +94,7 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, and `platform-pki-custody-report`; other operational PKI commands remain on their existing Bash executables during migration
+- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
@@ -511,11 +511,12 @@ platform-pki-ca-passphrase-verify \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
 
-The command holds the standard lifecycle, root, and intermediate locks, passes
-secrets to OpenSSL through inherited descriptors, suppresses OpenSSL diagnostics,
-and writes no persistent validation receipt. Success is point-in-time evidence;
-`platform-pki-custody-report` continues to report cryptographic validation as
-`unknown`.
+The compatibility command and `platform-pki ca-passphrase-verify` use the same
+Python handler. It holds the standard lifecycle, root, and intermediate locks,
+passes secrets to OpenSSL through inherited descriptors, suppresses OpenSSL
+diagnostics, and writes no persistent validation receipt. Success is
+point-in-time evidence; `platform-pki-custody-report` continues to report
+cryptographic validation as `unknown`.
 
 Service issuance refuses an existing certificate, reuses an existing private
 key unless `--rotate-key` is requested, and transactionally publishes service

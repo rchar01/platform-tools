@@ -31,6 +31,10 @@ def _handler(route: tuple[str, ...]):
         from .custody_report import custody_report
 
         return custody_report
+    if route == ("ca-passphrase-verify",):
+        from .ca_passphrase_verify import verify_ca_passphrases
+
+        return verify_ca_passphrases
     if route == ("list-expiry",):
         from .list_expiry import list_expiry
 
@@ -307,6 +311,46 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "  0 no structural custody findings\n"
             "  1 parser, configuration, or unsafe-layout error\n"
             "  2 one or more custody or encryption findings\n\n",
+            end="",
+        )
+        return
+    if route == ("ca-passphrase-verify",) and not unified:
+        print(
+            f"{name} - Verify active CA key passphrases and certificate matches\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--root-pass-file PATH', '35')}\n"
+            "    Restricted file containing the active root key passphrase\n\n"
+            f"  {_color('--intermediate-pass-file PATH', '35')}\n"
+            "    Restricted file containing the active intermediate key passphrase\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} --root-pass-file\n"
+            "  /run/secrets/platform-pki-root-pass\n"
+            f"  {name} --intermediate-pass-file\n"
+            "  /run/secrets/platform-pki-intermediate-pass\n"
+            f"  {name} --root-pass-file\n"
+            "  /run/secrets/platform-pki-root-pass --intermediate-pass-file\n"
+            "  /run/secrets/platform-pki-intermediate-pass\n\n"
+            "At least one passphrase-file option is required. The command validates the\n"
+            "active encrypted private key, derives its public key, and proves that it\n"
+            "matches the active certificate. Passphrases are supplied to OpenSSL through\n"
+            "inherited file descriptors and are never placed in argv, the environment,\n"
+            "or output. No receipt or persistent verification state is written.\n\n"
+            "Passphrase files must be current-user-owned, singly linked, non-symlink\n"
+            "regular files with mode 600 or stricter and a first line of at least 16\n"
+            "characters containing non-whitespace content. Legacy singleton CA state\n"
+            "must be migrated before this command can run.\n\n",
             end="",
         )
         return

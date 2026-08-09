@@ -72,6 +72,14 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   descriptor-relatively without sensitive temporary path lists, bounds helper
   output and runtime, and still never decrypts, cryptographically parses, hashes,
   copies, or prints private key or archive content.
+- Changed `platform-pki-ca-passphrase-verify` to use one Python 3.14 handler for
+  its compatibility command and unified `platform-pki ca-passphrase-verify`
+  route. It preserves parser, help, output, status, dependency, lock, active-key,
+  certificate-match, and no-receipt contracts while retaining every requested
+  input through final locked identity rechecks. Each OpenSSL invocation receives
+  only its required descriptors, each passphrase read starts from an independent
+  descriptor offset, diagnostics remain suppressed, and bounded in-memory public
+  key comparison creates no temporary verification state.
 - Separated the Bashly development image from a pinned Python 3.14 test image.
   `make container-check` now verifies generated artifacts and runs ShellCheck in
   the development image, then runs syntax checks, one complete pytest aggregate,

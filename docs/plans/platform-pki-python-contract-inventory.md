@@ -450,8 +450,10 @@ of the ordinary non-rollover Make pool.
 - Define the exact installation representation for compatibility aliases to the
   zipapp.
 - Record each remaining command's exact final-Bash commit immediately before
-  cutover and add its command-specific differential cases. Custody report uses
-  `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4` and its frozen executable oracle.
+  cutover and add its command-specific differential cases. Completed Phase 5
+  cutovers retain frozen executable oracles: custody report uses
+  `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`, and CA passphrase verification
+  uses `95c0b277af77375d00f23585282dcf3aed83b119`.
 - Freeze exact ordered fields, schema values, and final-newline behavior for the
   remaining literal and dynamically assembled persisted-record writers.
 - Extend output/status, runtime-boundary, and installed-asset contracts from the

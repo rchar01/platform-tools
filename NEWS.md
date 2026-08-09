@@ -47,8 +47,13 @@ This file gives a short, release-oriented view of what changed between versions.
   compatible unordered schema-2 receipt parsing, descriptor-relative xdev
   metadata enumeration without temporary path lists, bounded suppressed storage
   helpers, and lifecycle-through-export locking. Receipt digests remain recorded
-  evidence and are not recalculated. Other operational `platform-pki-*`
-  commands remain on Bash.
+  evidence and are not recalculated. `platform-pki-ca-passphrase-verify` and
+  `platform-pki ca-passphrase-verify` also share one Python handler. It retains
+  all requested passphrase, active-key, certificate, and manifest descriptors
+  through final locked rechecks, passes each secret to OpenSSL through a fresh
+  minimal inherited descriptor, suppresses OpenSSL diagnostics, and compares
+  public keys in bounded memory without temporary verification state. Other
+  operational `platform-pki-*` commands remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

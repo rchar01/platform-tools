@@ -330,8 +330,9 @@ all requested checks succeed. Failures suppress raw OpenSSL diagnostics, and
 passphrases are passed through inherited descriptors rather than argv or the
 environment. The command writes no persistent receipt; a successful run is
 point-in-time evidence and does not prove offline custody or future recovery.
-Temporary verification cleanup is bound to the directory identity created by
-the command; an unexpected replacement is retained and makes cleanup fail.
+The compatibility command and `platform-pki ca-passphrase-verify` use the same
+Python 3.14 handler. Public keys are compared in bounded memory, so verification
+creates no temporary public-key files or cleanup state.
 
 ## Service Inventory
 

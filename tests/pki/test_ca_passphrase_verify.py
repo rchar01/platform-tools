@@ -13,10 +13,25 @@ import pytest
 
 from ..harness import ProcessResult
 from .conftest import RolloverWorkspace
+from src.platform_pki import ca_passphrase_verify
+from src.platform_pki.filesystem import FilePolicy, OpenedFile
+from src.platform_pki.parser import parse_route
 
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "bin/platform-pki-ca-passphrase-verify"
+UNIFIED = ROOT / "bin/platform-pki"
+ORACLE = (
+    ROOT
+    / "tests/pki/oracles/platform-pki-ca-passphrase-verify/platform-pki-ca-passphrase-verify"
+)
+ORACLE_COMMIT = "95c0b27"
+ORACLE_SHA256 = "cdf4cb3f018e8b6c723310933691d2c433992fc74321e3d1e60bff2a99e88be1"
+COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
+PYTHON_INTERFACES = (
+    pytest.param((TOOL,), id="compatibility"),
+    pytest.param((UNIFIED, "ca-passphrase-verify"), id="unified"),
+)
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 GENERIC_FAILURE = "[ERROR] CA passphrase verification failed\n"
 
@@ -44,9 +59,32 @@ def _run(
     )
 
 
+def _run_interface(
+    process_runner: Callable[..., ProcessResult],
+    command: tuple[Path | str, ...],
+    workspace: RolloverWorkspace,
+    arguments: Sequence[str | Path],
+    environment: Mapping[str, str],
+) -> ProcessResult:
+    selected_environment = dict(environment)
+    if command == (ORACLE,):
+        selected_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ROOT / "lib")
+    return process_runner(
+        [*command, "--namespace", workspace.namespace, *arguments],
+        env=selected_environment,
+        timeout=30,
+    )
+
+
 def _write_private(path: Path, content: str) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(content)
+
+
+def _write_private_bytes(path: Path, content: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
         stream.write(content)
 
 
@@ -77,6 +115,29 @@ def test_help_and_version(process_runner: Callable[..., ProcessResult]) -> None:
         0,
         f"platform-pki-ca-passphrase-verify {VERSION}\n",
         "",
+    )
+
+
+def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
+    plan = (ROOT / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
+    assert sha256((ROOT / "lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
+    assert ORACLE_COMMIT in plan
+    assert os.access(ORACLE, os.X_OK)
+
+
+def test_compatibility_help_matches_frozen_oracle(
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "lib")}
+    oracle = process_runner([ORACLE, "--help"], env=environment)
+    result = process_runner([TOOL, "--help"], env=environment)
+    assert (result.status, result.stdout, result.stderr) == (
+        oracle.status,
+        oracle.stdout,
+        oracle.stderr,
     )
 
 
@@ -117,12 +178,14 @@ def test_requires_at_least_one_passphrase_file(
         ),
     ],
 )
+@pytest.mark.parametrize("command", PYTHON_INTERFACES)
 def test_valid_passphrases_are_read_only_and_deterministic(
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     arguments: list[str],
     stdout: str,
+    command: tuple[Path | str, ...],
     request: pytest.FixtureRequest,
 ) -> None:
     workspace = rollover_case_factory(f"valid-{request.node.callspec.id}")
@@ -132,43 +195,67 @@ def test_valid_passphrases_are_read_only_and_deterministic(
     ]
     before = _state_snapshot(workspace.pki)
 
-    result = _run(process_runner, workspace, expanded, isolated_environment)
+    oracle = _run_interface(
+        process_runner, (ORACLE,), workspace, expanded, isolated_environment
+    )
+    result = _run_interface(
+        process_runner, command, workspace, expanded, isolated_environment
+    )
 
+    assert (result.status, result.stdout, result.stderr) == (
+        oracle.status,
+        oracle.stdout,
+        oracle.stderr,
+    )
     assert result == ProcessResult(result.args, 0, stdout, "")
     assert _state_snapshot(workspace.pki) == before
     assert not list(workspace.pki.rglob("*passphrase-verif*"))
 
 
 @pytest.mark.parametrize("authority", ("root", "intermediate"))
+@pytest.mark.parametrize("command", PYTHON_INTERFACES)
 def test_wrong_passphrase_has_only_generic_failure(
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     authority: str,
+    command: tuple[Path | str, ...],
 ) -> None:
     workspace = rollover_case_factory(f"wrong-{authority}")
     wrong = workspace.root / "wrong-passphrase"
     secret = "wrong-passphrase-must-not-leak"
     _write_private(wrong, f"{secret}\n")
 
-    result = _run(
+    arguments = [f"--{authority}-pass-file", wrong]
+    oracle = _run_interface(
         process_runner,
+        (ORACLE,),
         workspace,
-        [f"--{authority}-pass-file", wrong],
+        arguments,
         isolated_environment,
     )
+    result = _run_interface(
+        process_runner, command, workspace, arguments, isolated_environment
+    )
 
+    assert (result.status, result.stdout, result.stderr) == (
+        oracle.status,
+        oracle.stdout,
+        oracle.stderr,
+    )
     assert result == ProcessResult(result.args, 1, "", GENERIC_FAILURE)
     assert secret not in result.stdout + result.stderr
     assert "decrypt" not in result.stderr.lower()
 
 
 @pytest.mark.parametrize("wrong_authority", ("root", "intermediate"))
+@pytest.mark.parametrize("command", PYTHON_INTERFACES)
 def test_requested_checks_fail_without_partial_success_output(
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     wrong_authority: str,
+    command: tuple[Path | str, ...],
 ) -> None:
     workspace = rollover_case_factory(f"no-partial-success-{wrong_authority}")
     wrong = workspace.root / f"wrong-{wrong_authority}-passphrase"
@@ -176,8 +263,9 @@ def test_requested_checks_fail_without_partial_success_output(
     root_pass = wrong if wrong_authority == "root" else workspace.passphrase_file
     intermediate_pass = wrong if wrong_authority == "intermediate" else workspace.passphrase_file
 
-    result = _run(
+    result = _run_interface(
         process_runner,
+        command,
         workspace,
         [
             "--root-pass-file",
@@ -280,6 +368,194 @@ def test_rejects_unsafe_passphrase_files(
     assert result.status == 1
     assert result.stdout == ""
     assert "Passphrase file" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("value", "diagnostic"),
+    (
+        ("é" * 8, "must be at least 16 characters"),
+        ("\u2003" * 16, "must contain non-whitespace characters"),
+    ),
+    ids=("multibyte-length", "unicode-whitespace"),
+)
+@pytest.mark.parametrize("command", PYTHON_INTERFACES)
+def test_utf8_locale_passphrase_validation_matches_frozen_oracle(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    value: str,
+    diagnostic: str,
+    command: tuple[Path | str, ...],
+    request: pytest.FixtureRequest,
+) -> None:
+    workspace = rollover_case_factory(f"utf8-{request.node.callspec.id}")
+    passphrase = workspace.root / "utf8-passphrase"
+    _write_private(passphrase, f"{value}\n")
+    environment = dict(isolated_environment)
+    environment.update(LC_ALL="C.utf8", LANG="C.utf8")
+    arguments = ["--root-pass-file", passphrase]
+
+    oracle = _run_interface(
+        process_runner, (ORACLE,), workspace, arguments, environment
+    )
+    result = _run_interface(process_runner, command, workspace, arguments, environment)
+
+    assert (result.status, result.stdout, result.stderr) == (
+        oracle.status,
+        oracle.stdout,
+        oracle.stderr,
+    )
+    assert result.status == 1
+    assert diagnostic in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("locale_name", "value", "diagnostic"),
+    (
+        ("C.utf8", b"\xff" * 16 + b"\n", "must contain non-whitespace"),
+        ("C.utf8", b" " * 15 + b"\xff\n", "must contain non-whitespace"),
+        ("C.utf8", b" " * 15 + b"\xc2\n", "must contain non-whitespace"),
+        ("C.utf8", b" " * 14 + b"\xe2\x80\n", "must contain non-whitespace"),
+        ("C.utf8", b" " * 13 + b"\xf0\x9f\x92\n", "must contain non-whitespace"),
+        ("C.utf8", b" " * 15 + b"x\xff\n", "CA passphrase verification failed"),
+        ("C", b"\xff" * 16 + b"\n", "CA passphrase verification failed"),
+        ("C.utf8", b"\0\n", "first line is empty"),
+        ("C.utf8", b"a" * 15 + b"\0\n", "must be at least 16 characters"),
+        ("C.utf8", b"a" * 15 + b"\n", "must be at least 16 characters"),
+        ("C.utf8", b"a" * 16 + b"\n", "CA passphrase verification failed"),
+        (
+            "C.utf8",
+            b" " * (64 * 1024 - 1) + "\u2003".encode() + b"\n",
+            "must contain non-whitespace",
+        ),
+        (
+            "C.utf8",
+            b" " * (64 * 1024 - 1) + "é".encode() + b"\n",
+            "CA passphrase verification failed",
+        ),
+        (
+            "C.utf8",
+            b" " * (64 * 1024 - 1) + b"\xc2\n",
+            "must contain non-whitespace",
+        ),
+    ),
+    ids=(
+        "utf8-malformed-only",
+        "utf8-space-malformed",
+        "utf8-truncated-two-byte",
+        "utf8-truncated-three-byte",
+        "utf8-truncated-four-byte",
+        "utf8-valid-malformed",
+        "c-malformed",
+        "nul-only",
+        "nul-after-15",
+        "exact-15",
+        "exact-16",
+        "split-unicode-whitespace",
+        "split-multibyte-nonspace",
+        "split-truncated-multibyte",
+    ),
+)
+@pytest.mark.parametrize("command", PYTHON_INTERFACES)
+def test_first_line_edge_validation_matches_frozen_oracle(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    locale_name: str,
+    value: bytes,
+    diagnostic: str,
+    command: tuple[Path | str, ...],
+    request: pytest.FixtureRequest,
+) -> None:
+    workspace = rollover_case_factory(f"first-line-{request.node.callspec.id}")
+    passphrase = workspace.root / "edge-passphrase"
+    _write_private_bytes(passphrase, value)
+    environment = dict(isolated_environment)
+    environment.update(LC_ALL=locale_name, LANG=locale_name)
+    arguments = ["--root-pass-file", passphrase]
+
+    oracle = _run_interface(
+        process_runner, (ORACLE,), workspace, arguments, environment
+    )
+    result = _run_interface(process_runner, command, workspace, arguments, environment)
+
+    assert (result.status, result.stdout, result.stderr) == (
+        oracle.status,
+        oracle.stdout,
+        oracle.stderr,
+    )
+    assert result.status == 1
+    assert diagnostic in result.stderr
+
+
+@pytest.mark.parametrize("case", ("success", "multi-chunk-rejection", "read-error"))
+def test_passphrase_validation_zeroes_its_reusable_buffer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    path = tmp_path / "passphrase"
+    if case == "multi-chunk-rejection":
+        _write_private_bytes(path, b" " * (64 * 1024 + 1) + b"\n")
+    else:
+        _write_private(path, "buffer-zeroing-passphrase-value\nignored-second-line\n")
+    buffers: list[bytearray] = []
+    real_preadv = os.preadv
+
+    def recording_preadv(fd: int, selected: Sequence[bytearray], offset: int) -> int:
+        buffers.extend(selected)
+        if case == "read-error":
+            selected[0][0:6] = b"secret"
+            raise OSError("injected read failure")
+        return real_preadv(fd, selected, offset)
+
+    monkeypatch.setattr(ca_passphrase_verify.os, "preadv", recording_preadv)
+    with OpenedFile(path, policy=FilePolicy(mode=0o600, links=1)) as opened:
+        if case == "success":
+            ca_passphrase_verify._validate_passphrase_first_line(opened, os.fspath(path))
+        else:
+            with pytest.raises(ca_passphrase_verify.ApplicationError):
+                ca_passphrase_verify._validate_passphrase_first_line(
+                    opened, os.fspath(path)
+                )
+
+    assert buffers
+    if case == "multi-chunk-rejection":
+        assert len(buffers) > 1
+    assert all(not any(buffer) for buffer in buffers)
+
+
+def test_active_manifest_closes_descriptor_on_unexpected_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = tmp_path / "active-issuer"
+    _write_private(manifest, "root=g1\nintermediate=g1-i1\n")
+    opened_files: list[OpenedFile] = []
+
+    def fail_read(opened: OpenedFile, _max_bytes: int) -> bytes:
+        opened_files.append(opened)
+        raise MemoryError("injected manifest read failure")
+
+    monkeypatch.setattr(OpenedFile, "read", fail_read)
+    with pytest.raises(MemoryError, match="injected manifest read failure"):
+        ca_passphrase_verify._open_active_issuer(os.fspath(manifest))
+    assert len(opened_files) == 1
+    assert opened_files[0].closed
+
+
+def test_oversized_active_manifest_is_rejected_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = tmp_path / "active-issuer"
+    _write_private_bytes(manifest, b"x" * 4097)
+
+    def fail_read(_opened: OpenedFile, _max_bytes: int) -> bytes:
+        raise AssertionError("oversized manifest must not be read")
+
+    monkeypatch.setattr(OpenedFile, "read", fail_read)
+    with pytest.raises(
+        ca_passphrase_verify.ApplicationError,
+        match="Active issuer manifest is too large",
+    ):
+        ca_passphrase_verify._open_active_issuer(os.fspath(manifest))
 
 
 def test_rejects_unresolved_journal_before_opening_passphrase(
@@ -428,6 +704,48 @@ def test_honors_standard_ca_lock_boundary(
     assert f"Another {'PKI ' if lock_name == 'lifecycle' else ''}{lock_name}" in result.stderr
 
 
+def test_success_output_is_written_while_operational_locks_are_held(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = rollover_case_factory("output-lock-boundary")
+    for name, value in isolated_environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("PLATFORM_TOOLS_LIB_DIR", os.fspath(ROOT / "lib"))
+    writes: list[str] = []
+    lifecycle_lock = workspace.pki / "locks/lifecycle"
+
+    class LockCheckingOutput:
+        def write(self, value: str) -> int:
+            descriptor = os.open(lifecycle_lock, os.O_RDWR | os.O_CLOEXEC)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(descriptor)
+            writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            pass
+
+    monkeypatch.setattr(ca_passphrase_verify.sys, "stdout", LockCheckingOutput())
+    parsed = parse_route(
+        ("ca-passphrase-verify",),
+        (
+            "--namespace",
+            os.fspath(workspace.namespace),
+            "--root-pass-file",
+            os.fspath(workspace.passphrase_file),
+        ),
+        interactive=False,
+    )
+
+    assert ca_passphrase_verify.verify_ca_passphrases(parsed) == 0
+    assert writes == ["root=valid\n"]
+
+
 def _write_openssl_wrapper(path: Path) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text(
@@ -443,7 +761,41 @@ if [[ -n ${RACE_PASS_FILE:-} && $1 == pkey && ! -e $RACE_MARKER ]]; then
   mv "$RACE_PASS_FILE.replacement" "$RACE_PASS_FILE"
   : >"$RACE_MARKER"
 fi
+if [[ -n ${RACE_ROOT_KEY:-} && $1 == pkey && $3 -ef $WATCH_INTERMEDIATE_KEY && ! -e $RACE_MARKER ]]; then
+  printf '%s\\n' 'replacement-root-key-for-late-race' >"$RACE_ROOT_KEY.replacement"
+  chmod 600 "$RACE_ROOT_KEY.replacement"
+  mv "$RACE_ROOT_KEY.replacement" "$RACE_ROOT_KEY"
+  : >"$RACE_MARKER"
+fi
 exec "$REAL_OPENSSL" "$@"
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _write_offset_observing_openssl(path: Path) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(
+        """#!/usr/bin/env bash
+set -u
+case $1 in
+  pkey)
+    descriptor=''
+    for argument in "$@"; do
+      [[ $argument != fd:* ]] || descriptor=${argument#fd:}
+    done
+    [[ -n $descriptor ]] || exit 97
+    line=''
+    IFS= read -r line <&"$descriptor" || [[ -n $line ]] || exit 98
+    printf '%s\\n' "$line" >>"$PASS_OFFSET_LOG"
+    for argument in "$@"; do
+      [[ $argument != -pubout ]] || { printf '%s\\n' "$PUBLIC_KEY"; exit 0; }
+    done
+    ;;
+  x509) printf '%s\\n' "$PUBLIC_KEY" ;;
+  *) exit 99 ;;
+esac
 """,
         encoding="utf-8",
     )
@@ -549,6 +901,64 @@ def test_openssl_argv_environment_and_output_do_not_disclose_passphrase(
     assert os.fspath(passphrase) not in logged_argv
 
 
+def test_each_openssl_call_receives_an_independent_passphrase_offset(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    executable_directory: Path,
+) -> None:
+    workspace = rollover_case_factory("independent-passphrase-offsets")
+    fake_openssl = executable_directory / "openssl"
+    offset_log = workspace.root / "passphrase-offsets"
+    _write_offset_observing_openssl(fake_openssl)
+    environment = dict(isolated_environment)
+    environment.update(
+        PATH=f"{fake_openssl.parent}:{environment['PATH']}",
+        PASS_OFFSET_LOG=os.fspath(offset_log),
+        PUBLIC_KEY="test-public-key",
+    )
+
+    result = _run(
+        process_runner,
+        workspace,
+        ["--root-pass-file", workspace.passphrase_file],
+        environment,
+    )
+
+    expected = workspace.passphrase_file.read_text(encoding="utf-8").splitlines()[0]
+    assert result == ProcessResult(result.args, 0, "root=valid\n", "")
+    assert offset_log.read_text(encoding="utf-8") == f"{expected}\n{expected}\n"
+
+
+def test_rejected_fresh_descriptor_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "passphrase"
+    _write_private(path, "fresh-descriptor-close-value\n")
+    descriptors: list[int] = []
+    real_open = os.open
+
+    def recording_open(selected: str, flags: int) -> int:
+        descriptor = real_open(selected, flags)
+        descriptors.append(descriptor)
+        return descriptor
+
+    with OpenedFile(path, policy=FilePolicy(mode=0o600, links=1)) as opened:
+        monkeypatch.setattr(ca_passphrase_verify.os, "open", recording_open)
+        monkeypatch.setattr(ca_passphrase_verify.os, "get_inheritable", lambda _fd: True)
+        with pytest.raises(
+            ca_passphrase_verify.ApplicationError,
+            match="Cannot duplicate passphrase file descriptor for OpenSSL",
+        ):
+            ca_passphrase_verify._fresh_descriptor(
+                opened, "Cannot duplicate passphrase file descriptor for OpenSSL"
+            )
+
+    assert len(descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(descriptors[0])
+
+
 def test_passphrase_replacement_race_uses_descriptor_and_fails_closed(
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
@@ -584,6 +994,55 @@ def test_passphrase_replacement_race_uses_descriptor_and_fails_closed(
     assert result.stderr == "[ERROR] CA verification input changed during verification\n"
     assert re.search(
         r"^fd:[0-9]+$", argv_log.read_text(encoding="utf-8"), re.MULTILINE
+    )
+
+
+def test_root_input_late_race_during_intermediate_check_fails_before_output(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    executable_directory: Path,
+) -> None:
+    workspace = rollover_case_factory("root-late-race")
+    fake_openssl = executable_directory / "openssl"
+    argv_log = workspace.root / "late-race.argv"
+    env_log = workspace.root / "late-race.env"
+    marker = workspace.root / "late-race.marker"
+    root_key = workspace.pki / "authorities/roots/g1/private/root-ca.key"
+    intermediate_key = (
+        workspace.pki
+        / "authorities/intermediates/g1-i1/private/intermediate-ca.key"
+    )
+    _write_openssl_wrapper(fake_openssl)
+    environment = dict(isolated_environment)
+    environment.update(
+        PATH=f"{fake_openssl.parent}:{environment['PATH']}",
+        REAL_OPENSSL=shutil.which("openssl", path=isolated_environment["PATH"]) or "",
+        OPENSSL_ARGV_LOG=os.fspath(argv_log),
+        OPENSSL_ENV_LOG=os.fspath(env_log),
+        RACE_ROOT_KEY=os.fspath(root_key),
+        WATCH_INTERMEDIATE_KEY=os.fspath(intermediate_key),
+        RACE_MARKER=os.fspath(marker),
+    )
+
+    result = _run(
+        process_runner,
+        workspace,
+        [
+            "--root-pass-file",
+            workspace.passphrase_file,
+            "--intermediate-pass-file",
+            workspace.passphrase_file,
+        ],
+        environment,
+    )
+
+    assert marker.is_file()
+    assert result == ProcessResult(
+        result.args,
+        1,
+        "",
+        "[ERROR] CA verification input changed during verification\n",
     )
 
 
@@ -630,10 +1089,10 @@ def test_children_inherit_only_their_required_sensitive_descriptors(
     assert "unexpected-sensitive-descriptor-inheritance" not in observations
     assert "openssl:pkey pass=1 key=1 cert=0 expected=1,1,0" in observations
     assert "openssl:x509 pass=0 key=0 cert=1 expected=0,0,1" in observations
-    assert "cmp:-s pass=0 key=0 cert=0 expected=0,0,0" in observations
+    assert "cmp:" not in observations
 
 
-def test_verification_cleanup_preserves_foreign_replacement(
+def test_frozen_oracle_cleanup_preserves_foreign_replacement(
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
@@ -696,8 +1155,9 @@ exec "$REAL_STAT" "$@"
         RACE_MARKER=os.fspath(marker),
     )
 
-    result = _run(
+    result = _run_interface(
         process_runner,
+        (ORACLE,),
         workspace,
         ["--root-pass-file", workspace.passphrase_file],
         environment,
@@ -720,3 +1180,29 @@ exec "$REAL_STAT" "$@"
     assert marker.is_file()
     assert displaced.is_dir()
     assert after == before
+
+
+@pytest.mark.parametrize("command", PYTHON_INTERFACES)
+def test_python_verification_creates_no_temporary_public_key_state(
+    rollover_case_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    process_runner: Callable[..., ProcessResult],
+    tmp_path: Path,
+    command: tuple[Path | str, ...],
+) -> None:
+    workspace = rollover_case_factory(f"no-temporary-state-{Path(command[0]).name}")
+    temporary = tmp_path / "verification-tmp"
+    temporary.mkdir(mode=0o700)
+    environment = dict(isolated_environment)
+    environment["TMPDIR"] = os.fspath(temporary)
+
+    result = _run_interface(
+        process_runner,
+        command,
+        workspace,
+        ["--root-pass-file", workspace.passphrase_file],
+        environment,
+    )
+
+    assert result == ProcessResult(result.args, 0, "root=valid\n", "")
+    assert tuple(temporary.iterdir()) == ()
