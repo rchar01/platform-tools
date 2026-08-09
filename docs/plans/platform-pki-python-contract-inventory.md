@@ -452,8 +452,9 @@ of the ordinary non-rollover Make pool.
 - Record each remaining command's exact final-Bash commit immediately before
   cutover and add its command-specific differential cases. Completed Phase 5
   cutovers retain frozen executable oracles: custody report uses
-  `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`, and CA passphrase verification
-  uses `95c0b277af77375d00f23585282dcf3aed83b119`.
+  `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`, CA passphrase verification uses
+  `95c0b277af77375d00f23585282dcf3aed83b119`, and backup uses
+  `3d5e3b4ecd4c137f97748b4066c7e4c508e99655`.
 - Freeze exact ordered fields, schema values, and final-newline behavior for the
   remaining literal and dynamically assembled persisted-record writers.
 - Extend output/status, runtime-boundary, and installed-asset contracts from the

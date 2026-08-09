@@ -28,6 +28,7 @@ from .filesystem import (
 )
 from .operational import (
     acquire_operational_locks,
+    detect_layout,
     prepare_control_state,
     require_no_unresolved_state,
     require_pilot_common_library,
@@ -555,68 +556,6 @@ def _real_directory(path: str) -> bool:
     return stat.S_ISDIR(result.st_mode) and not stat.S_ISLNK(result.st_mode)
 
 
-def _active_issuer_complete(pki_dir: str, active: str) -> bool:
-    data = b""
-    try:
-        result = os.lstat(active)
-        if not stat.S_ISREG(result.st_mode) or stat.S_ISLNK(result.st_mode):
-            return False
-        with OpenedFile(active, expected_identity=None) as opened:
-            data = opened.read(opened.identity.size)
-    except (OSError, FilesystemError):
-        return False
-    lines = data.split(b"\n")
-    first = lines[0] if len(lines) > 1 else b""
-    second = lines[1] if len(lines) > 2 else b""
-    extra = lines[2] if len(lines) > 3 else b""
-    if extra or not first.startswith(b"root=") or not second.startswith(b"intermediate="):
-        return False
-    try:
-        root = first.removeprefix(b"root=").decode("ascii")
-        intermediate = second.removeprefix(b"intermediate=").decode("ascii")
-    except UnicodeDecodeError:
-        return False
-    return (
-        _ROOT_GENERATION.fullmatch(root) is not None
-        and _INTERMEDIATE_GENERATION.fullmatch(intermediate) is not None
-        and intermediate.startswith(f"{root}-i")
-        and _real_directory(f"{pki_dir}/authorities/roots/{root}")
-        and _real_directory(f"{pki_dir}/authorities/intermediates/{intermediate}")
-    )
-
-
-def _detect_layout(pki_dir: str) -> str:
-    legacy_root = f"{pki_dir}/root-ca"
-    legacy_intermediate = f"{pki_dir}/intermediate-ca"
-    legacy_any = _lexists(legacy_root) or _lexists(legacy_intermediate)
-    legacy_complete = _real_directory(legacy_root) and _real_directory(legacy_intermediate)
-    active = f"{pki_dir}/state/active-issuer"
-    bootstrap = f"{pki_dir}/state/bootstrap-root"
-    authorities = f"{pki_dir}/authorities"
-    roots = f"{authorities}/roots"
-    intermediates = f"{authorities}/intermediates"
-
-    generation_any = False
-    for path in (authorities, roots, intermediates):
-        if _lexists(path) and not _real_directory(path):
-            generation_any = True
-            break
-    if not generation_any:
-        generation_any = _lexists(active) or _lexists(bootstrap)
-    if not generation_any:
-        generation_any = bool(_backup_entries(roots) if _real_directory(roots) else ())
-    if not generation_any:
-        generation_any = bool(_backup_entries(intermediates) if _real_directory(intermediates) else ())
-    generation_complete = _active_issuer_complete(pki_dir, active)
-    if legacy_complete and not generation_any:
-        return "legacy"
-    if generation_complete and not legacy_any:
-        return "generation"
-    if not legacy_any and not generation_any:
-        return "empty"
-    return "partial"
-
-
 def _require_private_directory(path: str, label: str) -> None:
     try:
         result = os.lstat(path)
@@ -739,7 +678,7 @@ def custody_report(parsed: ParseResult) -> int:
             raise ApplicationError("PKI directory does not satisfy its private path policy") from None
         with root:
             report = Report(paths.pki_dir, root)
-            layout = _detect_layout(paths.pki_dir)
+            layout = detect_layout(paths.pki_dir)
             _scan_managed_metadata(report)
             if layout == "generation":
                 roots = f"{paths.pki_dir}/authorities/roots"

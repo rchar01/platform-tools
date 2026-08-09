@@ -1008,7 +1008,7 @@ PERSISTED_RECORD_CONTRACTS = (
         "bashly/platform-pki-ca-rollover/src/migrate_command.sh",
         GENERATION_RESERVATION_MIGRATION_FIELDS,
     ),
-    RecordContract("backup receipt", 2, "literal backup receipt", "bashly/platform-pki-backup/src/root_command.sh", BACKUP_RECEIPT_FIELDS),
+    RecordContract("backup receipt", 2, "literal backup receipt", "src/platform_pki/backup.py", BACKUP_RECEIPT_FIELDS),
     RecordContract("root bootstrap journal", 3, "literal root bootstrap journal", "bashly/platform-pki-root-create/src/root_command.sh", ROOT_BOOTSTRAP_JOURNAL_FIELDS),
     RecordContract("root bootstrap recovery journal", 3, "C-locale recovery journal", "bashly/platform-pki-ca-rollover/src/recover_command.sh", ROOT_BOOTSTRAP_RECOVERY_FIELDS),
     RecordContract(

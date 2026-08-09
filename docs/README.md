@@ -70,7 +70,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki-list-expiry`](../bin/platform-pki-list-expiry): Certificate expiry listing helper.
 - [`../bin/platform-pki-print-cert`](../bin/platform-pki-print-cert): Certificate detail printing helper.
 - [`../bin/platform-pki-export-ansible`](../bin/platform-pki-export-ansible): Ansible export helper for generated PKI files.
-- [`../bin/platform-pki-backup`](../bin/platform-pki-backup): PKI state backup helper.
+- [`../bin/platform-pki-backup`](../bin/platform-pki-backup): Python-backed protected PKI archive and receipt publisher.
 - [`../bin/platform-pki-custody-report`](../bin/platform-pki-custody-report): Read-only PKI encryption, custody, and backup-policy report helper.
 - [`../bin/platform-pki-ca-passphrase-verify`](../bin/platform-pki-ca-passphrase-verify): Read-only active CA passphrase and certificate-match verification helper.
 - [`../bin/platform-pki-ca-rollover`](../bin/platform-pki-ca-rollover): Generation state inspection, legacy migration, and rollover candidate preparation helper.

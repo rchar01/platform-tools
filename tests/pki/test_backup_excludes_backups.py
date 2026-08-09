@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ..harness import ProcessResult
+from src.platform_pki import backup as backup_module
 from .support import BIN, assert_result, mode, write_private
 
 
@@ -103,9 +104,73 @@ def test_backup_resolves_symlink_backup_directory_for_exclusion(tmp_path, proces
         assert all(entry != prefix and not entry.startswith(prefix + "/") for entry in entries)
 
 
+def test_backup_directory_symlink_swap_cannot_redirect_mode_change(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    alias = tmp_path / "alias"
+    first.mkdir(mode=0o750)
+    second.mkdir(mode=0o750)
+    alias.symlink_to(first, target_is_directory=True)
+    real_realpath = os.path.realpath
+
+    def swapping_realpath(path, *, strict=False):
+        resolved = real_realpath(path, strict=strict)
+        if os.fspath(path) == os.fspath(alias):
+            alias.unlink()
+            alias.symlink_to(second, target_is_directory=True)
+        return resolved
+
+    monkeypatch.setattr(backup_module.os.path, "realpath", swapping_realpath)
+
+    selected = backup_module._prepare_backup_directory(os.fspath(alias))
+
+    assert selected == os.fspath(first)
+    assert mode(first) == 0o700
+    assert mode(second) == 0o750
+
+
 def test_backup_rejects_pki_as_backup_directory(tmp_path, process_runner, isolated_environment) -> None:
     pki = tmp_path / "pki"
     create_pki_tree(pki)
     result = backup(process_runner, isolated_environment, pki, pki)
     assert result.status == 1
     assert "Backup directory cannot be the PKI directory itself" in result.stderr
+
+
+def test_backup_treats_option_shaped_pki_basename_as_literal(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    pki = tmp_path / "--checkpoint=1"
+    destination = tmp_path / "option-shaped-backup"
+    create_pki_tree(pki)
+
+    result = backup(process_runner, isolated_environment, pki, destination)
+
+    assert_result(result, 0)
+    entries = archive_entries(
+        process_runner, isolated_environment, latest(destination)
+    )
+    assert "--checkpoint=1/inventory/services.yml" in entries
+
+
+@pytest.mark.parametrize(
+    "relative_destination",
+    ("export/custom-output", "root-ca/private/custom-output"),
+    ids=("public-subtree", "private-subtree"),
+)
+def test_backup_revalidation_ignores_only_its_current_in_tree_stage(
+    tmp_path, process_runner, isolated_environment, relative_destination
+) -> None:
+    pki = tmp_path / "pki"
+    create_pki_tree(pki)
+    destination = pki / relative_destination
+
+    result = backup(process_runner, isolated_environment, pki, destination)
+
+    assert_result(result, 0)
+    archive = latest(destination)
+    entries = archive_entries(process_runner, isolated_environment, archive)
+    prefix = f"pki/{relative_destination}"
+    assert all(entry != prefix and not entry.startswith(f"{prefix}/") for entry in entries)

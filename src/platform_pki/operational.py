@@ -6,6 +6,7 @@ import errno
 import os
 import re
 import shutil
+import stat
 import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -220,6 +221,82 @@ def _directory_entries(path: str) -> tuple[str, ...]:
         return ()
     except OSError:
         raise ApplicationError("PKI authority layout could not be inspected") from None
+
+
+def _real_directory(path: str) -> bool:
+    try:
+        result = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(result.st_mode) and not stat.S_ISLNK(result.st_mode)
+
+
+def _active_issuer_complete(pki_dir: str, active: str) -> bool:
+    data = b""
+    try:
+        result = os.lstat(active)
+        if not stat.S_ISREG(result.st_mode) or stat.S_ISLNK(result.st_mode):
+            return False
+        with OpenedFile(active) as opened:
+            data = opened.read(opened.identity.size)
+    except (OSError, FilesystemError):
+        return False
+    lines = data.split(b"\n")
+    first = lines[0] if len(lines) > 1 else b""
+    second = lines[1] if len(lines) > 2 else b""
+    extra = lines[2] if len(lines) > 3 else b""
+    if extra or not first.startswith(b"root=") or not second.startswith(b"intermediate="):
+        return False
+    try:
+        root = first.removeprefix(b"root=").decode("ascii")
+        intermediate = second.removeprefix(b"intermediate=").decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    return (
+        _ROOT_GENERATION.fullmatch(root) is not None
+        and _INTERMEDIATE_GENERATION.fullmatch(intermediate) is not None
+        and intermediate.startswith(f"{root}-i")
+        and _real_directory(f"{pki_dir}/authorities/roots/{root}")
+        and _real_directory(f"{pki_dir}/authorities/intermediates/{intermediate}")
+    )
+
+
+def detect_layout(pki_dir: str) -> str:
+    """Classify the Bash-compatible authority layout without mutating state."""
+
+    legacy_root = f"{pki_dir}/root-ca"
+    legacy_intermediate = f"{pki_dir}/intermediate-ca"
+    legacy_any = os.path.lexists(legacy_root) or os.path.lexists(legacy_intermediate)
+    legacy_complete = _real_directory(legacy_root) and _real_directory(
+        legacy_intermediate
+    )
+    active = f"{pki_dir}/state/active-issuer"
+    bootstrap = f"{pki_dir}/state/bootstrap-root"
+    authorities = f"{pki_dir}/authorities"
+    roots = f"{authorities}/roots"
+    intermediates = f"{authorities}/intermediates"
+
+    generation_any = any(
+        os.path.lexists(path) and not _real_directory(path)
+        for path in (authorities, roots, intermediates)
+    )
+    generation_any = generation_any or os.path.lexists(active) or os.path.lexists(
+        bootstrap
+    )
+    generation_any = generation_any or bool(
+        _directory_entries(roots) if _real_directory(roots) else ()
+    )
+    generation_any = generation_any or bool(
+        _directory_entries(intermediates) if _real_directory(intermediates) else ()
+    )
+    generation_complete = _active_issuer_complete(pki_dir, active)
+    if legacy_complete and not generation_any:
+        return "legacy"
+    if generation_complete and not legacy_any:
+        return "generation"
+    if not legacy_any and not generation_any:
+        return "empty"
+    return "partial"
 
 
 def require_generation_layout(pki_dir: str) -> None:

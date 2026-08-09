@@ -52,8 +52,14 @@ This file gives a short, release-oriented view of what changed between versions.
   all requested passphrase, active-key, certificate, and manifest descriptors
   through final locked rechecks, passes each secret to OpenSSL through a fresh
   minimal inherited descriptor, suppresses OpenSSL diagnostics, and compares
-  public keys in bounded memory without temporary verification state. Other
-  operational `platform-pki-*` commands remain on Bash.
+  public keys in bounded memory without temporary verification state.
+  `platform-pki-backup` and `platform-pki backup` now share one Python handler
+  while preserving GNU `tar` exclusions, ordered literal `age` recipients,
+  inherited passphrase prompting, explicit plain-backup opt-in, full lock
+  coverage, and canonical schema-2 receipts. Archive and receipt publication is
+  durable and no-clobber; a published archive is retained and reported if its
+  receipt cannot be published. Other operational `platform-pki-*` commands
+  remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

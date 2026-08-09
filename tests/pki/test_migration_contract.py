@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from src.platform_pki.backup import BACKUP_RECEIPT_SPEC
+
 from .migration_contract import (
     ACTIVE_ISSUER_FIELDS,
     BACKUP_RECEIPT_FIELDS,
@@ -512,6 +514,11 @@ def test_all_record_contracts_declare_unique_fields_and_valid_schema() -> None:
                 assert contract.fields[0] == "schema"
 
 
+def test_backup_receipt_spec_matches_authoritative_contract() -> None:
+    assert BACKUP_RECEIPT_SPEC.fields == BACKUP_RECEIPT_FIELDS
+    assert BACKUP_RECEIPT_SPEC.schema == "2"
+
+
 @pytest.mark.parametrize(
     ("fields", "schema", "count"),
     (
@@ -583,13 +590,6 @@ def test_literal_record_orders_match_bash_writers() -> None:
             '\n";',
             GENERATION_RESERVATION_MIGRATION_FIELDS,
             None,
-        ),
-        (
-            "bashly/platform-pki-backup/src/root_command.sh",
-            'pki_atomic_write "$receipt" "',
-            '\n"',
-            BACKUP_RECEIPT_FIELDS,
-            2,
         ),
         (
             "bashly/platform-pki-root-create/src/root_command.sh",

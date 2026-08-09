@@ -54,7 +54,10 @@ DEPENDENCIES = (
     "ln",
     "pwd",
     "flock",
+    "date",
+    "gzip",
     "openssl",
+    "tar",
     "cmp",
 )
 LEGACY_MIGRATION_ERROR = (
@@ -415,6 +418,46 @@ def test_installed_ca_passphrase_verify_uses_shared_library(
         "[ERROR] PKI directory does not exist; run platform-pki-init first: "
         f"{pki}\n"
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    (("platform-pki-backup",), ("platform-pki", "backup")),
+    ids=("compatibility", "unified"),
+)
+def test_installed_backup_uses_shared_library(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    pki = install.state / f"backup-pki-{command[0]}"
+    for directory in (pki / "inventory", pki / "root-ca", pki / "intermediate-ca"):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pki.chmod(0o700)
+    private = pki / "root-ca/root-ca.key"
+    private.write_text("installed backup private state\n", encoding="utf-8")
+    private.chmod(0o600)
+    destination = install.state / f"backup-output-{command[0]}"
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "--pki-dir",
+        pki,
+        "--backup-dir",
+        destination,
+        "--allow-plain-backup",
+    )
+
+    assert result.status == 0, result.stderr
+    assert "PKI backup contains secrets" in result.stderr
+    archives = list(destination.glob("platform-pki-*.tar.gz"))
+    receipts = list(destination.glob("platform-pki-*.tar.gz.receipt"))
+    assert len(archives) == len(receipts) == 1
+    assert archives[0].stat().st_mode & 0o777 == 0o600
+    assert receipts[0].stat().st_mode & 0o777 == 0o600
 
 
 def _prepare_export_state(

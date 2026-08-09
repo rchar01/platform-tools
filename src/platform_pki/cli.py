@@ -27,6 +27,10 @@ def _handler(route: tuple[str, ...]):
         from .export_ansible import export_ansible
 
         return export_ansible
+    if route == ("backup",):
+        from .backup import backup
+
+        return backup
     if route == ("custody-report",):
         from .custody_report import custody_report
 
@@ -311,6 +315,37 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "  0 no structural custody findings\n"
             "  1 parser, configuration, or unsafe-layout error\n"
             "  2 one or more custody or encryption findings\n\n",
+            end="",
+        )
+        return
+    if route == ("backup",) and not unified:
+        print(
+            f"{name} - Create a backup archive of the outside-Git PKI directory\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--backup-dir PATH', '35')}\n"
+            "    Backup output directory\n\n"
+            f"  {_color('--age-recipient VALUE (repeatable)', '35')}\n"
+            "    Encrypt to an age recipient\n\n"
+            f"  {_color('--allow-plain-backup', '35')}\n"
+            "    Create an unencrypted .tar.gz archive\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} --age-recipient age1example\n"
+            f"  {name} --allow-plain-backup\n\n"
+            "Encryption with age is the default. Without a recipient, age prompts in\n"
+            "passphrase mode. Plain archives require --allow-plain-backup and still\n"
+            "contain private keys and other secrets.\n\n",
             end="",
         )
         return

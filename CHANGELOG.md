@@ -80,6 +80,14 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only its required descriptors, each passphrase read starts from an independent
   descriptor offset, diagnostics remain suppressed, and bounded in-memory public
   key comparison creates no temporary verification state.
+- Changed `platform-pki-backup` to use one Python 3.14 handler for its
+  compatibility command and unified `platform-pki backup` route. It preserves
+  GNU `tar` exclusions, ordered literal `age` recipients, inherited passphrase
+  prompting, explicit plain-backup opt-in, full lifecycle-through-export
+  locking, mode-600 output, and canonical schema-2 receipt fields. Archive and
+  receipt publication is durable and no-clobber; post-archive receipt failures
+  retain and report the exact archive rather than deleting publication
+  evidence.
 - Separated the Bashly development image from a pinned Python 3.14 test image.
   `make container-check` now verifies generated artifacts and runs ShellCheck in
   the development image, then runs syntax checks, one complete pytest aggregate,

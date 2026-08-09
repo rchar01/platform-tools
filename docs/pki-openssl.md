@@ -1142,6 +1142,9 @@ layout. It refuses unresolved recovery state. Each successful archive also
 publishes a mode-600 `<archive>.receipt` that binds the archive identity and
 SHA-256 digest to its layout and public-state manifest digest. Keep that receipt
 with the protected archive; one-time legacy migration requires it.
+Archive and receipt names are published durably without replacing existing
+objects. If receipt publication fails after the archive is published, the
+command reports the exact archive path and retains it for operator inspection.
 
 Use `age` recipient encryption for non-interactive backups:
 

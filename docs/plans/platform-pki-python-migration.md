@@ -355,16 +355,16 @@ Tasks:
 
 - [x] Preserve byte-bounded identity-checked custody inspection and secret-free
   output, including receipt compatibility and metadata-only recursive scans.
-- [ ] Preserve minimal inherited-descriptor passphrase transport.
-- [ ] Preserve suppressed OpenSSL diagnostics and certificate/key matching.
-- [ ] Preserve archive exclusions, `age` behavior, plain-backup opt-in, receipts,
+- [x] Preserve minimal inherited-descriptor passphrase transport.
+- [x] Preserve suppressed OpenSSL diagnostics and certificate/key matching.
+- [x] Preserve archive exclusions, `age` behavior, plain-backup opt-in, receipts,
   and backup state manifests.
 
 Validation gate:
 
-- [ ] Passphrases never appear in argv, environment variables, output,
+- [x] Passphrases never appear in argv, environment variables, output,
   exceptions, process listings, or persisted state.
-- [ ] Backup archives and receipts remain compatible with existing consumers.
+- [x] Backup archives and receipts remain compatible with existing consumers.
 - [x] Custody report output, status, layout, receipt acceptance, and storage
   evidence match the frozen Bash oracle; Python-only tests cover strengthened
   no-follow read and traversal races.
@@ -613,6 +613,7 @@ implementation.
 | 2026-08-08 | `platform-pki-export-ansible` completed Phase 4 bounded-publication migration and independent cleanup review. | The frozen Bash oracle is recorded at `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b`; compatible output/final-state differentials cover success, custom marker authorization, reversed explicit selection order, warnings, path boundaries, host-local rejection, issuer diagnostics, and generation gating. Python-specific subprocess tests prove the exact export manifest, whole-tree atomicity, descriptor-pinned marker authorization, late pre-publication preservation, exact readiness-bound stage cleanup or reported private retention, competing-publisher no-clobber behavior, forward-only replacement, pre/post-commit crashes, mutation-boundary exact-name cleanup, retained displaced-tree evidence, and no-follow hostile-symlink cleanup. Final `make container-check` passed 2,703 tests in the pinned containers. |
 | 2026-08-09 | `platform-pki-custody-report` completed Phase 5 utility migration. | The final Bash commit is `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`; the frozen mode-755 oracle has SHA-256 `f17aa588e5d6d200f16c3ae416da15a18c839f29ae97963704d5f11b27f822e4`, and the retained common library has SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified routes share one Python handler with descriptor-relative scans and bounded reads/helpers. Final `make container-check` passed 2,768 tests in the pinned containers. |
 | 2026-08-09 | `platform-pki-ca-passphrase-verify` completed Phase 5 secret-descriptor migration. | The final Bash commit is `95c0b277af77375d00f23585282dcf3aed83b119`; its frozen mode-755 oracle has SHA-256 `cdf4cb3f018e8b6c723310933691d2c433992fc74321e3d1e60bff2a99e88be1`. Compatibility and unified routes share one Python handler with fresh minimal passphrase descriptors, retained input identities, final locked rechecks and output, locale-compatible secret validation, bounded in-memory public-key comparison, and no temporary verification state. The focused suite passed 78 tests, independent final review found no concrete defect, and final `make container-check` passed 2,818 tests in the pinned containers. |
+| 2026-08-09 | `platform-pki-backup` completed Phase 5 archive migration. | The final Bash commit is `3d5e3b4ecd4c137f97748b4066c7e4c508e99655`; its frozen mode-755 oracle has SHA-256 `beac1204e2014e41be39254389ebc18a9db4b5a7b699197bf25187d5a8b6deea`, and the retained common library has SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified routes share one Python handler with external GNU `tar`, inherited-terminal `age -p`, exact in-tree exclusions, canonical schema-2 receipts, full lock coverage, durable no-clobber publication, final source/archive/receipt rechecks, and explicit retained or uncertain publication evidence. The focused suite passed 31 tests, the complete 224-test rollover suite accepted Python receipts, independent final review found no concrete defect, and final `make container-check` passed 2,834 tests in the pinned containers. |
 
 ## Decision Log
 
