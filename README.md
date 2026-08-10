@@ -94,7 +94,7 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
+- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
@@ -566,8 +566,12 @@ PKI paths used in the schema-3 recovery journal must be ASCII. Root keys remain
 encrypted by default, and unencrypted root keys require the explicit
 `--allow-unencrypted-root-key` opt-in.
 
-`platform-pki-intermediate-create` likewise stages its key, CSR, certificate,
-chain, and root CA database update. It refuses an existing active issuer;
+`platform-pki-intermediate-create` and `platform-pki intermediate-create` use
+the same Python schema-3 transaction writer. It binds both passphrase files to
+OpenSSL through inherited descriptors and stages its key, CSR, certificate,
+chain, and exact root CA database update. Authoritative root files are copied
+through identity-checked descriptors and rechecked before publication. It
+refuses an existing active issuer;
 `--force` cannot replace unproven generation state. Failed signing, publication,
 or recovery restores the exact root database state and permanently abandons the
 allocated intermediate ID. Intermediate keys

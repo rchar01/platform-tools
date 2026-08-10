@@ -906,7 +906,7 @@ PERSISTED_RECORD_CONTRACTS = (
         "intermediate bootstrap journal",
         3,
         "literal intermediate bootstrap journal",
-        "bashly/platform-pki-intermediate-create/src/root_command.sh",
+        "src/platform_pki/intermediate_create.py",
         INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS,
     ),
     RecordContract(
@@ -967,7 +967,7 @@ RECOVERY_CONTRACTS = (
         "intermediate-bootstrap",
         3,
         "platform-pki ca-rollover recover",
-        "bashly/platform-pki-intermediate-create/src/root_command.sh",
+        "src/platform_pki/intermediate_create.py",
         ("rollback", "resume"),
         (
             ("route", _CA_RECOVERY, "${PKI_RECORD[operation]:-} == intermediate-bootstrap"),
@@ -1070,7 +1070,7 @@ FAULT_HOOK_CONTRACTS = (
         (), ("rollback",),
     ),
     FaultHookContract(
-        "intermediate bootstrap writer", ("intermediate-bootstrap",), (3,), "bashly/platform-pki-intermediate-create/src/root_command.sh", "intermediate_fault",
+        "intermediate bootstrap writer", ("intermediate-bootstrap",), (3,), "src/platform_pki/intermediate_create.py", "checkpoint",
         ("PLATFORM_PKI_INTERMEDIATE_CRASH_AT", "PLATFORM_PKI_INTERMEDIATE_SIGNAL_AT", "PLATFORM_PKI_INTERMEDIATE_FAIL_AT"),
         (CheckpointCategory("pre-commit", (
             "after-journal", "after-reservation", "after-intermediate", "root-newcert-pending", "root-newcert-done",

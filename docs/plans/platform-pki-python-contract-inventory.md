@@ -9,9 +9,9 @@ The three Phase 3 read-oriented commands, all Phase 4 bounded-publication
 commands (`platform-pki-init`, `platform-pki-inventory-install`, and
 `platform-pki-export-ansible`), and the Phase 5 utility commands are
 Python-backed. Phase 6 has Python-backed compatibility and unified
-`root-create` routes plus unified `platform-pki ca-rollover recover`; the
-`platform-pki-ca-rollover` compatibility executable, intermediate writer, and
-other rollover leaves remain Bash.
+`root-create` and `intermediate-create` routes plus unified
+`platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
+compatibility executable and other rollover leaves remain Bash.
 
 ## Runtime and Interfaces
 
@@ -282,7 +282,7 @@ or regenerated during migration.
 | Generation reservation | current shell format | exact record bytes | generation reservation helpers in `platform-pki-common.sh` |
 | Backup receipt | 2 | 14 fixed fields | `platform-pki-backup/src/root_command.sh` |
 | Root bootstrap journal | 3 | fixed | `src/platform_pki/root_create.py` and the frozen final-Bash oracle |
-| Intermediate bootstrap journal | 3 | fixed prefix, database-key groups, `committed` | `platform-pki-intermediate-create/src/root_command.sh` |
+| Intermediate bootstrap journal | 3 | fixed prefix, database-key groups, `committed` | `src/platform_pki/intermediate_create.py` |
 | CSR request | 1 | `PKI_CSR_REQUEST_FIELDS` | `platform-pki-csr-sign.sh` |
 | CSR approval | 1 | `PKI_CSR_APPROVAL_FIELDS` | `platform-pki-csr-sign.sh` |
 | CSR signing journal | 1 | `PKI_CSR_JOURNAL_FIELDS` | `platform-pki-csr-sign.sh` |

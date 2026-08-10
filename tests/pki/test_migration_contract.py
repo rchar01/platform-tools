@@ -12,6 +12,7 @@ from src.platform_pki.root_create import (
     _record_bytes,
     _reservation_bytes,
 )
+from src.platform_pki import intermediate_create as intermediate_writer
 
 from .migration_contract import (
     ACTIVE_ISSUER_FIELDS,
@@ -56,6 +57,7 @@ from .migration_contract import (
 pytestmark = pytest.mark.infrastructure
 ROOT = Path(__file__).parents[2]
 ROOT_CREATE_ORACLE = "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-root-create"
+INTERMEDIATE_CREATE_ORACLE = "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-intermediate-create"
 
 
 def _source(path: str) -> str:
@@ -101,7 +103,7 @@ def _generation_record_fields(path: str) -> tuple[tuple[str, ...], ...]:
     return _record_fields_after_atomic_write(
         _source(path),
         "generation",
-        generated_bashly=path == ROOT_CREATE_ORACLE,
+        generated_bashly=path in {ROOT_CREATE_ORACLE, INTERMEDIATE_CREATE_ORACLE},
     )
 
 
@@ -672,7 +674,7 @@ def test_every_generation_reservation_writer_matches_a_declared_variant() -> Non
         ROOT_CREATE_ORACLE: (
             transaction, transaction, consumed,
         ),
-        "bashly/platform-pki-intermediate-create/src/root_command.sh": (
+        INTERMEDIATE_CREATE_ORACLE: (
             transaction, transaction, consumed,
         ),
         "bashly/platform-pki-ca-rollover/src/prepare_command.sh": (transaction,) * 6,
@@ -683,10 +685,15 @@ def test_every_generation_reservation_writer_matches_a_declared_variant() -> Non
         *(
             path
             for path in (ROOT / "bashly").rglob("*.sh")
-            if path != ROOT / "bashly/platform-pki-root-create/src/root_command.sh"
+            if path
+            not in {
+                ROOT / "bashly/platform-pki-root-create/src/root_command.sh",
+                ROOT / "bashly/platform-pki-intermediate-create/src/root_command.sh",
+            }
         ),
         *(ROOT / "lib").glob("*.sh"),
         ROOT / ROOT_CREATE_ORACLE,
+        ROOT / INTERMEDIATE_CREATE_ORACLE,
     )
     for path in source_paths:
         relative = path.relative_to(ROOT).as_posix()
@@ -719,12 +726,13 @@ def test_all_direct_issuer_pair_writers_match_the_shared_contract() -> None:
 
 
 def test_intermediate_bootstrap_writer_matches_grouped_contract() -> None:
-    source = _source("bashly/platform-pki-intermediate-create/src/root_command.sh")
+    source = _source(INTERMEDIATE_CREATE_ORACLE)
     block = _source_record_block(
-        "bashly/platform-pki-intermediate-create/src/root_command.sh",
+        INTERMEDIATE_CREATE_ORACLE,
         'pki_write_journal "$JOURNAL" "',
-        '\n"',
+        '\n  "',
     )
+    block = "\n".join(line.removeprefix("  ") for line in block.split("\n"))
     assert _record_fields(block) == INTERMEDIATE_BOOTSTRAP_PREFIX_FIELDS + ("committed",)
     assert re.search(r"(?m)^schema=3$", block)
     assert INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS == (
@@ -732,6 +740,11 @@ def test_intermediate_bootstrap_writer_matches_grouped_contract() -> None:
         + INTERMEDIATE_BOOTSTRAP_DB_FIELDS
         + ("committed",)
     )
+    assert intermediate_writer.ROOT_DB_KEYS == ROOT_DB_KEYS
+    assert intermediate_writer.INTERMEDIATE_BOOTSTRAP_WRITER_FIELDS == (
+        INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS
+    )
+    assert len(intermediate_writer.INTERMEDIATE_BOOTSTRAP_WRITER_FIELDS) == 56
     for fragment in (
         'ROOT_DB_KEYS=(index index_attr serial crlnumber index_old index_attr_old serial_old crlnumber_old newcert)',
         'db_fields+="root_${key}_pre_identity=${ROOT_DB_PRE[$key]}',
@@ -974,8 +987,21 @@ def test_literal_and_finite_writer_fault_hooks_match_authoritative_sources() -> 
     }
     assert root_calls == set(ROOT_FAULT_CHECKPOINTS) == _fault_expressions(root_contract)
     assert all(variable in _source(root_contract.source) for variable in root_contract.fault_variables)
+    intermediate = contracts["intermediate bootstrap writer"]
+    expanded_intermediate = _fault_expressions(intermediate)
+    for family in intermediate.dynamic_families:
+        expanded_intermediate.discard(family.template)
+        expanded_intermediate.update(
+            family.template.format(**{family.variable: value})
+            for value in family.domain
+        )
+    assert intermediate_writer.INTERMEDIATE_FAULT_CHECKPOINTS == expanded_intermediate
+    assert all(
+        variable in _source(intermediate.source)
+        for variable in intermediate.fault_variables
+    )
     for name in (
-        "intermediate bootstrap writer", "CSR signing writer",
+        "CSR signing writer",
         "candidate finalization writer", "legacy migration writer",
     ):
         contract = contracts[name]
@@ -1015,13 +1041,11 @@ def test_rollover_recovery_fault_hooks_and_dynamic_domains_match_source() -> Non
 
 def test_checkpoint_source_domains_match_shell_declarations() -> None:
     csr_source = _source("lib/platform-pki-csr-sign.sh")
-    intermediate_source = _source("bashly/platform-pki-intermediate-create/src/root_command.sh")
     prepare_source = _source("bashly/platform-pki-ca-rollover/src/prepare_command.sh")
     csr_match = re.search(r"PKI_CSR_DB_KEYS=\(([^)]+)\)", csr_source)
-    intermediate_match = re.search(r"ROOT_DB_KEYS=\(([^)]+)\)", intermediate_source)
     prepare_match = re.search(r"ROOT_DB_KEYS=\(([^)]+)\)", prepare_source)
     assert csr_match is not None and tuple(csr_match.group(1).split()) == CSR_DB_KEYS
-    assert intermediate_match is not None and tuple(intermediate_match.group(1).split()) == ROOT_DB_KEYS
+    assert intermediate_writer.ROOT_DB_KEYS == ROOT_DB_KEYS
     assert prepare_match is not None and tuple(prepare_match.group(1).split()) == ROOT_DB_KEYS
     quarantine = re.search(r"basename =~ \^\(([^)]+)\)\$", _source("bashly/platform-pki-ca-rollover/src/recover_command.sh"))
     assert quarantine is not None

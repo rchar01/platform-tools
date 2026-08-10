@@ -4,8 +4,8 @@
 
 Phase 0 contract expansion remains in progress. Phases 1 through 5 are
 implemented. Phase 6 has Python-backed compatibility and unified `root-create`
-routes plus unified `platform-pki ca-rollover recover`; direct rollover
-compatibility and the intermediate authority writer remain Bash.
+and `intermediate-create` routes plus unified
+`platform-pki ca-rollover recover`; direct rollover compatibility remains Bash.
 
 ## Goal
 
@@ -404,8 +404,8 @@ gate is now met for the unified `platform-pki ca-rollover recover` route; the
 `platform-pki-ca-rollover` compatibility executable and sibling leaves remain
 Bash. The earlier foundation checkpoints added codecs, strict record models,
 frozen oracles, and tests without mutating production recovery behavior.
-`platform-pki-root-create` and `platform-pki root-create` now share one Python
-writer; `platform-pki-intermediate-create` is the next authority-writer tranche.
+The compatibility and unified root and intermediate creation routes now share
+their respective Python schema-3 transaction writers.
 
 Migration groups:
 
@@ -666,6 +666,7 @@ implementation.
 | 2026-08-09 | Non-public CA recovery review findings fixed. | Staged replacement now accepts only journal-authorized destination states and preserves ambiguous post-mutation errors; control writes translate filesystem failures; legacy transaction evidence requires exact owner and mode policy; and schema-5 root DB resume/rollback publication windows authenticate relocated inode state, persist the observed full identity, and remain crash-resumable. Focused Python recovery passed 11 tests, manifested cleanup passed 18, the foundation passed 814, and the bounded rollover suite passed 235. Public dispatch remains unavailable. |
 | 2026-08-10 | Unified CA recovery dispatch migrated to Python. | `platform-pki ca-rollover recover` now runs the complete Python schema-2, schema-3, and schema-5 recovery state machines while direct `platform-pki-ca-rollover` invocations and rollover sibling leaves remain on final Bash. Seven state-tree differentials cover bootstrap rollback/cleanup, legacy resume/rollback, root-preparation publication resume/rollback, and terminal marker-only cleanup. The root-DB differentials explicitly record the one strengthened contract: Python authenticates and resumes publication or restoration completed immediately before a pending journal rewrite, while final Bash fails closed. The opt-in authoritative rollover suite passed all 243 tests in the pinned Python 3.14.7 container. Final `make container-check` passed generated-artifact verification, ShellCheck, static checks, all 2,940 maintained tests, and the archive smoke. |
 | 2026-08-10 | Root authority creation migrated to Python. | `platform-pki-root-create` and `platform-pki root-create` share one schema-3 transaction writer with descriptor-bound passphrase input, fixed writer-order evidence, deferred handled signals across mutation-to-evidence assignments, complete private staging, no-clobber publication, identity-bound rollback, and ASCII canonical recovery paths. Frozen-Bash/Python differentials cover success and every handled-failure checkpoint; unified Python recovery covers every final-Bash and Python writer crash checkpoint. The complete opt-in recovery suite passed 252 tests. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, 2,949 maintained tests, and the 10-test archive smoke. |
+| 2026-08-10 | Intermediate authority creation migrated to Python. | `platform-pki-intermediate-create` and `platform-pki intermediate-create` share one schema-3 writer with separate passphrase descriptors, exact one-open root-database staging and rollback snapshots, staged bootstrap-root verification, ordered crash-evidenced publication, and cleanup-only resume. Frozen-Bash/Python differentials cover success, handled rollback, root-database crash, and sensitive-stage cleanup states; the focused intermediate suite passed 83 tests and unified Python recovery passed 252 tests. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, all 2,974 maintained tests, and the 10-test archive smoke. |
 
 ## Decision Log
 

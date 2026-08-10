@@ -222,7 +222,10 @@ platform-pki-intermediate-create \
 The first clean bootstrap allocates immutable intermediate generation `g1-i1`.
 Its key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_INTERMEDIATE_DAYS`, or 1825 when that environment variable is
-unset. Intermediate state and the root database update are staged privately.
+unset. The compatibility command and `platform-pki intermediate-create` use one
+Python schema-3 writer. Both passphrases reach only the applicable OpenSSL
+children through fresh inherited descriptors. Intermediate state and the root
+database update are staged privately from exact identity-checked root sources.
 After the allocated intermediate verifies against the exact bootstrap root, the command publishes
 `state/active-issuer` and removes `state/bootstrap-root`. Existing active state
 cannot be replaced with `--force`; use the rollover workflow for future

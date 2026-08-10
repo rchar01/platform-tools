@@ -37,6 +37,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/faults.py",
     "platform_pki/filesystem.py",
     "platform_pki/init.py",
+    "platform_pki/intermediate_create.py",
     "platform_pki/inventory.py",
     "platform_pki/inventory_install.py",
     "platform_pki/list_expiry.py",
@@ -278,6 +279,7 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         ("list-expiry",),
         ("print-cert",),
         ("root-create",),
+        ("intermediate-create",),
         ("service-verify",),
         ("export-ansible",),
     }:
@@ -392,6 +394,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
         "list-expiry": "List expiry dates for generated service certificates",
         "print-cert": "Print readable details for a generated service certificate",
         "root-create": "Create the root CA key and certificate",
+        "intermediate-create": "Create the intermediate CA key, certificate, and CA chain",
         "service-verify": "Verify a generated service certificate",
         "export-ansible": "Export generated PKI files into an Ansible-consumable layout",
         "backup": "Create a backup archive of the outside-Git PKI directory",

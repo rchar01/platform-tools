@@ -98,6 +98,15 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   evidence assignments, and both final-Bash and Python writer crash states are
   recoverable by unified Python recovery at every writer checkpoint. PKI paths
   persisted in recovery journals must be ASCII.
+- Changed `platform-pki-intermediate-create` to use one Python 3.14 transaction
+  writer for its compatibility command and unified
+  `platform-pki intermediate-create` route. It preserves schema-3 writer-order
+  journals, root-scoped generation reservations, exact root-database
+  publication and rollback, cleanup-only resume, lock order, artifacts, output,
+  statuses, and fault checkpoints. Root and intermediate passphrases cross only
+  applicable inherited-descriptor boundaries; authoritative root files and
+  rollback copies are bound to exact opened identities. Final-Bash and Python
+  crash states remain recoverable through unified Python recovery.
 - Changed the unified `platform-pki ca-rollover recover` route to use Python
   recovery state machines for final-Bash legacy migration, root and intermediate
   bootstrap, rollover preparation, and receipt-bound terminal cleanup. Exact

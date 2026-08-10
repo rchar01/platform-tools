@@ -43,6 +43,10 @@ def _handler(route: tuple[str, ...]):
         from .root_create import create_root
 
         return create_root
+    if route == ("intermediate-create",):
+        from .intermediate_create import create_intermediate
+
+        return create_intermediate
     if route == ("ca-rollover", "recover"):
         from .ca_rollover_recover import recover_ca_rollover
 
@@ -179,6 +183,62 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "Legacy singleton CA state must be migrated before this command can run.\n"
             "Passphrase files must be mode 600 or stricter and have a first line of at\n"
             "least 16 characters containing non-whitespace content.\n\n",
+            end="",
+        )
+        return
+    if route == ("intermediate-create",) and not unified:
+        print(
+            f"{name} - Create the intermediate CA key, certificate, and CA chain\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--name CN (required)', '35')}\n"
+            "    Intermediate CA common name\n\n"
+            f"  {_color('--org ORG (required)', '35')}\n"
+            "    Organization name\n\n"
+            f"  {_color('--country COUNTRY (required)', '35')}\n"
+            "    Country code\n\n"
+            f"  {_color('--days DAYS', '35')}\n"
+            "    Intermediate CA lifetime\n\n"
+            f"  {_color('--issuer-safety-days DAYS', '35')}\n"
+            "    Required validity margin before the root expires\n"
+            "    Default: 1\n\n"
+            f"  {_color('--root-pass-file PATH', '35')}\n"
+            "    Restricted file containing the encrypted root-key passphrase\n\n"
+            f"  {_color('--intermediate-pass-file PATH', '35')}\n"
+            "    Restricted file containing the encrypted intermediate-key passphrase\n"
+            "    Conflicts: --allow-unencrypted-intermediate-key\n\n"
+            f"  {_color('--allow-unencrypted-intermediate-key', '35')}\n"
+            "    Create an unencrypted intermediate private key\n"
+            "    Conflicts: --intermediate-pass-file\n\n"
+            f"  {_color('--force', '35')}\n"
+            "    Refuse unproven replacement and direct recovery to the journal workflow\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} --name \"Platform Example Intermediate CA\"\n"
+            "  --org \"Platform Example\" --country PL\n"
+            f"  {name} --namespace /tmp/platform-pki-test --name\n"
+            "  \"Test Intermediate CA\" --org Test --country PL\n"
+            "  --allow-unencrypted-intermediate-key\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "The lifetime defaults to PLATFORM_PKI_INTERMEDIATE_DAYS or 1825 days.\n"
+            "Intermediate generation IDs are allocated monotonically under the bootstrap\n"
+            "root. A failed or interrupted bootstrap permanently abandons its reserved ID.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n"
+            "Intermediate keys are encrypted unless\n"
+            "--allow-unencrypted-intermediate-key is used. Passphrase files must be mode\n"
+            "600 or stricter and have a first line of at least 16 characters containing\n"
+            "non-whitespace content.\n\n",
             end="",
         )
         return

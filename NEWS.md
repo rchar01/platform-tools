@@ -63,7 +63,14 @@ This file gives a short, release-oriented view of what changed between versions.
   passphrase-descriptor OpenSSL input, exact writer-order journals, signal-safe
   rollback evidence, no-clobber authority publication, and Python recovery for
   every final-Bash and Python writer crash checkpoint. Recovery-journal paths
-  must be ASCII. The unified `platform-pki ca-rollover recover` route uses Python
+  must be ASCII. `platform-pki-intermediate-create` and
+  `platform-pki intermediate-create` now likewise share a Python schema-3
+  writer. It passes both passphrases through minimal inherited descriptors,
+  binds the bootstrap root and database snapshot through exact source
+  identities, publishes the intermediate and root-database updates with
+  crash-resumable evidence, and supports rollback or terminal sensitive-stage
+  cleanup through unified Python recovery. The unified
+  `platform-pki ca-rollover recover` route uses Python
   recovery state machines for legacy migration, root and intermediate bootstrap,
   rollover preparation, and receipt-bound terminal cleanup. It preserves
   final-Bash journal, output, and recovery-action contracts

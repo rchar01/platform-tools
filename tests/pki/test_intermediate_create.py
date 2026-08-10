@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import stat
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+from src.platform_pki import intermediate_create as intermediate_writer
+from src.platform_pki.errors import ApplicationError
+from src.platform_pki.filesystem import FileIdentity
 
 from ..harness import ProcessResult
 from .create_test_support import (
@@ -28,9 +33,15 @@ from .create_test_support import (
     tools,
     workspace,
 )
+from .migration_harness import run_differential_case
 
 
 pytestmark = pytest.mark.pki
+INTERMEDIATE_CREATE_ORACLE = (
+    Path(__file__).parent
+    / "oracles/platform-pki-ca-rollover/platform-pki-intermediate-create"
+)
+INTERMEDIATE_CREATE_ORACLE_LIB = INTERMEDIATE_CREATE_ORACLE.parent / "lib"
 
 ROOT_DB = {
     "index": "index.txt",
@@ -47,6 +58,15 @@ OPTIONAL_ROOT_DB = ("index_old", "index_attr_old", "serial_old", "crlnumber_old"
 BOUNDARIES = (
     "after-journal", "after-reservation", "after-intermediate", "after-root-db",
     "after-reservation-consumed", "after-active", "after-bootstrap",
+)
+_INTERMEDIATE_TRANSACTION = re.compile(
+    r"intermediate-bootstrap-[0-9]{8}-[0-9]{6}-[0-9]+"
+)
+_INTERMEDIATE_STAGE = re.compile(
+    r"\.platform-pki-intermediate-create\.[A-Za-z0-9_-]+"
+)
+_IDENTITY_FIELD = re.compile(
+    r"(?:^|_)(?:identity|pre_identity|post_identity|backup_identity)$"
 )
 
 
@@ -89,6 +109,75 @@ def _complete_root_db(value) -> None:
     destination.chmod(source.stat().st_mode & 0o777)
 
 
+def _passphrase_observing_openssl(tmp_path: Path, value, env) -> tuple[Path, Path]:
+    log = tmp_path / "openssl-passphrase-boundary.log"
+    wrapper = executable(
+        tmp_path / "openssl",
+        f"""#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+
+REAL_OPENSSL = {command_path("openssl", env)!r}
+ROOT_PATH = {os.fspath(value.root_pass)!r}
+INTERMEDIATE_PATH = {os.fspath(value.intermediate_pass)!r}
+ROOT_SECRET = {value.root_pass.read_text()!r}
+INTERMEDIATE_SECRET = {value.intermediate_pass.read_text()!r}
+LOG = {os.fspath(log)!r}
+
+arguments = sys.argv[1:]
+argv_text = "\\0".join(arguments)
+environment_text = "\\0".join(f"{{key}}={{item}}" for key, item in os.environ.items())
+for forbidden in (ROOT_PATH, INTERMEDIATE_PATH, ROOT_SECRET.strip(), INTERMEDIATE_SECRET.strip()):
+    if forbidden in argv_text or forbidden in environment_text:
+        raise SystemExit(91)
+
+sensitive = {{}}
+for entry in pathlib.Path("/proc/self/fd").iterdir():
+    try:
+        descriptor = int(entry.name)
+        if os.path.samefile(entry, ROOT_PATH):
+            sensitive[descriptor] = "root"
+        elif os.path.samefile(entry, INTERMEDIATE_PATH):
+            sensitive[descriptor] = "intermediate"
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+
+command = arguments[0]
+expected = {{"genpkey": ("intermediate", "-pass"), "req": ("intermediate", "-passin"), "ca": ("root", "-passin")}}.get(command)
+fd_arguments = [argument for argument in arguments if argument.startswith("fd:")]
+if expected is None:
+    if sensitive or fd_arguments:
+        raise SystemExit(92)
+    observed = "none"
+else:
+    channel, option = expected
+    if len(sensitive) != 1 or list(sensitive.values()) != [channel]:
+        raise SystemExit(93)
+    if option not in arguments:
+        raise SystemExit(94)
+    token = arguments[arguments.index(option) + 1]
+    if len(fd_arguments) != 1 or token != fd_arguments[0]:
+        raise SystemExit(95)
+    try:
+        descriptor = int(token.removeprefix("fd:"))
+    except ValueError:
+        raise SystemExit(96)
+    if sensitive.get(descriptor) != channel:
+        raise SystemExit(97)
+    expected_content = ROOT_SECRET if channel == "root" else INTERMEDIATE_SECRET
+    if os.pread(descriptor, 4096, 0).decode("utf-8") != expected_content:
+        raise SystemExit(98)
+    observed = channel
+
+with open(LOG, "a", encoding="ascii") as stream:
+    stream.write(f"{{command}}:{{observed}}:{{len(sensitive)}}\\n")
+os.execv(REAL_OPENSSL, [REAL_OPENSSL, *arguments])
+""",
+    )
+    return wrapper, log
+
+
 def _db_snapshot(value) -> dict[str, tuple[object, ...] | None]:
     root = value.pki / "authorities/roots/g1"
     result: dict[str, tuple[object, ...] | None] = {}
@@ -123,6 +212,71 @@ def _recovery_command(value, toolset, transaction: str, action: str) -> list[str
     return [toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", action, "--yes"]
 
 
+def _normalize_intermediate_token(value: str) -> str:
+    return _INTERMEDIATE_STAGE.sub(
+        "<INTERMEDIATE-STAGE>",
+        _INTERMEDIATE_TRANSACTION.sub("<INTERMEDIATE-BOOTSTRAP>", value),
+    )
+
+
+def _intermediate_writer_content_normalizer(*roots: Path):
+    root_text = tuple(os.fspath(root) for root in roots)
+
+    def normalize(relative: str, content: bytes) -> bytes:
+        if re.search(
+            r"(?:^|/)(?:private/intermediate-ca\.key|csr/intermediate-ca\.csr|"
+            r"certs/(?:intermediate-ca\.crt|ca-chain\.crt)|newcerts/[0-9A-F]+\.pem)$",
+            relative,
+        ) or relative == "authorities/roots/g1/index.txt" or re.fullmatch(
+            r"authorities/intermediates/\.platform-pki-intermediate-create\."
+            r"[A-Za-z0-9_-]+/root/index\.txt",
+            relative,
+        ):
+            return b"<DYNAMIC-OPENSSL-CONTENT>\n"
+        try:
+            text = content.decode("ascii")
+        except UnicodeDecodeError:
+            return content
+        text = _normalize_intermediate_token(text)
+        for root in root_text:
+            text = text.replace(root, "<WORKSPACE>")
+        lines = text.splitlines(keepends=True)
+        if lines and all(
+            re.fullmatch(r"[a-z][a-z0-9_]*=.*\n?", line) is not None
+            for line in lines
+        ):
+            normalized = []
+            rolled_back = "phase=rolled-back\n" in text
+            for line in lines:
+                body = line.removesuffix("\n")
+                key, value = body.split("=", 1)
+                if rolled_back and key in {
+                    "stage_dir",
+                    "stage_identity",
+                    "root_stage",
+                    "root_stage_identity",
+                }:
+                    value = "<CLEANED-STAGE>"
+                elif _IDENTITY_FIELD.search(key) and value not in {
+                    "absent",
+                    "none",
+                    "pending",
+                }:
+                    value = "<IDENTITY>"
+                elif key == "fingerprint_sha256":
+                    value = "<FINGERPRINT>"
+                elif key == "recovery_step" and value in {
+                    "reservation-done",
+                    "complete",
+                }:
+                    value = "<TERMINAL-ROLLBACK>"
+                normalized.append(f"{key}={value}\n")
+            return "".join(normalized).encode("ascii")
+        return text.encode("ascii")
+
+    return normalize
+
+
 @pytest.mark.parametrize(
     ("arguments", "status", "stdout_fragment", "stderr_fragment"),
     (
@@ -147,6 +301,43 @@ def test_parser_contract(tmp_path: Path, process_runner: Callable[..., ProcessRe
     if arguments == ("--version",):
         assert result.stdout == f"platform-pki-intermediate-create {toolset.version}\n"
         assert result.stderr == ""
+
+
+@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
+def test_direct_compatibility_help_matches_frozen_bashly_help(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tty: bool,
+) -> None:
+    toolset = tools()
+    env = environment(tmp_path / "environment")
+    env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(INTERMEDIATE_CREATE_ORACLE_LIB)
+    pty_mode = None
+    if tty:
+        env.pop("NO_COLOR")
+        pty_mode = "canonical"
+    expected = run(
+        process_runner,
+        [INTERMEDIATE_CREATE_ORACLE, "--help"],
+        env,
+        pty_mode=pty_mode,
+    )
+    actual = run(
+        process_runner,
+        [toolset.intermediate, "--help"],
+        env,
+        pty_mode=pty_mode,
+    )
+    assert (actual.status, actual.stdout, actual.stderr) == (
+        expected.status,
+        expected.stdout,
+        expected.stderr,
+    )
+
+
+def test_writer_contract_has_exact_database_and_field_order() -> None:
+    assert intermediate_writer.ROOT_DB_KEYS == (*ROOT_DB, "newcert")
+    assert len(intermediate_writer.INTERMEDIATE_BOOTSTRAP_WRITER_FIELDS) == 56
 
 
 def test_conflicting_intermediate_key_options(tmp_path: Path, process_runner: Callable[..., ProcessResult]) -> None:
@@ -220,6 +411,222 @@ def test_encrypted_intermediate_real_openssl_and_database(tmp_path: Path, proces
     assert (authority / "crlnumber").read_text().strip() == "1000"
     assert all(mode(authority / name) == 0o600 for name in ("index.txt", "index.txt.attr", "serial", "crlnumber"))
     assert openssl(process_runner, ["ca", "-config", authority / "openssl.cnf", "-updatedb", "-passin", f"file:{value.intermediate_pass}"], env).status == 0
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "root-key-mode",
+        "root-certificate-mode",
+        "required-database-mode",
+        "optional-database-mode",
+        "database-hardlink",
+        "root-key-symlink",
+    ),
+)
+def test_root_sources_require_exact_authoritative_policies(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    case: str,
+) -> None:
+    toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment")
+    _bootstrap(process_runner, value, env, toolset)
+    root = value.pki / "authorities/roots/g1"
+    external: Path | None = None
+    if case == "root-key-mode":
+        (root / "private/root-ca.key").chmod(0o640)
+    elif case == "root-certificate-mode":
+        (root / "certs/root-ca.crt").chmod(0o600)
+    elif case == "required-database-mode":
+        (root / "index.txt").chmod(0o640)
+    elif case == "optional-database-mode":
+        path = root / "index.txt.old"; path.write_text("unsafe optional database\n"); path.chmod(0o640)
+    elif case == "database-hardlink":
+        external = tmp_path / "serial-hardlink"; os.link(root / "serial", external)
+    else:
+        key = root / "private/root-ca.key"; external = tmp_path / "root-key"; key.rename(external); key.symlink_to(external)
+    before = filesystem_snapshot(root)
+    external_before = None if external is None else filesystem_snapshot(external)
+
+    result = run(process_runner, _create_command(value, toolset), env)
+
+    assert result.status == 1
+    assert filesystem_snapshot(root) == before
+    if external is not None:
+        assert filesystem_snapshot(external) == external_before
+    assert not (value.pki / "authorities/intermediates/g1-i1").exists()
+    assert (value.pki / "state/bootstrap-root").is_file()
+
+
+def test_root_database_source_replacement_is_detected_after_both_descriptor_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "serial"; source.write_text("1000\n"); source.chmod(0o600)
+    staged = tmp_path / "staged"; backup = tmp_path / "backup"
+    original_copy = intermediate_writer._copy_opened_file
+    calls = 0
+
+    def replace_after_first_copy(
+        opened, destination: str, destination_mode: int
+    ) -> FileIdentity:
+        nonlocal calls
+        copied = original_copy(opened, destination, destination_mode)
+        calls += 1
+        if calls == 1:
+            replacement = tmp_path / "replacement"
+            replacement.write_text("2000\n"); replacement.chmod(0o600)
+            replacement.replace(source)
+        return copied
+
+    monkeypatch.setattr(intermediate_writer, "_copy_opened_file", replace_after_first_copy)
+
+    with pytest.raises(ApplicationError, match="changed while being copied"):
+        intermediate_writer._copy_root_database_source(
+            os.fspath(source), os.fspath(staged), os.fspath(backup), required=True
+        )
+
+    assert calls == 2
+    assert staged.read_bytes() == backup.read_bytes() == b"1000\n"
+    assert source.read_bytes() == b"2000\n"
+
+
+def test_root_certificate_replacement_after_staging_fails_before_mutation(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment")
+    _bootstrap(process_runner, value, env, toolset)
+    root = value.pki / "authorities/roots/g1"
+    root_certificate = root / "certs/root-ca.crt"
+    original_certificate = root_certificate.read_bytes()
+    original_inode = root_certificate.stat().st_ino
+    database_before = _db_snapshot(value)
+    marker = tmp_path / "root-certificate-replaced"
+    log = tmp_path / "openssl-race.log"
+    wrapper = executable(
+        tmp_path / "openssl",
+        f"""#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+
+REAL_OPENSSL = {command_path("openssl", env)!r}
+ROOT_CERTIFICATE = pathlib.Path({os.fspath(root_certificate)!r})
+MARKER = pathlib.Path({os.fspath(marker)!r})
+LOG = pathlib.Path({os.fspath(log)!r})
+arguments = sys.argv[1:]
+with LOG.open("a", encoding="utf-8") as stream:
+    stream.write(repr(arguments) + "\\n")
+if arguments[0] == "genpkey" and not MARKER.exists():
+    replacement = ROOT_CERTIFICATE.with_name("root-ca.crt.replacement")
+    replacement.write_bytes(ROOT_CERTIFICATE.read_bytes())
+    replacement.chmod(0o644)
+    os.replace(replacement, ROOT_CERTIFICATE)
+    MARKER.write_text("replaced\\n", encoding="ascii")
+os.execv(REAL_OPENSSL, [REAL_OPENSSL, *arguments])
+""",
+    )
+    race_environment = dict(env, PATH=f"{wrapper.parent}:{env['PATH']}")
+
+    result = run(process_runner, _create_command(value, toolset), race_environment)
+
+    assert result.status == 1
+    assert "Root certificate identity changed during intermediate creation" in result.stderr
+    assert marker.is_file()
+    assert root_certificate.read_bytes() == original_certificate
+    assert root_certificate.stat().st_ino != original_inode
+    assert _db_snapshot(value) == database_before
+    assert not (value.pki / "authorities/intermediates/g1-i1").exists()
+    assert not (value.pki / "state/active-issuer").exists()
+    assert (value.pki / "state/bootstrap-root").is_file()
+    assert record(value.pki / "state/generation-reservations/g1-i1")["status"] == (
+        "abandoned"
+    )
+    invocations = log.read_text().splitlines()
+    assert any("'verify'" in invocation for invocation in invocations)
+    assert sum("'x509'" in invocation for invocation in invocations) >= 4
+    assert all(os.fspath(root_certificate) not in invocation for invocation in invocations)
+    assert any("'/proc/self/fd/" in invocation for invocation in invocations)
+
+
+def test_root_key_replacement_after_staging_fails_before_mutation(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment")
+    _bootstrap(process_runner, value, env, toolset)
+    root = value.pki / "authorities/roots/g1"
+    root_key = root / "private/root-ca.key"
+    original_key = root_key.read_bytes()
+    original_inode = root_key.stat().st_ino
+    database_before = _db_snapshot(value)
+    marker = tmp_path / "root-key-replaced"
+    log = tmp_path / "openssl-key-race.log"
+    wrapper = executable(
+        tmp_path / "openssl",
+        f"""#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+
+REAL_OPENSSL = {command_path("openssl", env)!r}
+ROOT_KEY = pathlib.Path({os.fspath(root_key)!r})
+MARKER = pathlib.Path({os.fspath(marker)!r})
+LOG = pathlib.Path({os.fspath(log)!r})
+arguments = sys.argv[1:]
+with LOG.open("a", encoding="utf-8") as stream:
+    stream.write(repr(arguments) + "\\n")
+if arguments[0] == "genpkey" and not MARKER.exists():
+    replacement = ROOT_KEY.with_name("root-ca.key.replacement")
+    replacement.write_bytes(ROOT_KEY.read_bytes())
+    replacement.chmod(0o600)
+    os.replace(replacement, ROOT_KEY)
+    MARKER.write_text("replaced\\n", encoding="ascii")
+os.execv(REAL_OPENSSL, [REAL_OPENSSL, *arguments])
+""",
+    )
+    race_environment = dict(env, PATH=f"{wrapper.parent}:{env['PATH']}")
+
+    result = run(process_runner, _create_command(value, toolset), race_environment)
+
+    assert result.status == 1
+    assert "Root key identity changed during intermediate creation" in result.stderr
+    assert marker.is_file()
+    assert root_key.read_bytes() == original_key
+    assert root_key.stat().st_ino != original_inode
+    assert _db_snapshot(value) == database_before
+    assert not (value.pki / "authorities/intermediates/g1-i1").exists()
+    assert not (value.pki / "state/active-issuer").exists()
+    assert (value.pki / "state/bootstrap-root").is_file()
+    assert record(value.pki / "state/generation-reservations/g1-i1")["status"] == (
+        "abandoned"
+    )
+    invocations = log.read_text().splitlines()
+    assert any("'ca'" in invocation for invocation in invocations)
+    assert any("'verify'" in invocation for invocation in invocations)
+    assert all(os.fspath(root_key) not in invocation for invocation in invocations)
+
+
+def test_passphrases_cross_only_the_applicable_openssl_descriptor_boundary(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment")
+    _bootstrap(process_runner, value, env, toolset)
+    wrapper, log = _passphrase_observing_openssl(tmp_path, value, env)
+    observed_env = dict(env, PATH=f"{wrapper.parent}:{env['PATH']}")
+
+    result = run(process_runner, _create_command(value, toolset, unencrypted=False), observed_env)
+
+    require_success(result, "descriptor-observed intermediate creation")
+    observations = log.read_text().splitlines()
+    assert observations.count("genpkey:intermediate:1") == 1
+    assert observations.count("req:intermediate:1") == 1
+    assert observations.count("ca:root:1") == 1
+    assert all(
+        observation.endswith(":none:0")
+        for observation in observations
+        if not observation.startswith(("genpkey:", "req:", "ca:"))
+    )
+    assert any(observation.startswith("verify:none:0") for observation in observations)
+    assert sum(observation.startswith("x509:none:0") for observation in observations) >= 4
 
 
 def test_force_refuses_active_issuer(tmp_path: Path, process_runner: Callable[..., ProcessResult]) -> None:
@@ -432,3 +839,198 @@ def test_force_preserves_hostile_partial_generation(tmp_path: Path, process_runn
     assert filesystem_snapshot(authority) == authority_before
     if external is not None:
         assert filesystem_snapshot(external) == external_before
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    (None, "after-root-db"),
+    ids=("success", "root-database-failure"),
+)
+def test_frozen_bash_and_python_intermediate_writers_are_semantically_equivalent(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    boundary: str | None,
+) -> None:
+    toolset = tools()
+    seed = workspace(tmp_path / "seed")
+    seed_environment = environment(tmp_path / "seed-environment")
+    initialize(process_runner, seed, seed_environment, toolset)
+    require_success(
+        create_root(process_runner, seed, seed_environment, toolset),
+        "intermediate differential root",
+    )
+    case_root = tmp_path / "differential"
+    base_environment = {
+        **seed_environment,
+        "PLATFORM_TOOLS_LIB_DIR": os.fspath(INTERMEDIATE_CREATE_ORACLE_LIB),
+    }
+    if boundary is not None:
+        base_environment["PLATFORM_PKI_INTERMEDIATE_FAIL_AT"] = boundary
+
+    def argv(root: Path, command: Path) -> tuple[str | Path, ...]:
+        return (
+            command,
+            "--namespace",
+            root / "namespace",
+            "--name",
+            "Differential Intermediate",
+            "--org",
+            "Platform Test",
+            "--country",
+            "PL",
+            "--root-pass-file",
+            root / "root.pass",
+            "--allow-unencrypted-intermediate-key",
+        )
+
+    def normalize_output(root: Path, output: str) -> str:
+        normalized = _normalize_intermediate_token(
+            output.replace(os.fspath(root), "<WORKSPACE>")
+        )
+        return re.sub(
+            r"Certificate is to be certified until .* \([0-9]+ days\)",
+            "Certificate is to be certified until <DYNAMIC-DATE>",
+            normalized,
+        )
+
+    result = run_differential_case(
+        seed.root,
+        case_root,
+        Path("namespace/pki"),
+        lambda root: argv(root, INTERMEDIATE_CREATE_ORACLE),
+        lambda root: argv(root, toolset.intermediate),
+        base_environment,
+        output_normalizers=(normalize_output,),
+        content_normalizers=(
+            _intermediate_writer_content_normalizer(
+                seed.root,
+                case_root / "bash",
+                case_root / "python",
+            ),
+        ),
+        path_normalizers=(_normalize_intermediate_token,),
+        runner=process_runner,
+        run_options={"timeout": 120},
+    )
+
+    result.assert_equivalent()
+    assert result.bash.process.status == (0 if boundary is None else 1)
+
+
+@pytest.mark.parametrize(
+    ("boundary", "action"),
+    (
+        pytest.param("root-index-pending", "rollback", id="root-database-pending"),
+        pytest.param("cleanup-pending", "resume", id="cleanup-pending"),
+    ),
+)
+def test_sigkill_persisted_state_matches_frozen_writer_and_python_recovers(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    boundary: str,
+    action: str,
+) -> None:
+    toolset = tools()
+    seed = workspace(tmp_path / "seed")
+    seed_environment = environment(tmp_path / "seed-environment")
+    initialize(process_runner, seed, seed_environment, toolset)
+    require_success(
+        create_root(process_runner, seed, seed_environment, toolset),
+        "intermediate SIGKILL differential root",
+    )
+    case_root = tmp_path / "differential"
+    crash_environment = {
+        **seed_environment,
+        "PLATFORM_TOOLS_LIB_DIR": os.fspath(INTERMEDIATE_CREATE_ORACLE_LIB),
+        "PLATFORM_PKI_INTERMEDIATE_CRASH_AT": boundary,
+    }
+
+    def argv(root: Path, command: Path) -> tuple[str | Path, ...]:
+        return (
+            command,
+            "--namespace",
+            root / "namespace",
+            "--name",
+            "Differential Intermediate",
+            "--org",
+            "Platform Test",
+            "--country",
+            "PL",
+            "--root-pass-file",
+            root / "root.pass",
+            "--allow-unencrypted-intermediate-key",
+        )
+
+    def normalize_output(root: Path, output: str) -> str:
+        normalized = _normalize_intermediate_token(
+            output.replace(os.fspath(root), "<WORKSPACE>")
+        )
+        return re.sub(
+            r"Certificate is to be certified until .* \([0-9]+ days\)",
+            "Certificate is to be certified until <DYNAMIC-DATE>",
+            normalized,
+        )
+
+    result = run_differential_case(
+        seed.root,
+        case_root,
+        Path("namespace/pki"),
+        lambda root: argv(root, INTERMEDIATE_CREATE_ORACLE),
+        lambda root: argv(root, toolset.intermediate),
+        crash_environment,
+        output_normalizers=(normalize_output,),
+        content_normalizers=(
+            _intermediate_writer_content_normalizer(
+                seed.root,
+                case_root / "bash",
+                case_root / "python",
+            ),
+        ),
+        path_normalizers=(_normalize_intermediate_token,),
+        runner=process_runner,
+        run_options={"timeout": 120},
+    )
+
+    result.assert_equivalent()
+    assert result.bash.process.status == result.python.process.status == 137
+    python_root = case_root / "python"
+    python_pki = python_root / "namespace/pki"
+    journal_before = record(python_pki / "state/rollover/journal")
+    root_stage = Path(journal_before["root_stage"])
+    recovery_environment = dict(crash_environment)
+    recovery_environment.pop("PLATFORM_PKI_INTERMEDIATE_CRASH_AT")
+    unified = Path(__file__).parents[2] / "bin/platform-pki"
+
+    recovered = run(
+        process_runner,
+        [
+            unified,
+            "ca-rollover",
+            "recover",
+            "--namespace",
+            python_root / "namespace",
+            "--transaction",
+            journal_before["transaction"],
+            "--action",
+            action,
+            "--yes",
+        ],
+        recovery_environment,
+    )
+
+    assert recovered.status == 0, recovered.stderr
+    terminal = record(python_pki / "state/rollover/journal")
+    assert terminal["committed"] == "true"
+    assert not root_stage.exists()
+    if action == "rollback":
+        assert terminal["phase"] == "rolled-back"
+        assert (python_pki / "state/bootstrap-root").is_file()
+        assert not (python_pki / "state/active-issuer").exists()
+        assert record(
+            python_pki / "state/generation-reservations/g1-i1"
+        )["status"] == "abandoned"
+    else:
+        assert terminal["phase"] == "complete"
+        assert not (python_pki / "state/bootstrap-root").exists()
+        assert (python_pki / "state/active-issuer").is_file()
+        assert (python_pki / "authorities/intermediates/g1-i1").is_dir()

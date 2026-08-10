@@ -380,6 +380,85 @@ def test_installed_root_create_operates_outside_checkout(
 
 @pytest.mark.parametrize(
     "command",
+    (("platform-pki-intermediate-create",), ("platform-pki", "intermediate-create")),
+    ids=("compatibility", "unified"),
+)
+def test_installed_intermediate_create_operates_outside_checkout(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    case = "compatibility" if len(command) == 1 else "unified"
+    namespace = install.state / f"intermediate-create-namespace-{case}"
+    initialized = execute(
+        process_runner,
+        install,
+        install.runtime / "platform-pki-init",
+        "--namespace",
+        namespace,
+    )
+    assert initialized.status == 0, initialized.stderr
+    root = execute(
+        process_runner,
+        install,
+        install.runtime / "platform-pki-root-create",
+        "--namespace",
+        namespace,
+        "--name",
+        "Installed Root",
+        "--org",
+        "Platform Test",
+        "--country",
+        "PL",
+        "--allow-unencrypted-root-key",
+    )
+    assert root.status == 0, root.stderr
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "--namespace",
+        namespace,
+        "--name",
+        "Installed Intermediate",
+        "--org",
+        "Platform Test",
+        "--country",
+        "PL",
+        "--allow-unencrypted-intermediate-key",
+    )
+
+    pki = namespace / "pki"
+    authority = pki / "authorities/intermediates/g1-i1"
+    certificate = authority / "certs/intermediate-ca.crt"
+    assert result.status == 0, result.stderr
+    assert result.stdout == (
+        f"[OK] Created intermediate CA generation g1-i1: {certificate}\n"
+    )
+    assert result.stderr.startswith(
+        "[WARN] Creating an unencrypted intermediate CA private key because "
+        "--allow-unencrypted-intermediate-key was used\n"
+    )
+    assert "Database updated\n" in result.stderr
+    assert (pki / "state/active-issuer").read_bytes() == (
+        b"root=g1\nintermediate=g1-i1\n"
+    )
+    assert not (pki / "state/bootstrap-root").exists()
+    for path, expected_mode in (
+        (authority / "private/intermediate-ca.key", 0o600),
+        (certificate, 0o644),
+        (authority / "certs/ca-chain.crt", 0o644),
+        (pki / "state/generation-reservations/g1-i1", 0o600),
+    ):
+        assert path.is_file() and not path.is_symlink()
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
+        require_outside_checkout(path, "installed intermediate artifact", strict=True)
+
+
+@pytest.mark.parametrize(
+    "command",
     (("platform-pki-inventory-install",), ("platform-pki", "inventory-install")),
     ids=("compatibility", "unified"),
 )
