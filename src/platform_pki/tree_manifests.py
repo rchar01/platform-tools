@@ -262,6 +262,7 @@ def _validate_entries(
     *,
     max_entries: int,
     max_depth: int,
+    allow_missing: bool = False,
 ) -> None:
     actual = [
         item
@@ -272,11 +273,13 @@ def _validate_entries(
         raise TreeManifestError("tree exceeds the manifest entry bound")
     if any(len(relative) > max_depth for relative, _identity, _digest in actual):
         raise TreeManifestError("tree exceeds the manifest depth bound")
-    if len(actual) != len(expected):
+    if not allow_missing and len(actual) != len(expected):
         raise TreeManifestError("tree members do not match the manifest")
 
-    for manifest_entry, (relative, identity, digest) in zip(expected, actual):
-        if relative != manifest_entry.relative:
+    expected_by_relative = {entry.relative: entry for entry in expected}
+    for relative, identity, digest in actual:
+        manifest_entry = expected_by_relative.get(relative)
+        if manifest_entry is None:
             raise TreeManifestError("tree members do not match the manifest")
         persisted = manifest_entry.identity
         if isinstance(persisted, DirectoryIdentity):
@@ -302,6 +305,7 @@ def _validate_manifest(
     max_bytes: int,
     max_entries: int,
     max_depth: int,
+    allow_missing: bool = False,
 ) -> TreeReadiness:
     if not isinstance(root, OpenedDirectory):
         raise TypeError("root must be an OpenedDirectory")
@@ -352,6 +356,7 @@ def _validate_manifest(
         excluded_components,
         max_entries=max_entries,
         max_depth=max_depth,
+        allow_missing=allow_missing,
     )
     manifest.recheck()
     root.recheck()
@@ -431,7 +436,7 @@ def remove_manifested_tree(
     max_entries: int = MAX_TREE_MANIFEST_ENTRIES,
     max_depth: int = MAX_TREE_MANIFEST_DEPTH,
 ) -> None:
-    """Validate and remove one exact final-Bash manifested directory tree."""
+    """Remove a tree whose remaining members exactly match its final-Bash manifest."""
 
     if not isinstance(parent, OpenedDirectory):
         raise TypeError("parent must be an OpenedDirectory")
@@ -443,17 +448,19 @@ def remove_manifested_tree(
         expected_identity=directory_identity,
     ) as root:
         root_identity = root.identity
-        readiness = validate_tree_manifest(
+        readiness = _validate_manifest(
             root,
             parent,
             root_name,
             manifest,
             expected_manifest_identity,
             expected_manifest_sha256,
+            _DigestPolicy.TREE,
             excluded,
             max_bytes=max_bytes,
             max_entries=max_entries,
             max_depth=max_depth,
+            allow_missing=True,
         )
         root.recheck()
     assert root_identity is not None and readiness is not None

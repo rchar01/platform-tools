@@ -39,6 +39,14 @@ def _handler(route: tuple[str, ...]):
         from .ca_passphrase_verify import verify_ca_passphrases
 
         return verify_ca_passphrases
+    if route == ("root-create",):
+        from .root_create import create_root
+
+        return create_root
+    if route == ("ca-rollover", "recover"):
+        from .ca_rollover_recover import recover_ca_rollover
+
+        return recover_ca_rollover
     if route == ("list-expiry",):
         from .list_expiry import list_expiry
 
@@ -122,6 +130,55 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "The namespace defaults to platform-infrastructure under the XDG\n"
             "configuration home. The PKI directory defaults to <namespace>/pki.\n"
             "--force never overwrites active inventory, CA keys, certificates, or database state.\n\n",
+            end="",
+        )
+        return
+    if route == ("root-create",) and not unified:
+        print(
+            f"{name} - Create the root CA key and certificate\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--name CN (required)', '35')}\n"
+            "    Root CA common name\n\n"
+            f"  {_color('--org ORG (required)', '35')}\n"
+            "    Organization name\n\n"
+            f"  {_color('--country COUNTRY (required)', '35')}\n"
+            "    Country code\n\n"
+            f"  {_color('--days DAYS', '35')}\n"
+            "    Root CA lifetime\n\n"
+            f"  {_color('--root-pass-file PATH', '35')}\n"
+            "    Restricted file containing the encrypted-key passphrase\n"
+            "    Conflicts: --allow-unencrypted-root-key\n\n"
+            f"  {_color('--allow-unencrypted-root-key', '35')}\n"
+            "    Create an unencrypted root private key\n"
+            "    Conflicts: --root-pass-file\n\n"
+            f"  {_color('--force', '35')}\n"
+            "    Refuse unproven replacement and direct recovery to the journal workflow\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} --name \"Platform Example Root CA\" --org \"Platform\n"
+            "  Example\" --country PL\n"
+            f"  {name} --namespace /tmp/platform-pki-test --name \"Test Root\n"
+            "  CA\" --org \"Test\" --country PL --allow-unencrypted-root-key\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "The lifetime defaults to PLATFORM_PKI_ROOT_DAYS or 3650 days.\n"
+            "Root keys are encrypted unless --allow-unencrypted-root-key is used.\n"
+            "Root generation IDs are allocated monotonically. A failed or interrupted\n"
+            "bootstrap permanently abandons its reserved ID; a retry uses the next ID.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n"
+            "Passphrase files must be mode 600 or stricter and have a first line of at\n"
+            "least 16 characters containing non-whitespace content.\n\n",
             end="",
         )
         return

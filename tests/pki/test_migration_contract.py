@@ -7,6 +7,11 @@ import pytest
 import yaml
 
 from src.platform_pki.backup import BACKUP_RECEIPT_SPEC
+from src.platform_pki.root_create import (
+    ROOT_FAULT_CHECKPOINTS,
+    _record_bytes,
+    _reservation_bytes,
+)
 
 from .migration_contract import (
     ACTIVE_ISSUER_FIELDS,
@@ -50,6 +55,7 @@ from .migration_contract import (
 
 pytestmark = pytest.mark.infrastructure
 ROOT = Path(__file__).parents[2]
+ROOT_CREATE_ORACLE = "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-root-create"
 
 
 def _source(path: str) -> str:
@@ -63,7 +69,9 @@ def _source_record_block(path: str, start: str, end: str) -> str:
     return source[block_start:block_end]
 
 
-def _record_fields(block: str) -> tuple[str, ...]:
+def _record_fields(block: str, *, generated_bashly: bool = False) -> tuple[str, ...]:
+    if generated_bashly:
+        block = "\n".join(line.removeprefix("  ") for line in block.split("\n"))
     return tuple(re.findall(r"(?m)^([a-z][a-z0-9_]*)=", block))
 
 
@@ -74,17 +82,27 @@ def _source_record_fields(path: str, start: str, end: str) -> tuple[str, ...]:
 def _record_fields_after_atomic_write(
     source: str,
     first_field: str,
+    *,
+    generated_bashly: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
+    terminator = r'\n  "' if generated_bashly else r'\n"'
     blocks = re.findall(
-        rf'pki_atomic_write[^\n]*?"({re.escape(first_field)}=.*?)\n"',
+        rf'pki_atomic_write[^\n]*?"({re.escape(first_field)}=.*?){terminator}',
         source,
         re.DOTALL,
     )
-    return tuple(_record_fields(block) for block in blocks)
+    return tuple(
+        _record_fields(block, generated_bashly=generated_bashly)
+        for block in blocks
+    )
 
 
 def _generation_record_fields(path: str) -> tuple[tuple[str, ...], ...]:
-    return _record_fields_after_atomic_write(_source(path), "generation")
+    return _record_fields_after_atomic_write(
+        _source(path),
+        "generation",
+        generated_bashly=path == ROOT_CREATE_ORACLE,
+    )
 
 
 def _literal_for_fields(source: str, first_field: str) -> tuple[str, ...]:
@@ -555,7 +573,25 @@ def test_declared_record_shapes_serialize_with_one_final_newline(fields, schema,
         assert payload.splitlines()[fields.index("schema")] == f"schema={schema}".encode()
 
 
-def test_literal_record_orders_match_bash_writers() -> None:
+def test_python_root_writer_preserves_declared_record_orders() -> None:
+    values = {field: f"value-{index}" for index, field in enumerate(ROOT_BOOTSTRAP_JOURNAL_FIELDS)}
+    values["schema"] = "3"
+    journal = _record_bytes(ROOT_BOOTSTRAP_JOURNAL_FIELDS, values)
+    assert tuple(line.partition(b"=")[0].decode() for line in journal.splitlines()) == (
+        ROOT_BOOTSTRAP_JOURNAL_FIELDS
+    )
+    consumed = _reservation_bytes(
+        "g1",
+        "root-bootstrap-20260810-120000-1",
+        "consumed",
+        fingerprint="A" * 64,
+    )
+    assert tuple(line.partition(b"=")[0].decode() for line in consumed.splitlines()) == (
+        GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS
+    )
+
+
+def test_literal_record_orders_match_final_bash_writers() -> None:
     cases = (
         (
             "lib/platform-pki-common.sh",
@@ -572,9 +608,9 @@ def test_literal_record_orders_match_bash_writers() -> None:
             None,
         ),
         (
-            "bashly/platform-pki-root-create/src/root_command.sh",
+            ROOT_CREATE_ORACLE,
             'pki_atomic_write "$TXN_DIR/reservation-consumed" "',
-            '\n";',
+            '\n  ";',
             GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS,
             None,
         ),
@@ -593,9 +629,9 @@ def test_literal_record_orders_match_bash_writers() -> None:
             None,
         ),
         (
-            "bashly/platform-pki-root-create/src/root_command.sh",
+            ROOT_CREATE_ORACLE,
             'pki_write_journal "$JOURNAL" "',
-            '\n"',
+            '\n  "',
             ROOT_BOOTSTRAP_JOURNAL_FIELDS,
             3,
         ),
@@ -616,6 +652,9 @@ def test_literal_record_orders_match_bash_writers() -> None:
     )
     for path, start, end, expected, schema in cases:
         block = _source_record_block(path, start, end)
+        generated_bashly = path == ROOT_CREATE_ORACLE
+        if generated_bashly:
+            block = "\n".join(line.removeprefix("  ") for line in block.split("\n"))
         assert _record_fields(block) == expected
         schema_match = re.search(r"(?m)^schema=([^\n]+)$", block)
         if schema is None:
@@ -630,7 +669,7 @@ def test_every_generation_reservation_writer_matches_a_declared_variant() -> Non
     consumed = GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS
     migration = GENERATION_RESERVATION_MIGRATION_FIELDS
     expected = {
-        "bashly/platform-pki-root-create/src/root_command.sh": (
+        ROOT_CREATE_ORACLE: (
             transaction, transaction, consumed,
         ),
         "bashly/platform-pki-intermediate-create/src/root_command.sh": (
@@ -641,8 +680,13 @@ def test_every_generation_reservation_writer_matches_a_declared_variant() -> Non
     }
     actual = {}
     source_paths = (
-        *(ROOT / "bashly").rglob("*.sh"),
+        *(
+            path
+            for path in (ROOT / "bashly").rglob("*.sh")
+            if path != ROOT / "bashly/platform-pki-root-create/src/root_command.sh"
+        ),
         *(ROOT / "lib").glob("*.sh"),
+        ROOT / ROOT_CREATE_ORACLE,
     )
     for path in source_paths:
         relative = path.relative_to(ROOT).as_posix()
@@ -916,8 +960,22 @@ def test_recovery_contracts_match_authoritative_sources() -> None:
 
 def test_literal_and_finite_writer_fault_hooks_match_authoritative_sources() -> None:
     contracts = {contract.name: contract for contract in FAULT_HOOK_CONTRACTS}
+    root_contract = contracts["root bootstrap writer"]
+    root_source = ast.parse(_source(root_contract.source))
+    root_calls = {
+        node.args[0].value
+        for node in ast.walk(root_source)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == root_contract.hook
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    assert root_calls == set(ROOT_FAULT_CHECKPOINTS) == _fault_expressions(root_contract)
+    assert all(variable in _source(root_contract.source) for variable in root_contract.fault_variables)
     for name in (
-        "root bootstrap writer", "intermediate bootstrap writer", "CSR signing writer",
+        "intermediate bootstrap writer", "CSR signing writer",
         "candidate finalization writer", "legacy migration writer",
     ):
         contract = contracts[name]

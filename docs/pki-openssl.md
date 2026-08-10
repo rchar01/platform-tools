@@ -185,6 +185,10 @@ platform-pki-root-create \
 
 The root key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_ROOT_DAYS`, or 3650 when that environment variable is unset.
+The compatibility command and `platform-pki root-create` use one Python
+transaction writer. PKI paths must be ASCII because they are persisted in the
+canonical schema-3 recovery journal; passphrase files are bound to OpenSSL
+through inherited descriptors rather than child path arguments.
 Root key, certificate, configuration, and database state are staged as a new
 immutable generation. A clean namespace allocates `authorities/roots/g1`.
 Publication records a consumed generation reservation and

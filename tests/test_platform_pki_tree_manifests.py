@@ -162,6 +162,110 @@ def test_remove_manifested_tree_binds_root_and_excluded_manifest(tmp_path: Path)
     assert not root_path.exists()
 
 
+def test_remove_manifested_tree_allows_consumed_manifest_member(tmp_path: Path) -> None:
+    parent_path, root_path = _tree(tmp_path)
+    manifest_path, manifest_identity, digest = _write_manifest(
+        root_path, "tree.manifest"
+    )
+    root_identity = _identity(root_path)
+    (root_path / "public/certificate.pem").unlink()
+
+    with (
+        OpenedDirectory(parent_path) as parent,
+        OpenedDirectory(root_path) as root,
+        OpenedFile(manifest_path) as manifest,
+        pytest.raises(TreeManifestError, match="members do not match"),
+    ):
+        validate_tree_manifest(
+            root,
+            parent,
+            "tree",
+            manifest,
+            manifest_identity,
+            digest,
+            "tree.manifest",
+        )
+
+    with OpenedDirectory(parent_path) as parent, OpenedFile(manifest_path) as manifest:
+        remove_manifested_tree(
+            parent,
+            "tree",
+            serialize_directory_identity(root_identity.directory),
+            manifest,
+            manifest_identity,
+            digest,
+            "tree.manifest",
+        )
+    assert not root_path.exists()
+
+
+def test_remove_manifested_tree_rejects_unexpected_remaining_member(
+    tmp_path: Path,
+) -> None:
+    parent_path, root_path = _tree(tmp_path)
+    manifest_path, manifest_identity, digest = _write_manifest(
+        root_path, "tree.manifest"
+    )
+    root_identity = _identity(root_path)
+    unexpected = root_path / "unexpected"
+    unexpected.write_bytes(b"hostile\n")
+    unexpected.chmod(0o600)
+
+    with (
+        OpenedDirectory(parent_path) as parent,
+        OpenedFile(manifest_path) as manifest,
+        pytest.raises(TreeManifestError, match="members do not match"),
+    ):
+        remove_manifested_tree(
+            parent,
+            "tree",
+            serialize_directory_identity(root_identity.directory),
+            manifest,
+            manifest_identity,
+            digest,
+            "tree.manifest",
+        )
+
+    assert unexpected.read_bytes() == b"hostile\n"
+    assert (root_path / "public/certificate.pem").read_bytes() == (
+        b"public certificate\n"
+    )
+
+
+def test_remove_manifested_tree_rejects_replaced_remaining_member(
+    tmp_path: Path,
+) -> None:
+    parent_path, root_path = _tree(tmp_path)
+    manifest_path, manifest_identity, digest = _write_manifest(
+        root_path, "tree.manifest"
+    )
+    root_identity = _identity(root_path)
+    certificate = root_path / "public/certificate.pem"
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(certificate.read_bytes())
+    replacement.chmod(0o600)
+    os.replace(replacement, certificate)
+    replacement_identity = _identity(certificate)
+
+    with (
+        OpenedDirectory(parent_path) as parent,
+        OpenedFile(manifest_path) as manifest,
+        pytest.raises(TreeManifestError, match="identity does not match"),
+    ):
+        remove_manifested_tree(
+            parent,
+            "tree",
+            serialize_directory_identity(root_identity.directory),
+            manifest,
+            manifest_identity,
+            digest,
+            "tree.manifest",
+        )
+
+    assert _identity(certificate) == replacement_identity
+    assert certificate.read_bytes() == b"public certificate\n"
+
+
 def test_excluded_manifest_must_be_the_opened_in_tree_object(tmp_path: Path) -> None:
     parent_path, root_path = _tree(tmp_path)
     manifest_path, _manifest_identity, digest = _write_manifest(

@@ -27,6 +27,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/_version.py",
     "platform_pki/backup.py",
     "platform_pki/ca_passphrase_verify.py",
+    "platform_pki/ca_rollover_recover.py",
     "platform_pki/ca_rollover_recovery.py",
     "platform_pki/cli.py",
     "platform_pki/compat.py",
@@ -47,6 +48,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/print_cert.py",
     "platform_pki/publication.py",
     "platform_pki/records.py",
+    "platform_pki/root_create.py",
     "platform_pki/service_verify.py",
     "platform_pki/subprocesses.py",
     "platform_pki/tree_manifests.py",
@@ -267,12 +269,15 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         assert result.stderr.startswith(
             "[ERROR] Private repository ancestor "
         )
+    elif route.unified_route == ("ca-rollover", "recover"):
+        assert result.stderr == "[ERROR] Recovery transaction ID is invalid\n"
     elif route.unified_route in {
         ("ca-passphrase-verify",),
         ("backup",),
         ("custody-report",),
         ("list-expiry",),
         ("print-cert",),
+        ("root-create",),
         ("service-verify",),
         ("export-ansible",),
     }:
@@ -386,6 +391,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
         "inventory-install": "Install private-Git service inventory into local PKI state",
         "list-expiry": "List expiry dates for generated service certificates",
         "print-cert": "Print readable details for a generated service certificate",
+        "root-create": "Create the root CA key and certificate",
         "service-verify": "Verify a generated service certificate",
         "export-ansible": "Export generated PKI files into an Ansible-consumable layout",
         "backup": "Create a backup archive of the outside-Git PKI directory",

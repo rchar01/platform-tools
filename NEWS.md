@@ -58,8 +58,19 @@ This file gives a short, release-oriented view of what changed between versions.
   inherited passphrase prompting, explicit plain-backup opt-in, full lock
   coverage, and canonical schema-2 receipts. Archive and receipt publication is
   durable and no-clobber; a published archive is retained and reported if its
-  receipt cannot be published. Other operational `platform-pki-*` commands
-  remain on Bash.
+  receipt cannot be published. `platform-pki-root-create` and
+  `platform-pki root-create` now share a Python schema-3 transaction writer with
+  passphrase-descriptor OpenSSL input, exact writer-order journals, signal-safe
+  rollback evidence, no-clobber authority publication, and Python recovery for
+  every final-Bash and Python writer crash checkpoint. Recovery-journal paths
+  must be ASCII. The unified `platform-pki ca-rollover recover` route uses Python
+  recovery state machines for legacy migration, root and intermediate bootstrap,
+  rollover preparation, and receipt-bound terminal cleanup. It preserves
+  final-Bash journal, output, and recovery-action contracts
+  for previously accepted states and additionally resumes authenticated root-DB
+  publication windows that Bash leaves recovery-required. The compatibility
+  `platform-pki-ca-rollover` executable and other operational routes not yet
+  migrated remain on Bash.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

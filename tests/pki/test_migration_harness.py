@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -354,6 +355,53 @@ def test_differential_runner_prepares_identity_bound_side_copies(
     assert dict(result.bash.transitions)["recovered"] == "created"
 
 
+def test_differential_runner_normalizes_declared_dynamic_paths(
+    tmp_path: Path,
+) -> None:
+    seed = tmp_path / "seed"
+    (seed / "namespace/pki").mkdir(parents=True)
+    script = tmp_path / "recover.py"
+    script.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "transaction = Path(sys.argv[1])\n"
+        "(transaction / 'result').write_text('done\\n', encoding='ascii')\n",
+        encoding="ascii",
+    )
+
+    def prepare(root: Path, _environment) -> None:
+        transaction = root / f"namespace/pki/transaction-{root.name}"
+        transaction.mkdir()
+        source = transaction / "source"
+        source.write_text("pending\n", encoding="ascii")
+        os.link(source, transaction / f"alias-{root.name}")
+
+    def argv(root: Path):
+        return (sys.executable, script, root / f"namespace/pki/transaction-{root.name}")
+
+    def normalize_path(path: str) -> str:
+        return re.sub(r"(?:bash|python)", "<SIDE>", path)
+
+    result = run_differential_case(
+        seed,
+        tmp_path / "case",
+        Path("namespace/pki"),
+        argv,
+        argv,
+        {"LC_ALL": "C", "PATH": os.environ["PATH"]},
+        path_normalizers=(normalize_path,),
+        bash_prepare=prepare,
+        python_prepare=prepare,
+    )
+
+    result.assert_equivalent()
+    entries = {entry.path: entry for entry in result.bash.after}
+    assert entries["transaction-<SIDE>/source"].object_class == (
+        "transaction-<SIDE>/alias-<SIDE>",
+        "transaction-<SIDE>/source",
+    )
+
+
 def test_differential_runner_revalidates_paths_after_preparation(
     tmp_path: Path,
 ) -> None:
@@ -419,7 +467,11 @@ def test_differential_runner_reports_process_divergence_without_output(tmp_path:
         result.assert_equivalent()
     assert result.bash.process.status == 0
     assert result.python.process.status == 1
-    assert str(error.value) == "differential process observations differ"
+    assert str(error.value) == (
+        "differential process observations differ: "
+        "bash=ComparableProcessResult(status=0, stdout='', stderr='') "
+        "python=ComparableProcessResult(status=1, stdout='', stderr='')"
+    )
 
 
 def test_differential_runner_uses_validated_nested_working_directory(

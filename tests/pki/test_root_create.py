@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
+import signal
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+from src.platform_pki import root_create as root_writer
 
 from ..harness import ProcessResult
 from .create_test_support import (
@@ -26,13 +30,151 @@ from .create_test_support import (
     tools,
     workspace,
 )
+from .migration_harness import run_differential_case
 
 
 pytestmark = pytest.mark.pki
+ROOT_CREATE_ORACLE = (
+    Path(__file__).parent / "oracles/platform-pki-ca-rollover/platform-pki-root-create"
+)
+ROOT_CREATE_ORACLE_LIB = ROOT_CREATE_ORACLE.parent / "lib"
+_ROOT_TRANSACTION = re.compile(r"root-bootstrap-[0-9]{8}-[0-9]{6}-[0-9]+")
+_FULL_IDENTITY = re.compile(
+    r"(?P<object>[0-9]+:[0-9]+):(?P<uid>[0-9]+):(?P<mode>[0-7]+):"
+    r"(?P<links>[0-9]+):(?P<size>[0-9]+):"
+    r"(?P<mtime>[0-9]{4}-.+ [+-][0-9]{4}):"
+    r"(?P<ctime>[0-9]{4}-.+ [+-][0-9]{4}):"
+    r"(?P<kind>regular empty file|regular file|directory)"
+)
+_OBJECT_IDENTITY = re.compile(
+    r"(?P<object>[0-9]+:[0-9]+):(?P<uid>[0-9]+):(?P<mode>[0-7]+):"
+    r"(?P<links>[0-9]+):(?P<size>[0-9]+):"
+    r"(?P<kind>regular empty file|regular file|directory)"
+)
+_DIRECTORY_IDENTITY = re.compile(
+    r"(?P<object>[0-9]+:[0-9]+):(?P<uid>[0-9]+):(?P<mode>[0-7]+):directory"
+)
+_ROOT_IDENTITY_FIELDS = frozenset(
+    {
+        "authority_identity",
+        "stage_identity",
+        "transaction_identity",
+        "reservation_identity",
+        "reservation_reserved_identity",
+        "reservation_consumed_identity",
+        "reservation_abandoned_identity",
+        "bootstrap_identity",
+    }
+)
+_DYNAMIC_RESERVATION_SIZE_FIELDS = frozenset(
+    {
+        "reservation_identity",
+        "reservation_reserved_identity",
+        "reservation_consumed_identity",
+        "reservation_abandoned_identity",
+    }
+)
 
 
 def _root_command(value, toolset, *arguments: str | Path) -> list[str | Path]:
     return [toolset.root, "--namespace", value.namespace, *arguments]
+
+
+def _normalize_root_token(value: str) -> str:
+    return _ROOT_TRANSACTION.sub("<ROOT-BOOTSTRAP>", value)
+
+
+def _normalize_root_identity(
+    value: str,
+    labels: dict[str, str],
+    *,
+    dynamic_size: bool,
+) -> str:
+    full = _FULL_IDENTITY.fullmatch(value)
+    object_state = _OBJECT_IDENTITY.fullmatch(value)
+    directory = _DIRECTORY_IDENTITY.fullmatch(value)
+    match = full or object_state or directory
+    if match is None:
+        raise ValueError("Root writer differential identity is malformed")
+    object_label = labels.setdefault(
+        match["object"], f"<OBJECT-{len(labels) + 1}>"
+    )
+    if directory is not None:
+        return f"{object_label}:{match['uid']}:{match['mode']}:directory"
+    size = "<DYNAMIC-SIZE>" if dynamic_size else match["size"]
+    normalized = (
+        f"{object_label}:{match['uid']}:{match['mode']}:{match['links']}:"
+        f"{size}"
+    )
+    if full is not None:
+        normalized += ":<MTIME>:<CTIME>"
+    return f"{normalized}:{match['kind']}"
+
+
+def _root_writer_content_normalizer(*roots: Path):
+    root_text = tuple(os.fspath(root) for root in roots)
+
+    def normalize(_relative: str, content: bytes) -> bytes:
+        try:
+            text = content.decode("ascii")
+        except UnicodeDecodeError:
+            return content
+        lines = text.splitlines(keepends=True)
+        if not lines or any(
+            re.fullmatch(r"[a-z][a-z0-9_]*=.*\n?", line) is None
+            for line in lines
+        ):
+            return content
+
+        labels: dict[str, str] = {}
+        normalized = []
+        for line in lines:
+            body = line.removesuffix("\n")
+            key, value = body.split("=", 1)
+            value = _normalize_root_token(value)
+            for root in root_text:
+                value = value.replace(root, "<WORKSPACE>")
+            if key in _ROOT_IDENTITY_FIELDS and value not in {"absent", "none"}:
+                value = _normalize_root_identity(
+                    value,
+                    labels,
+                    dynamic_size=key in _DYNAMIC_RESERVATION_SIZE_FIELDS,
+                )
+            normalized.append(f"{key}={value}\n")
+        return "".join(normalized).encode("ascii")
+
+    return normalize
+
+
+def _deterministic_openssl(tmp_path: Path) -> Path:
+    fingerprint = ":".join(("AB",) * 32)
+    return executable(
+        tmp_path / "openssl",
+        f"""#!/usr/bin/env python3
+import pathlib
+import sys
+
+arguments = sys.argv[1:]
+command = arguments[0]
+
+def option(name):
+    index = arguments.index(name)
+    return pathlib.Path(arguments[index + 1])
+
+if command == "genpkey":
+    option("-out").write_bytes(b"DETERMINISTIC ROOT PRIVATE KEY\\n")
+elif command == "req":
+    option("-out").write_bytes(b"DETERMINISTIC ROOT CERTIFICATE\\n")
+elif command == "x509" and "-pubkey" in arguments:
+    sys.stdout.write("DETERMINISTIC ROOT PUBLIC KEY\\n")
+elif command == "pkey" and "-pubout" in arguments:
+    option("-out").write_bytes(b"DETERMINISTIC ROOT PUBLIC KEY\\n")
+elif command == "x509" and "-fingerprint" in arguments:
+    sys.stdout.write("sha256 Fingerprint={fingerprint}\\n")
+else:
+    raise SystemExit(97)
+""",
+    )
 
 
 @pytest.mark.parametrize(
@@ -69,6 +211,37 @@ def test_parser_contract(
         assert result.stderr == ""
 
 
+@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
+def test_direct_compatibility_help_matches_frozen_bashly_help(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tty: bool,
+) -> None:
+    toolset = tools()
+    env = environment(tmp_path / "environment")
+    pty_mode = None
+    if tty:
+        env.pop("NO_COLOR")
+        pty_mode = "canonical"
+    expected = run(
+        process_runner,
+        [ROOT_CREATE_ORACLE, "--help"],
+        env,
+        pty_mode=pty_mode,
+    )
+    actual = run(
+        process_runner,
+        [toolset.root, "--help"],
+        env,
+        pty_mode=pty_mode,
+    )
+    assert (actual.status, actual.stdout, actual.stderr) == (
+        expected.status,
+        expected.stdout,
+        expected.stderr,
+    )
+
+
 def test_environment_days_rejects_non_numeric_value(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
@@ -95,6 +268,27 @@ def test_environment_days_rejects_non_numeric_value(
     assert result.status == 1
     assert result.stdout == ""
     assert "Days value must be numeric: zero" in result.stderr
+
+
+def test_handled_signal_is_delivered_after_deferred_state_assignment() -> None:
+    delivered = []
+    assigned = False
+
+    def handler(signum: int, _frame: object) -> None:
+        assert assigned
+        delivered.append(signum)
+
+    previous_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+    previous_handler = signal.signal(signal.SIGTERM, handler)
+    try:
+        with root_writer._defer_handled_signals():
+            os.kill(os.getpid(), signal.SIGTERM)
+            assert delivered == []
+            assigned = True
+        assert delivered == [signal.SIGTERM]
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 @pytest.mark.parametrize(
@@ -332,7 +526,158 @@ def test_explicit_pki_directory_is_used(
     assert (custom / "authorities/roots/g1/certs/root-ca.crt").is_file()
 
 
+def test_non_ascii_pki_path_is_rejected_before_control_state_mutation(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    toolset = tools()
+    value = workspace(tmp_path / "case")
+    env = environment(tmp_path / "environment")
+    pki = tmp_path / f"pki-non-ascii-{chr(0xE9)}"
+    initialize(process_runner, value, env, toolset, pki_dir=pki)
+    before = filesystem_snapshot(pki)
+
+    result = run(
+        process_runner,
+        _root_command(
+            value,
+            toolset,
+            "--pki-dir",
+            pki,
+            "--name",
+            "Test",
+            "--org",
+            "Test",
+            "--country",
+            "PL",
+            "--allow-unencrypted-root-key",
+        ),
+        env,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert "PKI directory must contain only ASCII characters for recovery records" in (
+        result.stderr
+    )
+    assert_filesystem_snapshot_unchanged(pki, before, "PKI directory")
+
+
+def test_symlinked_pki_path_component_is_rejected_before_mutation(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    toolset = tools()
+    value = workspace(tmp_path / "case")
+    env = environment(tmp_path / "environment")
+    initialize(process_runner, value, env, toolset)
+    real_namespace = value.root / "namespace-real"
+    value.namespace.rename(real_namespace)
+    value.namespace.symlink_to(real_namespace, target_is_directory=True)
+    real_pki = real_namespace / "pki"
+    before = filesystem_snapshot(real_pki)
+
+    result = create_root(process_runner, value, env, toolset, unencrypted=True)
+
+    assert result.status == 1
+    assert (
+        f"PKI directory path component must not be a symlink: {value.namespace}"
+        in result.stderr
+    )
+    assert_filesystem_snapshot_unchanged(real_pki, before, "PKI directory")
+
+
 ROOT_BOUNDARIES = ("after-journal", "after-reservation", "after-reservation-consumed", "after-authority", "after-bootstrap")
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    (None, *ROOT_BOUNDARIES),
+    ids=("success", *ROOT_BOUNDARIES),
+)
+def test_frozen_bash_and_python_root_writers_are_semantically_equivalent(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    boundary: str | None,
+) -> None:
+    toolset = tools()
+    seed = workspace(tmp_path / "seed")
+    seed_environment = environment(tmp_path / "seed-environment")
+    initialize(process_runner, seed, seed_environment, toolset)
+    fake_openssl = _deterministic_openssl(tmp_path)
+    case_root = tmp_path / "differential"
+    base_environment = {
+        **seed_environment,
+        "PATH": f"{fake_openssl.parent}:{seed_environment['PATH']}",
+        "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT_CREATE_ORACLE_LIB),
+    }
+    if boundary is not None:
+        base_environment["PLATFORM_PKI_ROOT_FAIL_AT"] = boundary
+
+    def argv(root: Path, command: Path) -> tuple[str | Path, ...]:
+        return (
+            command,
+            "--namespace",
+            root / "namespace",
+            "--name",
+            "Differential Root",
+            "--org",
+            "Platform Test",
+            "--country",
+            "PL",
+            "--allow-unencrypted-root-key",
+        )
+
+    def normalize_output(root: Path, output: str) -> str:
+        return _normalize_root_token(
+            output.replace(os.fspath(root), "<WORKSPACE>")
+        )
+
+    result = run_differential_case(
+        seed.root,
+        case_root,
+        Path("namespace/pki"),
+        lambda root: argv(root, ROOT_CREATE_ORACLE),
+        lambda root: argv(root, toolset.root),
+        base_environment,
+        output_normalizers=(normalize_output,),
+        content_normalizers=(
+            _root_writer_content_normalizer(
+                seed.root,
+                case_root / "bash",
+                case_root / "python",
+            ),
+        ),
+        path_normalizers=(_normalize_root_token,),
+        runner=process_runner,
+        run_options={"timeout": 120},
+    )
+
+    result.assert_equivalent()
+    assert result.bash.process.status == (0 if boundary is None else 1)
+    after = {entry.path: entry for entry in result.bash.after}
+    journal = after["state/rollover/journal"]
+    assert (journal.kind, journal.mode, journal.links) == ("file", 0o600, 1)
+    for side in ("bash", "python"):
+        pki = case_root / side / "namespace/pki"
+        journal_record = record(pki / "state/rollover/journal")
+        assert tuple(journal_record) == root_writer.ROOT_BOOTSTRAP_WRITER_FIELDS
+        assert journal_record["committed"] == "true"
+        if boundary is None:
+            assert journal_record["phase"] == "complete"
+            assert (pki / "authorities/roots/g1/private/root-ca.key").read_bytes() == (
+                b"DETERMINISTIC ROOT PRIVATE KEY\n"
+            )
+            assert (pki / "authorities/roots/g1/certs/root-ca.crt").read_bytes() == (
+                b"DETERMINISTIC ROOT CERTIFICATE\n"
+            )
+        else:
+            assert journal_record["phase"] == "rolled-back"
+            assert journal_record["recovery_action"] == "rollback"
+            assert journal_record["recovery_step"] == "complete"
+            assert not (pki / "authorities/roots/g1").exists()
+            assert not (pki / "state/bootstrap-root").exists()
+            assert record(pki / "state/generation-reservations/g1")["status"] == (
+                "abandoned"
+            )
 
 
 @pytest.mark.parametrize("boundary", ROOT_BOUNDARIES, ids=ROOT_BOUNDARIES)

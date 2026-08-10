@@ -2,10 +2,10 @@
 
 ## Status
 
-Phase 0 contract expansion remains in progress. Phases 1 through 3 are
-implemented, and Phase 4 is complete with `platform-pki-init`,
-`platform-pki-inventory-install`, and `platform-pki-export-ansible`
-Python-backed.
+Phase 0 contract expansion remains in progress. Phases 1 through 5 are
+implemented. Phase 6 has Python-backed compatibility and unified `root-create`
+routes plus unified `platform-pki ca-rollover recover`; direct rollover
+compatibility and the intermediate authority writer remain Bash.
 
 ## Goal
 
@@ -103,9 +103,11 @@ src/platform_pki/
 └── transactions/
 ```
 
-The unified command and compatibility executables must dispatch to the same
-handler functions. Compatibility launchers must not contain separate command
-logic.
+After a compatibility route cuts over, its unified and compatibility interfaces
+must dispatch to the same handler. Approved leaf-level sequencing may
+temporarily expose a unified Python leaf while the retained compatibility
+executable remains Bash; compatibility launchers must not contain separate
+logic after their cutover.
 
 The frozen unified command mapping is:
 
@@ -206,12 +208,14 @@ Recorded cutovers:
 | `platform-pki-init` | `ee03cddc626338ea7d066dd71519204bddb46db3` | `tests/pki/oracles/platform-pki-init/platform-pki-init` |
 | `platform-pki-inventory-install` | `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1` | `tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install` |
 | `platform-pki-export-ansible` | `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b` | `tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible` |
+| `platform-pki-root-create` | `ba9dd57214cae18f82c83dfb54b6ddce13882280` | `tests/pki/oracles/platform-pki-ca-rollover/platform-pki-root-create` |
 
 The CA recovery foundation also freezes the final Bash recovery and authority
 writer assets from `ba9dd57214cae18f82c83dfb54b6ddce13882280` under
-`tests/pki/oracles/platform-pki-ca-rollover/`. This is compatibility evidence,
-not a command cutover: public recovery dispatch and production mutation behavior
-remain Bash.
+`tests/pki/oracles/platform-pki-ca-rollover/`. These are the retained authority-
+writer oracles and recovery evidence: unified recovery and root creation are
+Python while direct `platform-pki-ca-rollover recover` and the intermediate
+writer remain Bash.
 
 Recorded SHA-256 provenance for that oracle set is
 `7e9430e6d17969d5d1779e8073b9757e08157625e16b91969991e611953b806b`
@@ -394,10 +398,14 @@ are proven.
 Approved sequencing exception: complete the `platform-pki-ca-rollover recover`
 leaf before migrating the Phase 6 root and intermediate authority writers. The
 leaf may temporarily coexist with Bash sibling leaves, matching the leaf-level
-Phase 7 migration order, but public recover dispatch must remain Bash until the
-complete Python recovery state machines and differential gates are ready. The
-foundation checkpoint may add codecs, strict record models, frozen oracles, and
-tests only; it must not mutate production recovery behavior.
+Phase 7 migration order. Public recover dispatch remained Bash until the
+complete Python recovery state machines and differential gates were ready. That
+gate is now met for the unified `platform-pki ca-rollover recover` route; the
+`platform-pki-ca-rollover` compatibility executable and sibling leaves remain
+Bash. The earlier foundation checkpoints added codecs, strict record models,
+frozen oracles, and tests without mutating production recovery behavior.
+`platform-pki-root-create` and `platform-pki root-create` now share one Python
+writer; `platform-pki-intermediate-create` is the next authority-writer tranche.
 
 Migration groups:
 
@@ -444,6 +452,19 @@ Validation gate:
   affected operation reads or mutates operational snapshots.
 - [ ] Successful, invalid, no-op, replay, signal, race, and recovery state trees
   match the frozen compatibility contract.
+
+Root-create checkpoint:
+
+- [x] Compatibility and unified routes share one Python schema-3 writer.
+- [x] Writer-order journals, reservation/bootstrap records, OpenSSL artifacts,
+  modes, output, status, and all five handled-failure state trees match the
+  frozen Bash oracle.
+- [x] Unified Python recovery accepts every public crash checkpoint written by
+  both final Bash and Python, and direct final-Bash recovery accepts the
+  Python-written compatible records used by the retained compatibility route.
+- [x] Installed direct/unified operation, signals, retry generation allocation,
+  deterministic generation, focused suites, and canonical container acceptance
+  pass. The intermediate authority writer remains the next Phase 6 tranche.
 
 ## Phase 7: Migrate Rollover Last
 
@@ -641,6 +662,10 @@ implementation.
 | 2026-08-09 | `platform-pki-backup` completed Phase 5 archive migration. | The final Bash commit is `3d5e3b4ecd4c137f97748b4066c7e4c508e99655`; its frozen mode-755 oracle has SHA-256 `beac1204e2014e41be39254389ebc18a9db4b5a7b699197bf25187d5a8b6deea`, and the retained common library has SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified routes share one Python handler with external GNU `tar`, inherited-terminal `age -p`, exact in-tree exclusions, canonical schema-2 receipts, full lock coverage, durable no-clobber publication, final source/archive/receipt rechecks, and explicit retained or uncertain publication evidence. The focused suite passed 31 tests, the complete 224-test rollover suite accepted Python receipts, independent final review found no concrete defect, and final `make container-check` passed 2,834 tests in the pinned containers. |
 | 2026-08-09 | First behavior-neutral CA recovery foundation checkpoint added. | Final Bash rollover/root/intermediate/common assets from `ba9dd57214cae18f82c83dfb54b6ddce13882280` are frozen with provenance tests; Python adds strict persisted GNU-stat codecs, exact schema-2/3 structural record parsing, bounded private journal loading, and generic schema-5 structure parsing. Operation-specific phase, path, identity, and transition semantics remain pending; public recover dispatch and all recovery mutation behavior remain unchanged. Schema 5 remains semantically pending because the writer has 206 declared keys plus 13 cumulatively introduced successful-copy identity keys rather than one fixed 208-field shape. The integrated foundation passed 785 tests, the authoritative rollover parser passed 61 tests, deterministic generation and static verification passed, and independent final review found no concrete defect. |
 | 2026-08-09 | Typed CA recovery evidence and manifested-tree validation added without changing dispatch. | Python now types all four final-Bash recovery journal families, including cumulative schema-5 copy evidence and receipt-bound terminal marker records. Descriptor-relative manifested-tree validation binds self-excluded manifests, exact metadata, public digests, secret literals, complete membership, xdev traversal, and cleanup readiness. Differential test setup can now create identity-bound interrupted states independently after each private copy. Public recovery mutation remains Bash until the state machines and differential gates are complete. The pinned foundation passed 811 tests, Python infrastructure passed 149, the authoritative parser passed 61, static and deterministic-generation checks passed, and final independent review found no concrete defect. |
+| 2026-08-09 | Non-public CA recovery state-machine implementation started. | Python can recover representative final-Bash schema-2 migration, schema-3 root and intermediate bootstrap, and schema-5 preparation states through an isolated subprocess driver, including receipt-bound terminal cleanup. Final-Bash cleanup subset semantics were preserved for already-consumed manifested members. Public dispatch remains unavailable because every writer/recovery checkpoint, race, signal, invalid-state, and differential state-tree gate has not yet been exercised. Final `make container-check` passed generated-Bash verification, ShellCheck, static checks, and all 2,919 maintained tests, including the four focused Python recovery scenarios. |
+| 2026-08-09 | Non-public CA recovery review findings fixed. | Staged replacement now accepts only journal-authorized destination states and preserves ambiguous post-mutation errors; control writes translate filesystem failures; legacy transaction evidence requires exact owner and mode policy; and schema-5 root DB resume/rollback publication windows authenticate relocated inode state, persist the observed full identity, and remain crash-resumable. Focused Python recovery passed 11 tests, manifested cleanup passed 18, the foundation passed 814, and the bounded rollover suite passed 235. Public dispatch remains unavailable. |
+| 2026-08-10 | Unified CA recovery dispatch migrated to Python. | `platform-pki ca-rollover recover` now runs the complete Python schema-2, schema-3, and schema-5 recovery state machines while direct `platform-pki-ca-rollover` invocations and rollover sibling leaves remain on final Bash. Seven state-tree differentials cover bootstrap rollback/cleanup, legacy resume/rollback, root-preparation publication resume/rollback, and terminal marker-only cleanup. The root-DB differentials explicitly record the one strengthened contract: Python authenticates and resumes publication or restoration completed immediately before a pending journal rewrite, while final Bash fails closed. The opt-in authoritative rollover suite passed all 243 tests in the pinned Python 3.14.7 container. Final `make container-check` passed generated-artifact verification, ShellCheck, static checks, all 2,940 maintained tests, and the archive smoke. |
+| 2026-08-10 | Root authority creation migrated to Python. | `platform-pki-root-create` and `platform-pki root-create` share one schema-3 transaction writer with descriptor-bound passphrase input, fixed writer-order evidence, deferred handled signals across mutation-to-evidence assignments, complete private staging, no-clobber publication, identity-bound rollback, and ASCII canonical recovery paths. Frozen-Bash/Python differentials cover success and every handled-failure checkpoint; unified Python recovery covers every final-Bash and Python writer crash checkpoint. The complete opt-in recovery suite passed 252 tests. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, 2,949 maintained tests, and the 10-test archive smoke. |
 
 ## Decision Log
 
@@ -657,3 +682,4 @@ implementation.
 | 2026-08-07 | Design and review the `doctor` contract before exposing a public route. | The review exposed missing positive-eligibility and package-handoff contracts before runtime code was added; this decision was superseded on 2026-08-08. |
 | 2026-08-08 | Make package migration forward-only and do not add `doctor`. | Supported rollback would require exhaustive historical-state validation and a guarded package-replacement workflow; neither is needed when using older Bash releases with Python-written state is outside the supported model. |
 | 2026-08-09 | Pull the complete recover leaf ahead of Phase 6 authority writers. | A temporary leaf-level Bash/Python mix is approved and follows the Phase 7 leaf migration strategy; no public dispatch changes until the complete recovery leaf passes Bash-to-Python recovery acceptance. |
+| 2026-08-10 | Cut over only the unified rollover recovery route. | This exposes the accepted Python recovery state machines without changing the final-Bash compatibility executable or the migration, status, preparation, and authority-writer paths that still produce the recovered state. |

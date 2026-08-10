@@ -14,6 +14,7 @@ ContentNormalizer = Callable[[str, bytes], bytes]
 OutputNormalizer = Callable[[Path, str], str]
 ArgvFactory = Callable[[Path], Sequence[str | os.PathLike[str]]]
 PreparationCallback = Callable[[Path, Mapping[str, str]], None]
+PathNormalizer = Callable[[str], str]
 
 _MANAGED_OPENSSL_CONFIG = re.compile(
     r"(?:(?:^|.*/)pki/|^)(?:authorities/(?:roots|intermediates)/[^/]+|root-ca|intermediate-ca)/openssl\.cnf$"
@@ -58,13 +59,32 @@ class DifferentialResult:
 
     def assert_equivalent(self) -> None:
         if self.bash.process != self.python.process:
-            raise AssertionError("differential process observations differ")
+            raise AssertionError(
+                "differential process observations differ: "
+                f"bash={self.bash.process!r} python={self.python.process!r}"
+            )
         if self.bash.before != self.python.before:
-            raise AssertionError("differential initial state trees differ")
+            raise AssertionError(
+                "differential initial state trees differ: "
+                f"{_first_sequence_difference(self.bash.before, self.python.before)}"
+            )
         if self.bash.after != self.python.after:
-            raise AssertionError("differential final state trees differ")
+            raise AssertionError(
+                "differential final state trees differ: "
+                f"{_first_sequence_difference(self.bash.after, self.python.after)}"
+            )
         if self.bash.transitions != self.python.transitions:
-            raise AssertionError("differential state transitions differ")
+            raise AssertionError(
+                "differential state transitions differ: "
+                f"{_first_sequence_difference(self.bash.transitions, self.python.transitions)}"
+            )
+
+
+def _first_sequence_difference(left: Sequence[object], right: Sequence[object]) -> str:
+    for index, (left_item, right_item) in enumerate(zip(left, right, strict=False)):
+        if left_item != right_item:
+            return f"index={index} bash={left_item!r} python={right_item!r}"
+    return f"length bash={len(left)} python={len(right)}"
 
 
 def _principal_class(value: int, current: int) -> str:
@@ -106,9 +126,33 @@ def _walk_without_following(root: Path) -> Iterable[Path]:
                 pending.append(path)
 
 
+def _pin_snapshot_inodes(root: Path) -> list[int]:
+    descriptors = []
+    try:
+        for path in (root, *_walk_without_following(root)):
+            metadata = path.lstat()
+            if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+                continue
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if stat.S_ISDIR(metadata.st_mode):
+                flags |= os.O_DIRECTORY
+            descriptor = os.open(path, flags)
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                os.close(descriptor)
+                raise ValueError(f"State snapshot object changed while pinning: {path}")
+            descriptors.append(descriptor)
+        return descriptors
+    except BaseException:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise
+
+
 def snapshot_state(
     root: Path,
     normalizers: tuple[ContentNormalizer, ...] = (),
+    path_normalizers: tuple[PathNormalizer, ...] = (),
 ) -> tuple[SemanticEntry, ...]:
     root_stat = root.lstat()
     if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
@@ -126,6 +170,7 @@ def snapshot_state(
         staged.append((path, path_stat, relative))
 
     result = []
+    normalized_paths: set[str] = set()
     for path, path_stat, relative in sorted(staged, key=lambda item: item[2]):
         entry_kind = _kind(path_stat.st_mode)
         content_sha256 = None
@@ -143,15 +188,29 @@ def snapshot_state(
             semantic_size = 0
 
         identity = (path_stat.st_dev, path_stat.st_ino)
+        normalized_relative = relative
+        for normalizer in path_normalizers:
+            normalized_relative = normalizer(normalized_relative)
+        if normalized_relative in normalized_paths:
+            raise ValueError(
+                f"Path normalization collision in state snapshot: {normalized_relative}"
+            )
+        normalized_paths.add(normalized_relative)
+        object_class = []
+        for member in sorted(identities[identity]):
+            for normalizer in path_normalizers:
+                member = normalizer(member)
+            object_class.append(member)
+        object_class.sort()
         result.append(
             SemanticEntry(
-                path=relative,
+                path=normalized_relative,
                 kind=entry_kind,
                 mode=stat.S_IMODE(path_stat.st_mode),
                 owner=_principal_class(path_stat.st_uid, os.getuid()),
                 group=_principal_class(path_stat.st_gid, os.getgid()),
                 links=path_stat.st_nlink,
-                object_class=tuple(sorted(identities[identity])),
+                object_class=tuple(object_class),
                 size=semantic_size,
                 content_sha256=content_sha256,
                 link_target=link_target,
@@ -365,6 +424,7 @@ def run_differential_case(
     *,
     output_normalizers: tuple[OutputNormalizer, ...] = (),
     content_normalizers: tuple[ContentNormalizer, ...] = (),
+    path_normalizers: tuple[PathNormalizer, ...] = (),
     runner: Callable[..., ProcessResult] = run_process,
     run_options: Mapping[str, object] | None = None,
     cwd_relative: Path = Path("."),
@@ -424,14 +484,19 @@ def run_differential_case(
                 raise ValueError(
                     f"Copied working directory does not exist: {root / cwd_relative}"
                 ) from None
-        before = snapshot_state(state_root, normalizers)
-        result = runner(
-            tuple(argv_factory(root)),
-            cwd=working_directory,
-            env=environment,
-            **options,
-        )
-        after = snapshot_state(state_root, normalizers)
+        pinned = _pin_snapshot_inodes(state_root)
+        try:
+            before = snapshot_state(state_root, normalizers, path_normalizers)
+            result = runner(
+                tuple(argv_factory(root)),
+                cwd=working_directory,
+                env=environment,
+                **options,
+            )
+            after = snapshot_state(state_root, normalizers, path_normalizers)
+        finally:
+            for descriptor in pinned:
+                os.close(descriptor)
         process = ComparableProcessResult(
             result.status,
             _normalize_output(root, result.stdout, output_normalizers),

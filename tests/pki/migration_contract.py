@@ -18,6 +18,7 @@ from src.platform_pki.ca_rollover_recovery import (
     ROOT_BOOTSTRAP_WRITER_FIELDS as ROOT_BOOTSTRAP_JOURNAL_FIELDS,
     ROOT_DB_KEYS,
 )
+from src.platform_pki.root_create import ROOT_FAULT_CHECKPOINTS, ROOT_FAULT_VARIABLES
 
 
 LOCK_ORDER = ("lifecycle", "root", "intermediate", "inventory", "export")
@@ -888,7 +889,7 @@ PERSISTED_RECORD_CONTRACTS = (
         "generation reservation bootstrap consumed",
         None,
         "literal bootstrap consumed reservation",
-        "bashly/platform-pki-root-create/src/root_command.sh",
+        "src/platform_pki/root_create.py",
         GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS,
     ),
     RecordContract(
@@ -899,7 +900,7 @@ PERSISTED_RECORD_CONTRACTS = (
         GENERATION_RESERVATION_MIGRATION_FIELDS,
     ),
     RecordContract("backup receipt", 2, "literal backup receipt", "src/platform_pki/backup.py", BACKUP_RECEIPT_FIELDS),
-    RecordContract("root bootstrap journal", 3, "literal root bootstrap journal", "bashly/platform-pki-root-create/src/root_command.sh", ROOT_BOOTSTRAP_JOURNAL_FIELDS),
+    RecordContract("root bootstrap journal", 3, "literal root bootstrap journal", "src/platform_pki/root_create.py", ROOT_BOOTSTRAP_JOURNAL_FIELDS),
     RecordContract("root bootstrap recovery journal", 3, "C-locale recovery journal", "bashly/platform-pki-ca-rollover/src/recover_command.sh", ROOT_BOOTSTRAP_RECOVERY_FIELDS),
     RecordContract(
         "intermediate bootstrap journal",
@@ -954,7 +955,7 @@ RECOVERY_CONTRACTS = (
         "root-bootstrap",
         3,
         "platform-pki ca-rollover recover",
-        "bashly/platform-pki-root-create/src/root_command.sh",
+        "src/platform_pki/root_create.py",
         ("rollback",),
         (
             ("route", _CA_RECOVERY, "${PKI_RECORD[operation]:-} == root-bootstrap"),
@@ -1063,9 +1064,9 @@ _TERMINAL_CHECKPOINTS = ("terminal-transaction-pending", "terminal-transaction-d
 
 FAULT_HOOK_CONTRACTS = (
     FaultHookContract(
-        "root bootstrap writer", ("root-bootstrap",), (3,), "bashly/platform-pki-root-create/src/root_command.sh", "root_fault",
-        ("PLATFORM_PKI_ROOT_CRASH_AT", "PLATFORM_PKI_ROOT_SIGNAL_AT", "PLATFORM_PKI_ROOT_FAIL_AT"),
-        (CheckpointCategory("pre-commit", ("after-journal", "after-reservation", "after-authority", "after-reservation-consumed", "after-bootstrap")),),
+        "root bootstrap writer", ("root-bootstrap",), (3,), "src/platform_pki/root_create.py", "checkpoint",
+        ROOT_FAULT_VARIABLES,
+        (CheckpointCategory("pre-commit", ROOT_FAULT_CHECKPOINTS),),
         (), ("rollback",),
     ),
     FaultHookContract(

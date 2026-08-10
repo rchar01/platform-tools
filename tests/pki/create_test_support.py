@@ -38,12 +38,15 @@ class CreateWorkspace:
 def tools() -> CreateTools:
     repository = Path(__file__).resolve().parents[2]
     binaries = repository / "bin"
+    recover = os.environ.get("PLATFORM_PKI_TEST_ROLLOVER_WRAPPER")
     return CreateTools(
         init=binaries / "platform-pki-init",
         root=binaries / "platform-pki-root-create",
         intermediate=binaries / "platform-pki-intermediate-create",
         issue=binaries / "platform-pki-service-issue",
-        recover=binaries / "platform-pki-ca-rollover",
+        recover=(
+            Path(recover) if recover else binaries / "platform-pki-ca-rollover"
+        ),
         version=(repository / "VERSION").read_text().strip(),
         common=repository / "lib/platform-pki-common.sh",
     )

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
@@ -282,6 +284,98 @@ def test_installed_pki_shared_asset_lookup(
     require_outside_checkout(example, "initialized PKI template", strict=True)
     require_outside_checkout(installed_template, "installed PKI template", strict=True)
     assert example.read_bytes() == installed_template.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "command",
+    (("platform-pki-root-create",), ("platform-pki", "root-create")),
+    ids=("compatibility", "unified"),
+)
+def test_installed_root_create_operates_outside_checkout(
+    process_runner: Callable[..., ProcessResult],
+    install: Install,
+    command: tuple[str, ...],
+) -> None:
+    case = "compatibility" if len(command) == 1 else "unified"
+    namespace = install.state / f"root-create-namespace-{case}"
+    initialized = execute(
+        process_runner,
+        install,
+        install.runtime / "platform-pki-init",
+        "--namespace",
+        namespace,
+    )
+    assert initialized.status == 0, initialized.stderr
+
+    result = execute(
+        process_runner,
+        install,
+        install.runtime / command[0],
+        *command[1:],
+        "--namespace",
+        namespace,
+        "--name",
+        "Installed Root",
+        "--org",
+        "Platform Test",
+        "--country",
+        "PL",
+        "--allow-unencrypted-root-key",
+    )
+
+    pki = namespace / "pki"
+    authority = pki / "authorities/roots/g1"
+    key = authority / "private/root-ca.key"
+    certificate = authority / "certs/root-ca.crt"
+    bootstrap = pki / "state/bootstrap-root"
+    reservation = pki / "state/generation-reservations/g1"
+    assert result.status == 0, result.stderr
+    assert result.stdout == (
+        f"[OK] Created root CA generation g1: {certificate}\n"
+    )
+    assert result.stderr == (
+        "[WARN] Creating an unencrypted root CA private key because "
+        "--allow-unencrypted-root-key was used\n"
+    )
+    for path, expected_mode in (
+        (key, 0o600),
+        (certificate, 0o644),
+        (bootstrap, 0o600),
+        (reservation, 0o600),
+    ):
+        assert path.is_file() and not path.is_symlink()
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
+        require_outside_checkout(path, "installed root artifact", strict=True)
+    bootstrap_record = dict(
+        line.split("=", 1) for line in bootstrap.read_text().splitlines()
+    )
+    reservation_record = dict(
+        line.split("=", 1) for line in reservation.read_text().splitlines()
+    )
+    assert bootstrap_record["root"] == "g1"
+    assert reservation_record == {
+        "generation": "g1",
+        "kind": "root",
+        "status": "consumed",
+        "fingerprint_sha256": bootstrap_record["fingerprint_sha256"],
+        "transaction": reservation_record["transaction"],
+    }
+    assert re.fullmatch(r"[0-9A-F]{64}", bootstrap_record["fingerprint_sha256"])
+    assert re.fullmatch(
+        r"root-bootstrap-[0-9]{8}-[0-9]{6}-[0-9]+",
+        reservation_record["transaction"],
+    )
+    for arguments in (
+        ("x509", "-in", certificate, "-noout"),
+        ("pkey", "-in", key, "-noout"),
+    ):
+        verified = execute(
+            process_runner,
+            install,
+            install.runtime / "openssl",
+            *arguments,
+        )
+        assert verified.status == 0, verified.stderr
 
 
 @pytest.mark.parametrize(

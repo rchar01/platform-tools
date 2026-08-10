@@ -62,7 +62,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Deterministic recovery for interrupted host-local CSR signing.
 - [`../bin/platform-pki-certificate-export`](../bin/platform-pki-certificate-export): Exact immutable certificate-only CSR export publisher and resolver.
 - [`../bin/platform-pki-csr-candidate`](../bin/platform-pki-csr-candidate): Authenticated candidate verification, finalization, abandonment, and recovery state.
-- [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Root CA creation helper.
+- [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Python-backed schema-3 root CA transaction writer.
 - [`../bin/platform-pki-intermediate-create`](../bin/platform-pki-intermediate-create): Intermediate CA creation helper.
 - [`../bin/platform-pki-service-issue`](../bin/platform-pki-service-issue): Service certificate issuance helper.
 - [`../bin/platform-pki-service-renew`](../bin/platform-pki-service-renew): Service certificate renewal helper.

@@ -763,8 +763,6 @@ def _validate_root_bootstrap(
             sentinels=both,
         ),
     }
-    if stage is None and identities["stage_identity"] is not IdentitySentinel.NONE:
-        raise _semantic_error("root bootstrap stage identity has no stage path")
     return RootBootstrapRecoveryRecord(
         *_semantic_base(record, pki_dir, identities, paths), generation
     )
@@ -1263,7 +1261,11 @@ def _validate_rollover_prepare(
         raise _semantic_error("root rollover trust-source identity is missing")
     if stage_dir is None and identities["stage_identity"] is not IdentitySentinel.NONE:
         raise _semantic_error("rollover stage identity has no stage path")
-    if root_stage is None and identities["root_stage_identity"] is not IdentitySentinel.NONE:
+    if (
+        preparation_type is RolloverPreparationType.INTERMEDIATE
+        and root_stage is None
+        and identities["root_stage_identity"] is not IdentitySentinel.NONE
+    ):
         raise _semantic_error("rollover root-stage identity has no path")
 
     root_mutated = _boolean(record["root_mutated"], "root_mutated")
@@ -1398,16 +1400,21 @@ def _validate_rollover_prepare(
         "trust_snapshot_sha256",
     ):
         _digest(record[field], field, allow_none=True)
-    for identity_field, digest_field in (
-        ("candidate_root_cert_identity", "candidate_root_cert_sha256"),
-        (
-            "candidate_intermediate_cert_identity",
-            "candidate_intermediate_cert_sha256",
-        ),
-        ("candidate_chain_identity", "candidate_chain_sha256"),
-    ):
-        if (record[identity_field] == "none") != (record[digest_field] == "none"):
-            raise _semantic_error(f"rollover evidence {identity_field} is partial")
+    if identities["candidate_intermediate_identity"] is not IdentitySentinel.NONE:
+        for identity_field, digest_field in (
+            ("candidate_root_cert_identity", "candidate_root_cert_sha256"),
+            (
+                "candidate_intermediate_cert_identity",
+                "candidate_intermediate_cert_sha256",
+            ),
+            ("candidate_chain_identity", "candidate_chain_sha256"),
+        ):
+            if (record[identity_field] == "none") != (
+                record[digest_field] == "none"
+            ):
+                raise _semantic_error(
+                    f"rollover evidence {identity_field} is partial"
+                )
     for field in ("root_fingerprint", "intermediate_fingerprint"):
         _fingerprint(record[field], field, allow_none=True)
     for field in ("root_expiry", "intermediate_expiry"):
@@ -1661,6 +1668,30 @@ def serialize_recovery_rewrite(values: Mapping[str, str]) -> bytes:
     except UnicodeEncodeError:
         raise RecoveryRecordError("recovery rewrite contains a non-canonical value") from None
     parse_recovery_record(data)
+    return data
+
+
+def serialize_typed_recovery_rewrite(
+    values: Mapping[str, str],
+    *,
+    pki_dir: os.PathLike[str] | str,
+) -> bytes:
+    """Serialize and semantically validate one C-sorted recovery rewrite."""
+
+    if not isinstance(values, Mapping):
+        raise TypeError("recovery rewrite values must be a mapping")
+    pairs: list[tuple[str, str]] = []
+    for key, value in values.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RecoveryRecordError("recovery rewrite fields must be text")
+        pairs.append((key, value))
+    try:
+        data = _serialize_pairs(tuple(sorted(pairs)))
+    except UnicodeEncodeError:
+        raise RecoveryRecordError(
+            "recovery rewrite contains a non-canonical value"
+        ) from None
+    parse_recovery_semantics(data, pki_dir=pki_dir)
     return data
 
 

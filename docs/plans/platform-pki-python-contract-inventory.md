@@ -5,9 +5,13 @@
 Active incremental-migration contract. This inventory records the compatibility
 surface that the Python migration must preserve. Retained Bash source and
 existing tests remain the authoritative oracle until each command is cut over.
-The three Phase 3 read-oriented commands and all Phase 4 bounded-publication
+The three Phase 3 read-oriented commands, all Phase 4 bounded-publication
 commands (`platform-pki-init`, `platform-pki-inventory-install`, and
-`platform-pki-export-ansible`) are Python-backed.
+`platform-pki-export-ansible`), and the Phase 5 utility commands are
+Python-backed. Phase 6 has Python-backed compatibility and unified
+`root-create` routes plus unified `platform-pki ca-rollover recover`; the
+`platform-pki-ca-rollover` compatibility executable, intermediate writer, and
+other rollover leaves remain Bash.
 
 ## Runtime and Interfaces
 
@@ -277,7 +281,7 @@ or regenerated during migration.
 | Active/service issuer pair | implicit | `root`, `intermediate` | `pki_load_active_issuer_snapshot`, `pki_load_service_issuer_snapshot` |
 | Generation reservation | current shell format | exact record bytes | generation reservation helpers in `platform-pki-common.sh` |
 | Backup receipt | 2 | 14 fixed fields | `platform-pki-backup/src/root_command.sh` |
-| Root bootstrap journal | 3 | fixed | `platform-pki-root-create/src/root_command.sh` |
+| Root bootstrap journal | 3 | fixed | `src/platform_pki/root_create.py` and the frozen final-Bash oracle |
 | Intermediate bootstrap journal | 3 | fixed prefix, database-key groups, `committed` | `platform-pki-intermediate-create/src/root_command.sh` |
 | CSR request | 1 | `PKI_CSR_REQUEST_FIELDS` | `platform-pki-csr-sign.sh` |
 | CSR approval | 1 | `PKI_CSR_APPROVAL_FIELDS` | `platform-pki-csr-sign.sh` |
@@ -316,7 +320,20 @@ shape is one intermediate successful-copy checkpoint, not the complete family.
 Schema-5 typing now validates the complete declared field set, cumulative
 runtime-copy shapes, manifest triples, exact path relationships, typed identity
 sentinels, transaction-manifest rotation, and terminal marker/receipt bindings.
-Live filesystem-state validation and recovery mutations remain pending.
+The unified recovery route now binds those records to live filesystem state and
+performs identity-checked recovery mutations for legacy migration, root and
+intermediate bootstrap, rollover preparation, and receipt-bound terminal
+cleanup. It accepts all supported final-Bash states and also resumes an
+authenticated root-DB publication or restoration completed immediately before
+its pending journal rewrite; final Bash rejects that narrow post-mutation
+window. The final Bash compatibility executable remains the retained oracle and
+continues to handle direct `platform-pki-ca-rollover recover` invocations. The
+Python root writer preserves the fixed schema-3 writer order and exact
+reservation/bootstrap encodings. It requires ASCII PKI paths so every persisted
+path remains representable by the canonical recovery-record codec, and defers
+handled signals only across mutation-to-evidence assignments. Final-Bash and
+Python writer interruptions at every public root checkpoint are accepted by
+unified Python recovery.
 
 For initial migration, the following remain byte-identical:
 

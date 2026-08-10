@@ -88,6 +88,26 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   receipt publication is durable and no-clobber; post-archive receipt failures
   retain and report the exact archive rather than deleting publication
   evidence.
+- Changed `platform-pki-root-create` to use one Python 3.14 transaction writer
+  for its compatibility command and unified `platform-pki root-create` route.
+  It preserves schema-3 writer-order journals, reservation and bootstrap
+  records, generation allocation, lifecycle-through-root locking, OpenSSL
+  artifacts, fault checkpoints, output, statuses, and rollback semantics while
+  binding passphrases through inherited descriptors and publishing complete
+  authorities no-clobber. Handled signals are deferred across mutation-to-
+  evidence assignments, and both final-Bash and Python writer crash states are
+  recoverable by unified Python recovery at every writer checkpoint. PKI paths
+  persisted in recovery journals must be ASCII.
+- Changed the unified `platform-pki ca-rollover recover` route to use Python
+  recovery state machines for final-Bash legacy migration, root and intermediate
+  bootstrap, rollover preparation, and receipt-bound terminal cleanup. Exact
+  journal rewrites, identity-bound mutation, lock ordering, diagnostics, output,
+  and action switching remain compatible for states final Bash accepts. Python
+  also authenticates and resumes root-DB publication or restoration completed
+  immediately before a pending journal rewrite, where final Bash fails closed
+  and leaves recovery required. The `platform-pki-ca-rollover` compatibility
+  executable and its sibling leaves remain Bash during the incremental rollover
+  migration.
 - Separated the Bashly development image from a pinned Python 3.14 test image.
   `make container-check` now verifies generated artifacts and runs ShellCheck in
   the development image, then runs syntax checks, one complete pytest aggregate,

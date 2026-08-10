@@ -1,7 +1,8 @@
 import os
 import re
+import shlex
 import stat
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -57,6 +58,8 @@ PUBLIC_STATE_FILES = (
 REDACTED_STATE_FILES = (
     re.compile(rf"state/rollovers/{TRANSACTION_ID}/trust-consumers\.yml"),
 )
+PYTHON_RECOVER_MODE = "PLATFORM_PKI_TEST_PYTHON_RECOVER"
+ROLLOVER_WRAPPER = "PLATFORM_PKI_TEST_ROLLOVER_WRAPPER"
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,21 @@ def _workspace(root: Path) -> RolloverWorkspace:
         workspace.passphrase_file, "pytest-rollover-passphrase\n"
     )
     return workspace
+
+
+def _write_conditional_rollover_wrapper(
+    wrapper: Path, unified_tool: Path, compatibility_tool: Path
+) -> None:
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ ${1:-} == recover ]]; then\n"
+        f"  exec {shlex.quote(os.fspath(unified_tool))} ca-rollover \"$@\"\n"
+        "fi\n"
+        f"exec {shlex.quote(os.fspath(compatibility_tool))} \"$@\"\n",
+        encoding="ascii",
+    )
+    wrapper.chmod(0o755)
 
 
 def _validate_case_name(name: str) -> None:
@@ -234,8 +252,39 @@ def csr_workspace_seed_copy(
     return copy
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _conditional_rollover_wrapper(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[Path | None, None, None]:
+    if not os.environ.get(PYTHON_RECOVER_MODE):
+        yield None
+        return
+
+    repository = Path(__file__).resolve().parents[2]
+    bin_dir = repository / "bin"
+    wrapper_root = tmp_path_factory.mktemp("pki-rollover-wrapper")
+    wrapper_bin = wrapper_root / "bin"
+    wrapper_bin.mkdir(mode=0o700)
+    (wrapper_root / "lib").symlink_to(repository / "lib", target_is_directory=True)
+    wrapper = wrapper_bin / "platform-pki-ca-rollover"
+    _write_conditional_rollover_wrapper(
+        wrapper,
+        bin_dir / "platform-pki",
+        bin_dir / "platform-pki-ca-rollover",
+    )
+    previous = os.environ.get(ROLLOVER_WRAPPER)
+    os.environ[ROLLOVER_WRAPPER] = os.fspath(wrapper)
+    try:
+        yield wrapper
+    finally:
+        if previous is None:
+            os.environ.pop(ROLLOVER_WRAPPER, None)
+        else:
+            os.environ[ROLLOVER_WRAPPER] = previous
+
+
 @pytest.fixture(scope="session")
-def rollover_tools() -> RolloverTools:
+def rollover_tools(_conditional_rollover_wrapper: Path | None) -> RolloverTools:
     bin_dir = Path(__file__).resolve().parents[2] / "bin"
     return RolloverTools(
         init=bin_dir / "platform-pki-init",
@@ -243,7 +292,10 @@ def rollover_tools() -> RolloverTools:
         intermediate=bin_dir / "platform-pki-intermediate-create",
         issue=bin_dir / "platform-pki-service-issue",
         backup=bin_dir / "platform-pki-backup",
-        rollover=bin_dir / "platform-pki-ca-rollover",
+        rollover=(
+            _conditional_rollover_wrapper
+            or bin_dir / "platform-pki-ca-rollover"
+        ),
     )
 
 
