@@ -181,6 +181,68 @@ def test_directory_policy_and_expected_profiles(tmp_path: Path) -> None:
         OpenedDirectory(directory_path, policy=DirectoryPolicy(mode=0o755))
 
 
+def test_directory_open_allows_concurrent_child_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    real_open = filesystem._open_os
+    changed = False
+
+    def open_after_child_creation(path: str, flags: int, dir_fd: int | None = None) -> int:
+        nonlocal changed
+        if path == "target" and not changed:
+            (target / "child").write_bytes(b"created concurrently")
+            changed = True
+        return real_open(path, flags, dir_fd)
+
+    with OpenedDirectory(tmp_path) as parent:
+        monkeypatch.setattr(filesystem, "_open_os", open_after_child_creation)
+        with parent.open_directory("target"):
+            pass
+    assert changed
+
+
+@pytest.mark.parametrize("phase", ("before-open", "after-open"))
+def test_directory_open_rejects_same_name_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    target = tmp_path / "target"
+    moved = tmp_path / "moved"
+    target.mkdir()
+    original_inode = target.stat().st_ino
+    real_open = filesystem._open_os
+    real_fstat_identity = filesystem._fstat_identity
+    replaced = False
+
+    def replace_target() -> None:
+        nonlocal replaced
+        os.rename(target, moved)
+        target.mkdir()
+        replaced = True
+
+    def open_with_race(path: str, flags: int, dir_fd: int | None = None) -> int:
+        if phase == "before-open" and path == "target" and not replaced:
+            replace_target()
+        return real_open(path, flags, dir_fd)
+
+    def fstat_with_race(descriptor: int) -> FileIdentity:
+        identity = real_fstat_identity(descriptor)
+        if phase == "after-open" and identity.ino == original_inode and not replaced:
+            replace_target()
+        return identity
+
+    with OpenedDirectory(tmp_path) as parent:
+        monkeypatch.setattr(filesystem, "_open_os", open_with_race)
+        monkeypatch.setattr(filesystem, "_fstat_identity", fstat_with_race)
+        with pytest.raises(FilesystemIdentityError):
+            parent.open_directory("target")
+    assert replaced
+
+
 def test_opened_file_remains_bound_and_detects_path_replacement(tmp_path: Path) -> None:
     path = tmp_path / "value"
     replacement = tmp_path / "replacement"

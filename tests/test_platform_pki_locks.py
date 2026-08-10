@@ -268,19 +268,41 @@ def test_lock_replacement_races_fail_closed_and_release_opened_inode(
     assert _run_flock(path).returncode == 0
 
 
-def test_missing_file_creation_race_does_not_open_competing_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "kind",
+    ("valid-file", "malformed-file", "symlink", "directory"),
+)
+def test_missing_file_creation_race_does_not_open_competing_state(
+    tmp_path: Path,
+    kind: str,
+) -> None:
     pki = _pki(tmp_path)
     path = pki / "locks" / "lifecycle"
 
     def create(current: str) -> None:
         if current == "lock-lifecycle-after-stage-init":
-            path.write_bytes(b"competing")
-            path.chmod(0o600)
+            if kind == "valid-file":
+                path.write_bytes(b"competing")
+                path.chmod(0o600)
+            elif kind == "malformed-file":
+                path.write_bytes(b"unsafe")
+                path.chmod(0o644)
+            elif kind == "symlink":
+                path.symlink_to("missing")
+            else:
+                path.mkdir(mode=0o700)
 
-    with pytest.raises(LockAcquireError):
+    with pytest.raises(LockContentionError):
         with acquire_pki_locks(pki, "lifecycle", pause_hook=create):
             pass
-    assert path.read_bytes() == b"competing"
+    if kind == "valid-file":
+        assert path.read_bytes() == b"competing"
+    elif kind == "malformed-file":
+        assert path.read_bytes() == b"unsafe"
+    elif kind == "symlink":
+        assert path.is_symlink() and path.readlink() == Path("missing")
+    else:
+        assert path.is_dir() and not path.is_symlink()
 
 
 def test_anonymous_creation_has_no_replaceable_staging_path(

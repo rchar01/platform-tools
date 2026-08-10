@@ -258,7 +258,7 @@ test-pki-certificate-export:
 
 ## Run authenticated CSR candidate decision and recovery tests
 test-pki-csr-candidate:
-	python3 -m pytest tests/pki/test_csr_candidate.py
+	python3 -m pytest tests/pki/test_csr_candidate.py tests/pki/test_csr_finalization_recover.py
 
 ## Run PKI inventory value validation tests
 test-pki-inventory:
@@ -274,7 +274,7 @@ test-pki-csr-trust-install:
 
 ## Run authenticated host-local CSR signing and recovery tests
 test-pki-csr-signing:
-	python3 -m pytest tests/pki/test_csr_signing.py
+	python3 -m pytest tests/pki/test_csr_signing.py tests/pki/test_csr_signing_recover.py
 
 ## Run authoritative generation-aware CA rollover tests
 test-pki-ca-rollover: test-python-pki-rollover-parallel

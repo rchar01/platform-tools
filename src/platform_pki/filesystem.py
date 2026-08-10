@@ -432,7 +432,11 @@ def _bound_open_at(
     try:
         opened = _fstat_identity(descriptor)
         after = _stat_identity_raw(name, parent_fd)
-        if after is ABSENT or before != opened or opened != after:
+        if (
+            after is ABSENT
+            or _binding_identity(before) != _binding_identity(opened)
+            or _binding_identity(opened) != _binding_identity(after)
+        ):
             raise FilesystemIdentityError()
     except BaseException:
         _close_raw(descriptor)
@@ -454,7 +458,11 @@ def _bound_open_direct(path: str, kind: FileKind) -> tuple[int, FileIdentity]:
     try:
         opened = _fstat_identity(descriptor)
         after = _stat_identity_raw(path, None)
-        if after is ABSENT or before != opened or opened != after:
+        if (
+            after is ABSENT
+            or _binding_identity(before) != _binding_identity(opened)
+            or _binding_identity(opened) != _binding_identity(after)
+        ):
             raise FilesystemIdentityError()
     except BaseException:
         _close_raw(descriptor)

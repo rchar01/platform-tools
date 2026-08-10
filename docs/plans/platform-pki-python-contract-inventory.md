@@ -292,7 +292,7 @@ or regenerated during migration.
 | Deployment evidence | 1 | `PKI_CANDIDATE_DEPLOYMENT_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Active candidate pointer | 1 | `PKI_CANDIDATE_ACTIVE_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Candidate outcome | 1 | `PKI_CANDIDATE_DECISION_FIELDS` | `platform-pki-csr-candidate.sh` |
-| Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py`, checked against `PKI_CANDIDATE_JOURNAL_FIELDS` |
+| Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py` and non-public `src/platform_pki/csr_recover.py`, checked against `PKI_CANDIDATE_JOURNAL_FIELDS` |
 | Legacy migration journal | 2 | initial writer order; recovery may use sorted order | rollover migrate/recover sources |
 | Rollover preparation journal | 5 | C-locale key order | rollover prepare/recover sources |
 | Rollover prepared-state manifest | 1 | canonical key order | rollover prepare source |
@@ -338,13 +338,30 @@ unified Python recovery.
 CSR recovery field tuples are now authoritative in
 `src/platform_pki/csr_recovery.py` and are re-exported by the migration
 contract inventory. Source extraction from the retained shell declarations
-remains the independent oracle. The non-public layer parses the exact
-114-field signing journal and 82-field finalization journal, decodes every
-persisted identity according to its writer, and validates scalar, digest, path,
-database, source, and publication-phase relationships without reading or
-mutating live state. Commit `418d1fe` is the current final-Bash provenance
-baseline for this foundation tranche. Public CSR recovery dispatch and all
-recovery mutations remain in Bash.
+remains the independent oracle. The model parses the exact 114-field signing
+journal and 82-field finalization journal, decodes every persisted identity
+according to its writer, and validates scalar, digest, path, database, source,
+and publication-phase relationships. Commit `5026f65` is the final-Bash/model
+provenance baseline for the operational finalization tranche.
+
+The non-public `src/platform_pki/csr_recover.py` layer binds both models to live
+state through isolated test drivers. Finalization recovery performs bounded
+mode-600 single-link no-follow journal access, holds lifecycle through export
+locks, validates all 17 source files and retained transaction, trust, outcome,
+and active evidence before mutation, and resumes only journal-authorized
+publication and cleanup.
+
+Signing recovery holds lifecycle through inventory locks, permanently adopts or
+creates exact replay records, restores the seven CA database entries in reverse
+order before commit, freshly reauthorizes rollback immediately before mutation
+and evidence, and never rolls back or re-signs after commit. Complete branch
+preflight rejects hostile key, terminal, source, and publication state before
+branch mutation. Committed recovery authenticates the retained response trust
+and signing sources, signs through an inherited response-key descriptor only
+when needed, stages candidate and response trees before ordered no-clobber
+publication, and freshly rechecks committed database and source state in each
+publication authorization window. Public `csr-recover`, `cli.py`, and
+compatibility dispatch remain Bash-owned.
 
 The signing model names its authority path `journal_intermediate_dir` because
 it is derived from the journal, not discovered as the live active authority. A
@@ -393,8 +410,13 @@ For initial migration, the following remain byte-identical:
 - Post-commit recovery never rolls back or re-signs and resumes exact response
   publication.
 - Bash-written journals must be recoverable by Python.
-- The current Python implementation is structural/semantic foundation only; it
-  performs no recovery mutation and is not publicly dispatched.
+- Non-public Python recovery now terminalizes uncommitted requests after exact
+  reverse-order CA rollback and resumes committed response publication without
+  invoking CA signing again. The isolated subprocess suite covers every
+  final-Bash phase, Python recovery checkpoints, rollback and publication pause
+  races, hostile branch state, inherited response-key descriptors, and
+  field-aware Bash/Python terminal-state differentials.
+- The implementation is not publicly dispatched.
 
 ### Candidate finalization
 
@@ -402,16 +424,20 @@ For initial migration, the following remain byte-identical:
 - Tested crash checkpoints are `journal-written`, `outcome-published`, and
   `active-published`.
 - Every journal-bound source identity and digest is revalidated.
-- The current Python implementation models these contracts only; final Bash
-  remains authoritative for live validation, publication, and cleanup.
+- Non-public Python recovery now performs live validation, durable publication,
+  and identity-bound cleanup for candidate finalization only. Final-Bash and
+  Python recovery states are differentially tested for all three phases in both
+  active create and exchange modes.
+- Public dispatch remains Bash; the non-public signing and finalization
+  functions must not be treated as a complete `csr-recover` command.
 
 Before a future Python public recovery implementation mutates state, it must
 recheck the selected journal kind after operator confirmation and while holding
 the required locks. If signing/finalization journal presence would select a
 different kind than the one confirmed, recovery fails closed without switching
 protocols or mutating state. This post-confirmation journal-kind rule is
-approved for the operational tranche; it is intentionally not exposed by the
-current structural foundation.
+approved for the future public route; it is intentionally not exposed by the
+current test-only recovery functions.
 
 ### Legacy migration
 

@@ -332,7 +332,9 @@ def _publish_anonymous_lock(
                 dst_dir_fd=lock_directory.fileno(),
                 follow_symlinks=True,
             )
-    except OSError:
+    except OSError as error:
+        if error.errno == errno.EEXIST:
+            raise LockContentionError(name) from None
         raise LockAcquireError() from None
 
 
