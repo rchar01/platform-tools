@@ -31,6 +31,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/ca_rollover_recovery.py",
     "platform_pki/cli.py",
     "platform_pki/compat.py",
+    "platform_pki/csr_recovery.py",
     "platform_pki/custody_report.py",
     "platform_pki/errors.py",
     "platform_pki/export_ansible.py",

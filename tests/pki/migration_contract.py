@@ -18,6 +18,12 @@ from src.platform_pki.ca_rollover_recovery import (
     ROOT_BOOTSTRAP_WRITER_FIELDS as ROOT_BOOTSTRAP_JOURNAL_FIELDS,
     ROOT_DB_KEYS,
 )
+from src.platform_pki.csr_recovery import (
+    CANDIDATE_FINALIZATION_JOURNAL_FIELDS as CANDIDATE_JOURNAL_FIELDS,
+    CANDIDATE_SOURCE_KEYS,
+    CSR_DB_KEYS,
+    CSR_SIGNING_JOURNAL_FIELDS as CSR_JOURNAL_FIELDS,
+)
 from src.platform_pki.root_create import ROOT_FAULT_CHECKPOINTS, ROOT_FAULT_VARIABLES
 
 
@@ -736,9 +742,6 @@ PILOT_INSTALLED_ASSET_CONTRACTS = (
 )
 
 
-CSR_DB_KEYS = ("index", "index_attr", "serial", "index_old", "index_attr_old", "serial_old", "newcert")
-
-
 def _fields(value: str) -> tuple[str, ...]:
     return tuple(value.split())
 
@@ -752,30 +755,6 @@ CSR_APPROVAL_FIELDS = _fields("""
 schema request_id nonce created_epoch expires_epoch approver_principal
 request_sha256 csr_sha256 inventory_sha256 operation service target profile
 """)
-CSR_JOURNAL_FIELDS = _fields("""
-schema operation transaction phase committed recovery_step request_id nonce
-operation_kind service target requester_principal approver_principal
-response_principal request_sha256 approval_sha256 inventory_sha256 csr_sha256
-csr_spki_sha256 current_cert_sha256 created_epoch transaction_dir
-transaction_identity response_trust_path response_trust_identity
-response_trust_sha256 sensitive_key_path sensitive_key_identity
-sensitive_key_removed certificate_path certificate_identity certificate_sha256
-chain_path chain_identity chain_sha256 fullchain_path fullchain_identity
-fullchain_sha256 response_manifest_path response_manifest_identity
-response_manifest_sha256 response_signature_path response_signature_identity
-response_signature_sha256 candidate_stage candidate_stage_identity
-candidate_destination candidate_destination_identity response_stage
-response_stage_identity response_destination response_destination_identity
-replay_request_path replay_request_identity replay_request_sha256
-replay_nonce_path replay_nonce_identity replay_nonce_sha256
-""") + tuple(
-    f"db_{key}_{suffix}"
-    for key in CSR_DB_KEYS
-    for suffix in (
-        "path", "pre_identity", "source", "source_identity", "source_object",
-        "post_identity", "backup", "backup_identity",
-    )
-)
 CANDIDATE_RESPONSE_FIELDS = _fields("""
 schema request_id nonce operation service target request_sha256 approval_sha256
 inventory_sha256 csr_sha256 csr_spki_sha256 certificate_sha256
@@ -823,33 +802,6 @@ predecessor_response_sha256 predecessor_artifact_manifest_sha256
 predecessor_deployment_sha256 predecessor_decision_sha256
 resulting_active_request_id created_epoch
 """)
-CANDIDATE_SOURCE_KEYS = _fields("""
-candidate_candidate candidate_tls_crt candidate_ca_chain_crt
-candidate_fullchain_crt candidate_response candidate_response_sig
-response_tls_crt response_ca_chain_crt response_fullchain_crt
-response_response response_response_sig artifact_artifact artifact_tls_crt
-artifact_ca_chain_crt artifact_fullchain_crt artifact_response
-artifact_response_sig
-""")
-CANDIDATE_JOURNAL_FIELDS = _fields("""
-schema operation service request_id phase outcome_stage outcome_stage_identity
-outcome_destination outcome_destination_identity active_stage
-active_stage_identity active_destination active_pre_identity active_mode
-active_destination_identity active_pre_sha256 candidate_dir candidate_dir_identity
-response_dir response_dir_identity transaction_dir transaction_dir_identity
-response_trust_path response_trust_identity response_trust_sha256
-candidate_path candidate_identity candidate_sha256 artifact_dir
-artifact_dir_identity artifact_path artifact_identity artifact_sha256
-response_path response_identity response_sha256 response_signature_path
-response_signature_identity response_signature_sha256 deployment_sha256
-deployment_signature_sha256 deployers_sha256 decision_sha256 active_sha256
-outcome_deployment_identity outcome_deployment_signature_identity
-outcome_deployers_identity outcome_decision_identity
-""") + tuple(
-    f"source_{key}_{suffix}"
-    for key in CANDIDATE_SOURCE_KEYS
-    for suffix in ("identity", "sha256")
-)
 
 ACTIVE_ISSUER_FIELDS = ("root", "intermediate")
 GENERATION_RESERVATION_TRANSACTION_FIELDS = (

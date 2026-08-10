@@ -285,14 +285,14 @@ or regenerated during migration.
 | Intermediate bootstrap journal | 3 | fixed prefix, database-key groups, `committed` | `src/platform_pki/intermediate_create.py` |
 | CSR request | 1 | `PKI_CSR_REQUEST_FIELDS` | `platform-pki-csr-sign.sh` |
 | CSR approval | 1 | `PKI_CSR_APPROVAL_FIELDS` | `platform-pki-csr-sign.sh` |
-| CSR signing journal | 1 | `PKI_CSR_JOURNAL_FIELDS` | `platform-pki-csr-sign.sh` |
+| CSR signing journal | 1 | 114 fixed writer-order fields | `src/platform_pki/csr_recovery.py`, checked against `PKI_CSR_JOURNAL_FIELDS` |
 | CSR response | 1 | `PKI_CANDIDATE_RESPONSE_FIELDS` | `platform-pki-csr-candidate.sh` |
 | CSR candidate | 1 | `PKI_CANDIDATE_RECORD_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Export manifest | 1 | `PKI_CERTIFICATE_EXPORT_ARTIFACT_FIELDS` | certificate-export initializer |
 | Deployment evidence | 1 | `PKI_CANDIDATE_DEPLOYMENT_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Active candidate pointer | 1 | `PKI_CANDIDATE_ACTIVE_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Candidate outcome | 1 | `PKI_CANDIDATE_DECISION_FIELDS` | `platform-pki-csr-candidate.sh` |
-| Candidate finalization journal | 1 | `PKI_CANDIDATE_JOURNAL_FIELDS` | `platform-pki-csr-candidate.sh` |
+| Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py`, checked against `PKI_CANDIDATE_JOURNAL_FIELDS` |
 | Legacy migration journal | 2 | initial writer order; recovery may use sorted order | rollover migrate/recover sources |
 | Rollover preparation journal | 5 | C-locale key order | rollover prepare/recover sources |
 | Rollover prepared-state manifest | 1 | canonical key order | rollover prepare source |
@@ -335,6 +335,32 @@ handled signals only across mutation-to-evidence assignments. Final-Bash and
 Python writer interruptions at every public root checkpoint are accepted by
 unified Python recovery.
 
+CSR recovery field tuples are now authoritative in
+`src/platform_pki/csr_recovery.py` and are re-exported by the migration
+contract inventory. Source extraction from the retained shell declarations
+remains the independent oracle. The non-public layer parses the exact
+114-field signing journal and 82-field finalization journal, decodes every
+persisted identity according to its writer, and validates scalar, digest, path,
+database, source, and publication-phase relationships without reading or
+mutating live state. Commit `418d1fe` is the current final-Bash provenance
+baseline for this foundation tranche. Public CSR recovery dispatch and all
+recovery mutations remain in Bash.
+
+The signing model names its authority path `journal_intermediate_dir` because
+it is derived from the journal, not discovered as the live active authority. A
+caller may supply `active_intermediate_dir` to require an exact context match;
+the model itself does not claim that an unbound journal path is active. The
+pure signing model also enforces the exact durable checkpoint evidence matrix
+for replay records, transaction and trust snapshots, signing artifacts,
+sensitive-key removal, response signing, and artifact publication. It accepts
+the prior persisted checkpoint across mutation-before-checkpoint windows and
+the stage/destination identity rewrites that final Bash durably records before
+advancing the checkpoint; it makes no claim about corresponding live objects.
+The finalization model validates every source digest's canonical form and
+derives every source path, but only the candidate, artifact, response, and
+response signature fields have corresponding top-level evidence that can be
+cross-checked for equality.
+
 For initial migration, the following remain byte-identical:
 
 - Inventory canonical output.
@@ -367,6 +393,8 @@ For initial migration, the following remain byte-identical:
 - Post-commit recovery never rolls back or re-signs and resumes exact response
   publication.
 - Bash-written journals must be recoverable by Python.
+- The current Python implementation is structural/semantic foundation only; it
+  performs no recovery mutation and is not publicly dispatched.
 
 ### Candidate finalization
 
@@ -374,6 +402,16 @@ For initial migration, the following remain byte-identical:
 - Tested crash checkpoints are `journal-written`, `outcome-published`, and
   `active-published`.
 - Every journal-bound source identity and digest is revalidated.
+- The current Python implementation models these contracts only; final Bash
+  remains authoritative for live validation, publication, and cleanup.
+
+Before a future Python public recovery implementation mutates state, it must
+recheck the selected journal kind after operator confirmation and while holding
+the required locks. If signing/finalization journal presence would select a
+different kind than the one confirmed, recovery fails closed without switching
+protocols or mutating state. This post-confirmation journal-kind rule is
+approved for the operational tranche; it is intentionally not exposed by the
+current structural foundation.
 
 ### Legacy migration
 
