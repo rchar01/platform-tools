@@ -19,7 +19,6 @@ from .migration_harness import (
     snapshot_state,
 )
 from .support import (
-    BIN,
     assert_result,
     digest,
     environment,
@@ -34,7 +33,9 @@ pytestmark = pytest.mark.pki
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 DRIVER = REPOSITORY / "tests/pki/csr_signing_recover_driver.py"
-BASH_RECOVER = BIN / "platform-pki-csr-recover"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-recover"
+BASH_RECOVER = ORACLE_ROOT / "platform-pki-csr-recover"
+ORACLE_LIB = ORACLE_ROOT / "lib"
 REQUEST_ID = "0123456789abcdef0123456789abcdef"
 TRANSACTION = f"csr-{REQUEST_ID}"
 WRITER_CHECKPOINTS = (
@@ -590,7 +591,7 @@ def test_response_signing_key_replacement_is_detected_and_key_path_is_not_on_arg
         release.touch(mode=0o600)
         result = process.wait()
     assert result.status == 1, result
-    assert "key identity changed" in result.stderr
+    assert "Response signing key changed during signing" in result.stderr
     assert not (
         csr_workspace.pki / f"state/csr/candidates/external/{REQUEST_ID}"
     ).exists()
@@ -656,7 +657,10 @@ def test_final_bash_and_python_signing_recovery_have_equivalent_terminal_state(
                 command.extend(("--response-key", workspace.response_key))
             result = process_runner(
                 command,
-                env=isolated_environment,
+                env=environment(
+                    isolated_environment,
+                    PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB),
+                ),
                 timeout=120,
             )
         results.append(result)
@@ -788,8 +792,8 @@ def test_final_bash_and_python_signing_recovery_have_equivalent_terminal_state(
     assert bash_snapshot == python_snapshot
 
 
-def test_public_csr_recover_dispatch_remains_bash_owned() -> None:
-    assert "recover_signing" not in (
-        REPOSITORY / "src/platform_pki/cli.py"
-    ).read_text(encoding="ascii")
+def test_public_csr_recover_dispatch_is_python_owned() -> None:
+    source = (REPOSITORY / "src/platform_pki/cli.py").read_text(encoding="ascii")
+    assert "from .csr_recover import recover_csr" in source
+    assert "return recover_csr" in source
     assert BASH_RECOVER.read_bytes().startswith(b"#!/usr/bin/env bash\n")

@@ -1228,7 +1228,7 @@ def test_trusted_requester_cannot_claim_a_different_target(csr_workspace: CsrWor
     assert not (workspace.pki / "state/csr/replay/nonces" / ("ab" * 32)).exists()
 
 
-def test_recovery_reads_one_identity_checked_journal_descriptor(
+def test_recovery_does_not_use_external_stat_for_journal_identity(
     csr_workspace: CsrWorkspace, executable_directory: Path
 ) -> None:
     workspace = csr_workspace
@@ -1266,10 +1266,9 @@ exec "$REAL_STAT" "$@"
         ),
     )
 
-    assert recovered.status == 1
-    assert "CSR signing recovery journal identity changed while opening" in recovered.stderr
-    assert marker.is_file()
-    assert journal.is_file()
+    assert_result(recovered, 0)
+    assert not marker.exists()
+    assert not journal.exists()
     assert tree_snapshot(authority) == before
 
 

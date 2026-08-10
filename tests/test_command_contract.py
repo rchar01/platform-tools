@@ -13,6 +13,11 @@ from .pki.migration_contract import PKI_PARSER_ROUTES, ParserRouteContract
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text().strip()
 PTY_CAPTURE = ROOT / "tests/cli/pty-capture.py"
+CSR_RECOVER = ROOT / "bin/platform-pki-csr-recover"
+CSR_RECOVER_ORACLE = (
+    ROOT
+    / "tests/pki/oracles/platform-pki-csr-recover/platform-pki-csr-recover"
+)
 
 
 def make_variables(*names: str) -> dict[str, tuple[str, ...]]:
@@ -89,6 +94,32 @@ def assert_parser_error(result: ProcessResult) -> None:
     assert result.status == 1
     assert result.stdout == ""
     assert result.stderr
+
+
+def test_csr_recover_compatibility_help_matches_frozen_bash_oracle(
+    process_runner: Callable[..., ProcessResult], clean_env: dict[str, str]
+) -> None:
+    for command in (CSR_RECOVER, CSR_RECOVER_ORACLE):
+        assert command.is_file() and os.access(command, os.X_OK)
+    direct = [
+        run(process_runner, clean_env, command, "--help")
+        for command in (CSR_RECOVER, CSR_RECOVER_ORACLE)
+    ]
+    assert direct[0].status == direct[1].status == 0
+    assert direct[0].stdout == direct[1].stdout
+    assert direct[0].stderr == direct[1].stderr == ""
+    for no_color in (None, "1"):
+        current_env = dict(clean_env)
+        if no_color is not None:
+            current_env["NO_COLOR"] = no_color
+        tty = [
+            run(process_runner, current_env, "python3", PTY_CAPTURE, command, "--help")
+            for command in (CSR_RECOVER, CSR_RECOVER_ORACLE)
+        ]
+        assert tty[0].status == tty[1].status == 0
+        assert tty[0].stdout == tty[1].stdout
+        assert tty[0].stderr == tty[1].stderr == ""
+        assert ("\x1b" in tty[0].stdout) is (no_color is None)
 
 
 def pki_route_argv(route: ParserRouteContract) -> tuple[Path | str, ...]:

@@ -59,6 +59,7 @@ DEPENDENCIES = (
     "date",
     "gzip",
     "openssl",
+    "ssh-keygen",
     "tar",
     "cmp",
 )

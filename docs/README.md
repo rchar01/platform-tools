@@ -59,7 +59,7 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-pki`](../bin/platform-pki): Unified Python PKI migration interface with shared runtime, filesystem, fork-safe ordered advisory-lock, and bounded Linux durable-publication primitives; migrated operational routes run directly and later routes fail closed.
 - [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
 - [`../bin/platform-pki-csr-trust-install`](../bin/platform-pki-csr-trust-install): Strict public-trust installer for authenticated host-local CSR signing.
-- [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Deterministic recovery for interrupted host-local CSR signing.
+- [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Python-backed deterministic recovery for interrupted host-local CSR signing or candidate finalization.
 - [`../bin/platform-pki-certificate-export`](../bin/platform-pki-certificate-export): Exact immutable certificate-only CSR export publisher and resolver.
 - [`../bin/platform-pki-csr-candidate`](../bin/platform-pki-csr-candidate): Authenticated candidate verification, finalization, abandonment, and recovery state.
 - [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Python-backed schema-3 root CA transaction writer.

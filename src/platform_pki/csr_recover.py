@@ -25,6 +25,7 @@ from .csr_recovery import (
     SigningRecoveryStep,
     parse_finalization_journal,
     parse_signing_journal,
+    parse_signing_journal_structure,
     validate_signing_transaction_presence,
 )
 from .errors import ApplicationError
@@ -47,7 +48,10 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_pki_directory,
+    require_program,
+    resolve_paths,
 )
+from .parser import ParseResult
 from .persisted_identity import IdentitySentinel
 from .persisted_identity import serialize_directory_identity, serialize_file_identity
 from .publication import (
@@ -65,6 +69,7 @@ from .subprocesses import ProcessResult, run_process
 
 MAX_FINALIZATION_JOURNAL_BYTES = 1024 * 1024
 MAX_SIGNING_JOURNAL_BYTES = 1024 * 1024
+_TRANSACTION = re.compile(r"csr-[0-9a-f]{32}", re.ASCII)
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 _PRIVATE_DIRECTORY = DirectoryPolicy(owner=os.geteuid(), mode=0o700)
 _PRIVATE_FILE = FilePolicy(
@@ -772,6 +777,80 @@ def _remove_journal(
         parent.close()
 
 
+def _recover_finalization_locked(
+    path: str,
+    *,
+    transaction: str | None,
+    stream: TextIO,
+    fault_hook: FaultHook,
+    pause_hook: PauseHook,
+) -> int:
+    journal_path = f"{path}/state/csr/finalization-recovery-journal"
+
+    _require_compatible_operational_state(path)
+    control, record = _load_journal(journal_path, path)
+    expected_transaction = f"csr-{record['request_id']}"
+    if transaction is not None and transaction != expected_transaction:
+        _die("CSR recovery transaction does not match the finalization journal")
+
+    _validate_source_directories(record)
+    _validate_retained_transaction(record)
+    outcome = _validate_outcome_state(record)
+    active = _validate_active_state(record)
+    _validate_phase(record, outcome, active)
+    control.recheck()
+    _checkpoint("journal-written", fault_hook, pause_hook)
+
+    if record.phase is FinalizationPhase.PLANNED:
+        _publish_outcome(record, outcome, control, fault_hook, pause_hook)
+        published_outcome = _validate_outcome_state(record)
+        if not published_outcome.published:
+            _die("Published finalization outcome identity is inconsistent")
+        _checkpoint("outcome-before-evidence", fault_hook, pause_hook)
+        control.values["outcome_destination_identity"] = control.values[
+            "outcome_stage_identity"
+        ]
+        control.values["phase"] = FinalizationPhase.OUTCOME_PUBLISHED.value
+        _checkpoint("outcome-after-evidence", fault_hook, pause_hook)
+        _checkpoint("outcome-before-journal-rewrite", fault_hook, pause_hook)
+        control.write()
+        _checkpoint("outcome-after-journal-rewrite", fault_hook, pause_hook)
+        _checkpoint("outcome-published", fault_hook, pause_hook)
+
+    active = _validate_active_state(record)
+    if record.phase is not FinalizationPhase.ACTIVE_PUBLISHED:
+        _publish_active(record, active, control, fault_hook, pause_hook)
+    active_state = _object_state(
+        record.identity("active_stage_identity"), "active_stage_identity"
+    )
+    _sync_active(
+        record.path("active_destination"),
+        active_state,
+        record["active_sha256"],
+    )
+    if record.phase is not FinalizationPhase.ACTIVE_PUBLISHED:
+        _checkpoint("active-before-evidence", fault_hook, pause_hook)
+        control.values["active_destination_identity"] = control.values[
+            "active_stage_identity"
+        ]
+        control.values["phase"] = FinalizationPhase.ACTIVE_PUBLISHED.value
+        _checkpoint("active-after-evidence", fault_hook, pause_hook)
+        _checkpoint("active-before-journal-rewrite", fault_hook, pause_hook)
+        control.write()
+        _checkpoint("active-after-journal-rewrite", fault_hook, pause_hook)
+        _checkpoint("active-published", fault_hook, pause_hook)
+
+    _remove_old_active(record, control, fault_hook, pause_hook)
+    _remove_journal(control, fault_hook, pause_hook)
+    print(
+        "[OK] Recovered CSR candidate finalization: "
+        f"{record['service']}/{record['request_id']}",
+        file=stream,
+    )
+    stream.flush()
+    return 0
+
+
 def recover_finalization(
     pki_dir: os.PathLike[str] | str,
     *,
@@ -792,75 +871,17 @@ def recover_finalization(
         raise TypeError("transaction must be text or None")
     if not callable(fault_hook) or not callable(pause_hook):
         raise TypeError("recovery hooks must be callable")
-    environment = os.environ if environment is None else environment
     stream = sys.stdout if output is None else output
     require_pki_directory(path)
     prepare_control_state(path)
-    journal_path = f"{path}/state/csr/finalization-recovery-journal"
-
     with acquire_operational_locks(path, "export"):
-        _require_compatible_operational_state(path)
-        control, record = _load_journal(journal_path, path)
-        expected_transaction = f"csr-{record['request_id']}"
-        if transaction is not None and transaction != expected_transaction:
-            _die("CSR recovery transaction does not match the finalization journal")
-
-        _validate_source_directories(record)
-        _validate_retained_transaction(record)
-        outcome = _validate_outcome_state(record)
-        active = _validate_active_state(record)
-        _validate_phase(record, outcome, active)
-        control.recheck()
-        _checkpoint("journal-written", fault_hook, pause_hook)
-
-        if record.phase is FinalizationPhase.PLANNED:
-            _publish_outcome(record, outcome, control, fault_hook, pause_hook)
-            published_outcome = _validate_outcome_state(record)
-            if not published_outcome.published:
-                _die("Published finalization outcome identity is inconsistent")
-            _checkpoint("outcome-before-evidence", fault_hook, pause_hook)
-            control.values["outcome_destination_identity"] = control.values[
-                "outcome_stage_identity"
-            ]
-            control.values["phase"] = FinalizationPhase.OUTCOME_PUBLISHED.value
-            _checkpoint("outcome-after-evidence", fault_hook, pause_hook)
-            _checkpoint("outcome-before-journal-rewrite", fault_hook, pause_hook)
-            control.write()
-            _checkpoint("outcome-after-journal-rewrite", fault_hook, pause_hook)
-            _checkpoint("outcome-published", fault_hook, pause_hook)
-
-        active = _validate_active_state(record)
-        if record.phase is not FinalizationPhase.ACTIVE_PUBLISHED:
-            _publish_active(record, active, control, fault_hook, pause_hook)
-        active_state = _object_state(
-            record.identity("active_stage_identity"), "active_stage_identity"
+        return _recover_finalization_locked(
+            path,
+            transaction=transaction,
+            stream=stream,
+            fault_hook=fault_hook,
+            pause_hook=pause_hook,
         )
-        _sync_active(
-            record.path("active_destination"),
-            active_state,
-            record["active_sha256"],
-        )
-        if record.phase is not FinalizationPhase.ACTIVE_PUBLISHED:
-            _checkpoint("active-before-evidence", fault_hook, pause_hook)
-            control.values["active_destination_identity"] = control.values[
-                "active_stage_identity"
-            ]
-            control.values["phase"] = FinalizationPhase.ACTIVE_PUBLISHED.value
-            _checkpoint("active-after-evidence", fault_hook, pause_hook)
-            _checkpoint("active-before-journal-rewrite", fault_hook, pause_hook)
-            control.write()
-            _checkpoint("active-after-journal-rewrite", fault_hook, pause_hook)
-            _checkpoint("active-published", fault_hook, pause_hook)
-
-        _remove_old_active(record, control, fault_hook, pause_hook)
-        _remove_journal(control, fault_hook, pause_hook)
-        print(
-            "[OK] Recovered CSR candidate finalization: "
-            f"{record['service']}/{record['request_id']}",
-            file=stream,
-        )
-        stream.flush()
-    return 0
 
 
 def _publication_identity(result: object) -> FileIdentity:
@@ -957,6 +978,28 @@ def _load_signing_journal(
     except FilesystemError:
         _die("No safe CSR signing recovery journal exists")
     except CsrRecoveryError as error:
+        if str(error) == (
+            "CSR signing checkpoint evidence conflicts with its durable writer state"
+        ):
+            try:
+                structure = parse_signing_journal_structure(data)
+            except CsrRecoveryError:
+                structure = None
+            if structure is not None:
+                transaction = structure["transaction"]
+                expected_key = (
+                    f"{pki_dir}/state/csr/transactions/{transaction}"
+                    "/signing/private/intermediate-ca.key"
+                )
+                if (
+                    _TRANSACTION.fullmatch(transaction) is not None
+                    and structure["sensitive_key_path"] == expected_key
+                    and structure["sensitive_key_identity"] == "none"
+                    and os.path.lexists(expected_key)
+                ):
+                    _die(
+                        "Journaled CSR signing key copy has no recorded identity"
+                    )
         _die(str(error))
     assert identity is not None
     return (
@@ -1101,7 +1144,10 @@ def _ensure_replay_record(
     pause: PauseHook,
 ) -> tuple[FileIdentity, str]:
     digest = hashlib.sha256(content).hexdigest()
-    actual = _identity_or_absent(path, label)
+    try:
+        actual = identity_at(path)
+    except FilesystemError:
+        _die(f"{label} is unsafe")
     if actual is ABSENT:
         if expected is not IdentitySentinel.NONE:
             _die(f"{label} disappeared after its identity was journaled")
@@ -1117,7 +1163,13 @@ def _ensure_replay_record(
         finally:
             parent.close()
         _checkpoint(f"{checkpoint_name}-after-mutation", fault, pause)
-    if not isinstance(actual, FileIdentity):
+    if (
+        not isinstance(actual, FileIdentity)
+        or actual.kind != "regular"
+        or actual.uid != os.geteuid()
+        or actual.permissions != 0o600
+        or actual.links != 1
+    ):
         _die(f"{label} is unsafe")
     expected_identity = None if expected is IdentitySentinel.NONE else expected
     assert expected_identity is None or isinstance(expected_identity, FileIdentity)
@@ -1695,9 +1747,41 @@ def _preflight_signing_publication_paths(
         if not rename_window and not published:
             if stage_expected is IdentitySentinel.NONE:
                 if stage_actual is not ABSENT and not unjournaled_empty_stage:
-                    _die(f"Unowned CSR {kind} stage appeared")
+                    if isinstance(stage_actual, FileIdentity) and stage_actual.kind == "directory":
+                        expected_names = {
+                            "tls.crt",
+                            "ca-chain.crt",
+                            "fullchain.crt",
+                            "response",
+                            "response.sig",
+                        }
+                        if kind == "candidate":
+                            expected_names.add("candidate")
+                        names: frozenset[str] = frozenset()
+                        try:
+                            with OpenedDirectory(
+                                stage,
+                                policy=_PRIVATE_DIRECTORY,
+                                expected_identity=stage_actual.directory,
+                            ) as directory:
+                                names = _directory_entries(
+                                    directory, f"CSR {kind} artifact directory"
+                                )
+                        except FilesystemError:
+                            _die(f"CSR {kind} artifact directory is unsafe")
+                        if not names <= expected_names:
+                            _die(
+                                f"CSR {kind} artifact directory has unexpected or unsafe entries: {stage}"
+                            )
+                    _die(f"Unowned staged CSR {kind} artifact already exists")
             elif not _matches(stage_actual, stage_expected):
-                _die(f"CSR {kind} stage identity changed")
+                if (
+                    stage_actual is ABSENT
+                    and destination_expected is not IdentitySentinel.NONE
+                    and not _matches(destination_actual, destination_expected)
+                ):
+                    _die(f"Published CSR {kind} artifact identity changed")
+                _die(f"Staged CSR {kind} artifact identity changed")
             if destination_expected is IdentitySentinel.NONE:
                 if destination_actual is not ABSENT:
                     _die(f"Unowned CSR {kind} destination appeared")
@@ -1798,6 +1882,11 @@ def _verify_response_signature(
     trust_expected = record.identity("response_trust_identity")
     assert trust_path is not None and signature_path is not None
     assert isinstance(trust_expected, FileIdentity)
+    if not _matches(
+        _identity_or_absent(signature_path, "Journaled CSR response signature"),
+        signature_identity,
+    ):
+        _die("Journaled CSR response signature identity changed")
     try:
         with OpenedFile(
             trust_path,
@@ -1967,7 +2056,7 @@ def _ensure_response_signature(
                     _die("Response signing failed; recovery-required state is retained")
                 key.recheck()
         except FilesystemError:
-            _die("Response signing key identity changed during signing")
+            _die("Response signing key changed during signing")
         _checkpoint("response-signature-after-mutation", fault, pause)
         actual = _identity_or_absent(signature_path, "CSR response signature")
     if not isinstance(actual, FileIdentity):
@@ -2094,7 +2183,9 @@ def _preflight_artifact_contents(
                 else:
                     valid_names = names <= expected_members.keys()
                 if not valid_names:
-                    _die(f"CSR {kind} {location} has unexpected or missing entries")
+                    _die(
+                        f"CSR {kind} artifact directory has unexpected or unsafe entries: {path}"
+                    )
                 for name in names:
                     expected = expected_members[name]
                     data = b""
@@ -2104,6 +2195,8 @@ def _preflight_artifact_contents(
                     except FilesystemError:
                         _die(f"CSR {kind} {location} file is unsafe: {name}")
                     if data != expected:
+                        if kind == "candidate" and location == "destination" and name == "candidate":
+                            _die("Published CSR candidate record changed")
                         _die(f"CSR {kind} {location} file changed: {name}")
         except FilesystemError:
             _die(f"CSR {kind} {location} identity changed")
@@ -2488,6 +2581,84 @@ def _recover_committed_signing(
     stream.flush()
 
 
+def _recover_signing_locked(
+    path: str,
+    *,
+    transaction: str,
+    response_key: str | None,
+    environment: Mapping[str, str],
+    stream: TextIO,
+    fault_hook: FaultHook,
+    pause_hook: PauseHook,
+) -> int:
+    journal_path = f"{path}/state/csr/recovery-journal"
+
+    _require_compatible_signing_state(path)
+    root_dir, intermediate_dir = _load_active_signing_authority(path)
+    root_id = os.path.basename(root_dir)
+    intermediate_id = os.path.basename(intermediate_dir)
+    control, record = _load_signing_journal(
+        journal_path, path, intermediate_dir
+    )
+    if record["transaction"] != transaction:
+        _die("CSR recovery transaction does not match the journal")
+    transaction_path = record.path("transaction_dir")
+    assert transaction_path is not None
+    transaction_exists = (
+        _identity_or_absent(transaction_path, "CSR recovery transaction directory")
+        is not ABSENT
+    )
+    if not (
+        transaction_exists
+        and _recoverable_unowned_terminal_transaction(record, transaction_path)
+    ):
+        try:
+            validate_signing_transaction_presence(
+                record,
+                transaction_exists=transaction_exists,
+            )
+        except CsrRecoveryError as error:
+            if str(error) == "unowned CSR signing transaction directory appeared":
+                _die("Unowned CSR recovery transaction directory appeared")
+            _die(str(error))
+    expected_transaction = record.identity("transaction_identity")
+    if expected_transaction is not IdentitySentinel.NONE:
+        assert isinstance(expected_transaction, DirectoryIdentity)
+        try:
+            with OpenedDirectory(
+                transaction_path,
+                policy=_PRIVATE_DIRECTORY,
+                expected_identity=expected_transaction,
+            ):
+                pass
+        except FilesystemError:
+            _die("CSR recovery transaction directory identity changed")
+    if record.committed:
+        require_program("ssh-keygen", environment)
+    control.recheck()
+    _checkpoint("signing-journal-loaded", fault_hook, pause_hook)
+    record = _ensure_signing_replay(
+        record, control, fault_hook, pause_hook
+    )
+    if record.committed:
+        _recover_committed_signing(
+            record,
+            control,
+            root_id,
+            intermediate_id,
+            response_key,
+            environment,
+            stream,
+            fault_hook,
+            pause_hook,
+        )
+    else:
+        _recover_uncommitted_signing(
+            record, control, stream, fault_hook, pause_hook
+        )
+    return 0
+
+
 def recover_signing(
     pki_dir: os.PathLike[str] | str,
     *,
@@ -2515,66 +2686,100 @@ def recover_signing(
     stream = sys.stdout if output is None else output
     require_pki_directory(path)
     prepare_control_state(path)
-    journal_path = f"{path}/state/csr/recovery-journal"
-
     with acquire_operational_locks(path, "inventory"):
-        _require_compatible_signing_state(path)
-        root_dir, intermediate_dir = _load_active_signing_authority(path)
-        root_id = os.path.basename(root_dir)
-        intermediate_id = os.path.basename(intermediate_dir)
-        control, record = _load_signing_journal(
-            journal_path, path, intermediate_dir
+        return _recover_signing_locked(
+            path,
+            transaction=transaction,
+            response_key=response_key,
+            environment=environment,
+            stream=stream,
+            fault_hook=fault_hook,
+            pause_hook=pause_hook,
         )
-        if record["transaction"] != transaction:
-            _die("CSR recovery transaction does not match the journal")
-        transaction_path = record.path("transaction_dir")
-        assert transaction_path is not None
-        transaction_exists = (
-            _identity_or_absent(transaction_path, "CSR recovery transaction directory")
-            is not ABSENT
+
+
+def _journal_presence(pki_dir: str) -> tuple[bool, bool]:
+    return (
+        os.path.lexists(f"{pki_dir}/state/csr/recovery-journal"),
+        os.path.lexists(f"{pki_dir}/state/csr/finalization-recovery-journal"),
+    )
+
+
+def recover_csr(
+    arguments: ParseResult,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Dispatch public CSR recovery without changing protocols after confirmation."""
+
+    if not isinstance(arguments, ParseResult):
+        raise TypeError("arguments must be a ParseResult")
+    environment = os.environ if environment is None else environment
+    transaction = arguments.values.get("--transaction")
+    response_key = arguments.values.get("--response-key")
+    if transaction is not None and (
+        not isinstance(transaction, str) or _TRANSACTION.fullmatch(transaction) is None
+    ):
+        _die("CSR recovery transaction ID is invalid")
+    if response_key is not None and not isinstance(response_key, str):
+        raise TypeError("response key must be text or None")
+
+    paths = resolve_paths(arguments.values, environment)
+    require_pki_directory(paths.pki_dir)
+    selected = _journal_presence(paths.pki_dir)
+    if selected == (True, True):
+        _die("CSR recovery journal state is ambiguous")
+    if selected == (False, False):
+        _die("No CSR recovery journal exists")
+    finalization = selected[1]
+    if finalization:
+        if response_key is not None:
+            _die("--response-key is not accepted for candidate finalization recovery")
+        description = "candidate finalization"
+        profile = "export"
+    else:
+        if transaction is None:
+            _die("--transaction is required for CSR signing recovery")
+        description = transaction
+        profile = "inventory"
+
+    if "--yes" not in arguments.provided:
+        if not sys.stdin.isatty():
+            _die("CSR recovery requires a TTY or --yes")
+        print(
+            f"Type recover {description} to continue: ",
+            file=sys.stderr,
+            end="",
+            flush=True,
         )
-        if not (
-            transaction_exists
-            and _recoverable_unowned_terminal_transaction(record, transaction_path)
-        ):
-            validate_signing_transaction_presence(
-                record,
-                transaction_exists=transaction_exists,
+        confirmation = sys.stdin.readline().rstrip("\n")
+        if confirmation != f"recover {description}":
+            _die("CSR recovery confirmation did not match")
+
+    prepare_control_state(paths.pki_dir)
+    with acquire_operational_locks(paths.pki_dir, profile):
+        if _journal_presence(paths.pki_dir) != selected:
+            _die("CSR recovery journal state changed after confirmation")
+        if finalization:
+            fault, pause = recovery_hooks(environment)
+            return _recover_finalization_locked(
+                paths.pki_dir,
+                transaction=transaction,
+                stream=sys.stdout,
+                fault_hook=fault,
+                pause_hook=pause,
             )
-        expected_transaction = record.identity("transaction_identity")
-        if expected_transaction is not IdentitySentinel.NONE:
-            assert isinstance(expected_transaction, DirectoryIdentity)
-            try:
-                with OpenedDirectory(
-                    transaction_path,
-                    policy=_PRIVATE_DIRECTORY,
-                    expected_identity=expected_transaction,
-                ):
-                    pass
-            except FilesystemError:
-                _die("CSR recovery transaction directory identity changed")
-        control.recheck()
-        _checkpoint("signing-journal-loaded", fault_hook, pause_hook)
-        record = _ensure_signing_replay(
-            record, control, fault_hook, pause_hook
+        assert transaction is not None
+        fault, pause = signing_recovery_hooks(environment)
+        return _recover_signing_locked(
+            paths.pki_dir,
+            transaction=transaction,
+            response_key=response_key,
+            environment=environment,
+            stream=sys.stdout,
+            fault_hook=fault,
+            pause_hook=pause,
         )
-        if record.committed:
-            _recover_committed_signing(
-                record,
-                control,
-                root_id,
-                intermediate_id,
-                response_key,
-                environment,
-                stream,
-                fault_hook,
-                pause_hook,
-            )
-        else:
-            _recover_uncommitted_signing(
-                record, control, stream, fault_hook, pause_hook
-            )
-    return 0
 
 
 def recovery_hooks(environment: Mapping[str, str]) -> tuple[FaultHook, PauseHook]:

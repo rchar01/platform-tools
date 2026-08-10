@@ -5,21 +5,25 @@
 Phase 0 contract expansion remains in progress. Phases 1 through 5 are
 implemented. Phase 6 has Python-backed compatibility and unified `root-create`
 and `intermediate-create` routes plus unified
-`platform-pki ca-rollover recover`; direct rollover compatibility remains Bash.
+`platform-pki ca-rollover recover`; `csr-recover` compatibility and unified
+dispatch are also Python-backed. Direct rollover compatibility remains Bash.
 
 ## Goal
 
 Replace the PKI Bash implementations with one maintainable Python package while
-preserving the existing command interfaces, persisted state, security
-boundaries, and crash-recovery behavior. Add a unified `platform-pki` CLI as an
-additional interface.
+preserving persisted state, security boundaries, and crash-recovery behavior.
+Preserve existing command interfaces during incremental migration, then make
+the unified `platform-pki` CLI the only installed PKI executable in the next
+major release.
 
 ## Scope
 
 - Migrate all 18 existing `platform-pki-*` commands to shared Python code.
-- Preserve every existing executable name as a supported compatibility entry
-  point.
+- Preserve every existing executable name as a compatibility entry point until
+  all unified routes have migrated and passed acceptance.
 - Add a unified `platform-pki` command that dispatches to the same handlers.
+- Remove the `platform-pki-*` compatibility executables at the approved next
+  major-release boundary.
 - Preserve existing OpenSSL, OpenSSH, `age`, `tar`, GNU `mv`, and locking
   subprocess boundaries where they remain necessary.
 - Preserve existing inventory, policy, record, journal, manifest, state-tree,
@@ -32,7 +36,8 @@ additional interface.
 ## Non-Goals
 
 - Do not rewrite cryptographic operations with a Python cryptography library.
-- Do not remove or rename existing `platform-pki-*` commands.
+- Do not remove existing `platform-pki-*` commands before all unified routes
+  have migrated and the next major release is prepared.
 - Do not convert persisted `key=value` records or journals to JSON during this
   migration.
 - Do not migrate the six non-PKI Bashly tools as part of this work.
@@ -43,8 +48,10 @@ additional interface.
 
 ## Approved Decisions
 
-- Preserve all existing `platform-pki-*` executable names.
-- Add `platform-pki` as a new unified alias rather than a replacement.
+- Preserve all existing `platform-pki-*` executable names during incremental
+  migration.
+- Make `platform-pki` the sole installed PKI application in the next major
+  release after every route has migrated and passed final acceptance.
 - Python must recover supported interrupted transactions written by the final
   Bash implementation.
 - Recovery compatibility is forward-only: the previous Bash release is not
@@ -434,12 +441,15 @@ Tasks:
   models without changing public dispatch or recovery mutation.
 - [x] Add non-public candidate-finalization recovery with complete live evidence
   validation, monotonic resume-only publication, and isolated subprocess tests;
-  keep public `csr-recover` dispatch in Bash.
+  public `csr-recover` remained Bash until the later whole-command cutover.
 - [x] Add non-public signing recovery for every final-Bash phase with permanent
   replay consumption, exact reverse-order pre-commit rollback, no-resign
   post-commit publication, inherited response-key descriptors, restart
   checkpoints, hostile-state tests, and independent Bash/Python differentials.
-- [ ] Preserve lifecycle-through-operation locking and final source/state
+- [x] Cut compatibility and unified `csr-recover` dispatch over together with
+  exact confirmation, journal-kind-specific locking, and an under-lock
+  no-protocol-switch recheck.
+- [x] Preserve lifecycle-through-operation locking and final source/state
   rechecks.
 - [ ] Migrate each public command as a whole; do not dispatch custody modes to
   different implementation languages.
@@ -461,6 +471,25 @@ Validation gate:
   affected operation reads or mutates operational snapshots.
 - [ ] Successful, invalid, no-op, replay, signal, race, and recovery state trees
   match the frozen compatibility contract.
+
+CSR-recover checkpoint:
+
+- [x] The final Bash commit is
+  `0843c1c11b952aab39f5c95b5eced82989656eb3`.
+- [x] The frozen mode-755 executable SHA-256 is
+  `181528862958bf5a0810b3cae5c773b5f3d395c68226f2e2d17f019ad0757271`.
+- [x] Frozen mode-644 common, signing, and candidate library SHA-256 values are
+  `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`,
+  `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`,
+  and `ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f`.
+- [x] All retained signing and finalization differentials execute that frozen
+  oracle with its frozen libraries; final-Bash writer checkpoints remain
+  authoritative in the retained live shell writers.
+- [x] Compatibility and unified routes share one Python handler and preserve
+  parser, help, confirmation, diagnostics, output, and status contracts.
+- [x] Signing holds lifecycle through inventory; finalization holds lifecycle
+  through export. Selection is rechecked under lock and never switches after
+  confirmation.
 
 Root-create checkpoint:
 
@@ -507,13 +536,18 @@ Validation gate:
 
 ## Phase 8: Retire PKI Bash Implementations
 
-Goal: Remove obsolete PKI Bash code after all compatibility entry points use
-Python.
+Goal: Remove obsolete PKI Bash code and compatibility executables after all
+unified routes use Python and pass final acceptance.
 
 Tasks:
 
 - [ ] Remove migrated PKI commands from `SHELL_TOOLS` and `BASHLY_TOOLS`.
 - [ ] Add all Python-backed command names to the maintained Python inventory.
+- [ ] Remove all `platform-pki-*` compatibility launchers from the installed
+  tool inventory and retain only `platform-pki` at the next major-release
+  boundary.
+- [ ] Remove compatibility-name dispatch and update user-facing examples,
+  installed-tool tests, release notes, and upgrade guidance to unified routes.
 - [ ] Remove PKI Bashly workspaces only after the corresponding Python release
   has passed final acceptance.
 - [ ] Remove `lib/platform-pki-common.sh`, `lib/platform-pki-csr-sign.sh`, and
@@ -539,8 +573,11 @@ Maintained source and generated output use this repository layout:
 src/platform_pki/
 bin/platform-pki
 $INSTALL_DIR/platform-pki
-$INSTALL_DIR/platform-pki-*
 ```
+
+During incremental migration the repository also builds and installs
+`bin/platform-pki-*` compatibility launchers. They are intentionally absent
+from the final next-major layout above.
 
 Requirements:
 
@@ -572,6 +609,7 @@ Use independently deployable releases rather than one large cutover:
 | Utilities | Custody report, passphrase verification, and backup |
 | Transactions | Authority, service, CSR, export, and candidate workflows |
 | Rollover | Status, migration, preparation, and recovery |
+| Next major | Remove compatibility launchers and install only `platform-pki` |
 | Cleanup | Retire PKI Bash sources and libraries |
 
 Each release must document:
@@ -679,6 +717,7 @@ implementation.
 | 2026-08-10 | First behavior-neutral Python CSR recovery foundation tranche added. | `src/platform_pki/csr_recovery.py` freezes and types the 114-field signing and 82-field finalization journals, exact DB and source paths, identities, scalar and digest forms, phase coherence, durable signing-checkpoint evidence and publication-rewrite windows, and the top-level source-evidence bindings present in the finalization journal. Final Bash commit `418d1fe` is the current provenance baseline. This is non-public structural foundation only: public dispatch, live validation, mutation, and output remain unchanged. The future operational route must fail closed if its post-confirmation, under-lock journal-kind recheck differs from the kind the operator confirmed. The maintained foundation target passed 1,458 tests; final `make container-check` passed generated-artifact verification, ShellCheck, static checks, all 3,618 maintained tests, and the 10-test archive smoke. |
 | 2026-08-10 | Non-public Python candidate-finalization recovery implemented. | `src/platform_pki/csr_recover.py` loads the typed 82-field final-Bash journal through bounded private descriptor access, holds the lifecycle-through-export lock profile, authenticates every source and publication state before mutation, and resumes only durable outcome, active-pointer, superseded-pointer, and journal transitions. The isolated subprocess suite covers all final-Bash phases in create and exchange modes, every Python recovery checkpoint, mutation-before-journal windows, replacement/digest/ambiguity failures, strict journal policy, and six independently created Bash/Python terminal-state differentials. Public `csr-recover` remains Bash. The pinned candidate target passed 77 tests, the pinned foundation passed 1,464 tests, and static plus deterministic Python generation verification passed. |
 | 2026-08-10 | Non-public Python CSR signing recovery implemented. | `src/platform_pki/csr_recover.py` consumes exact replay evidence, restores all seven uncommitted CA database entries in reverse order, terminalizes failed requests without identity reuse, and resumes committed candidate-before-response publication without CA re-signing. Response signatures use pinned no-options Ed25519 trust and inherited key descriptors. The isolated suite covers all 18 final-Bash phases, restart checkpoints, fresh rollback and publication authorization races, complete branch preflight, descriptor and output secrecy, and field-aware Bash/Python terminal-state differentials. Public `csr-recover` remains Bash-owned. The pinned signing target passed 233 tests, the foundation passed 1,464 tests, and the candidate/finalization target passed 77 tests. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, all 3,824 maintained tests, and the 10-test archive smoke. |
+| 2026-08-10 | CSR recovery compatibility and unified dispatch migrated to Python. | Final Bash executable and libraries from `0843c1c11b952aab39f5c95b5eced82989656eb3` are frozen with exact hash and mode provenance. One public handler selects without parsing, confirms exactly, acquires only the selected inventory or export lock profile, and fails closed if journal presence changes under lock. Frozen-oracle differentials retain final-Bash writer evidence; public subprocess tests cover compatibility/unified dispatch, help/color, diagnostics, confirmation, ambiguous state, lock selection, and no-switch races. Focused signing passed 243 tests, candidate/finalization passed 77, foundation passed 1,465, command contract passed 478, and installed tools passed 175. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, all 3,834 maintained tests, the 252-test rollover suite, and the 10-test archive smoke. |
 
 ## Decision Log
 
@@ -696,4 +735,5 @@ implementation.
 | 2026-08-08 | Make package migration forward-only and do not add `doctor`. | Supported rollback would require exhaustive historical-state validation and a guarded package-replacement workflow; neither is needed when using older Bash releases with Python-written state is outside the supported model. |
 | 2026-08-09 | Pull the complete recover leaf ahead of Phase 6 authority writers. | A temporary leaf-level Bash/Python mix is approved and follows the Phase 7 leaf migration strategy; no public dispatch changes until the complete recovery leaf passes Bash-to-Python recovery acceptance. |
 | 2026-08-10 | Cut over only the unified rollover recovery route. | This exposes the accepted Python recovery state machines without changing the final-Bash compatibility executable or the migration, status, preparation, and authority-writer paths that still produce the recovered state. |
-| 2026-08-10 | Require a post-confirmation CSR journal-kind recheck before future Python recovery mutation. | Recovery must not switch between signing and candidate-finalization protocols after the operator confirms one kind; a changed selection under the required locks fails closed. This decision does not change the current Bash-dispatched public route. |
+| 2026-08-10 | Require a post-confirmation CSR journal-kind recheck before Python recovery mutation. | Recovery must not switch between signing and candidate-finalization protocols after the operator confirms one kind; a changed selection under the required locks fails closed. The public Python route now enforces this decision. |
+| 2026-08-10 | Remove `platform-pki-*` compatibility executables in the next major release. | Compatibility names remain available while routes migrate, but the completed migration will install only `platform-pki`; frozen Bash oracles remain test evidence rather than public launchers. This supersedes the 2026-08-07 decision to preserve compatibility names indefinitely. |

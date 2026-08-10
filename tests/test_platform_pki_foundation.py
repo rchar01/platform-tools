@@ -278,6 +278,7 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         ("ca-passphrase-verify",),
         ("backup",),
         ("custody-report",),
+        ("csr-recover",),
         ("list-expiry",),
         ("print-cert",),
         ("root-create",),
@@ -393,6 +394,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     operational_descriptions = {
         "init": "Create the local outside-Git PKI working directory",
         "inventory-install": "Install private-Git service inventory into local PKI state",
+        "csr-recover": "Recover an authenticated host-local CSR signing transaction",
         "list-expiry": "List expiry dates for generated service certificates",
         "print-cert": "Print readable details for a generated service certificate",
         "root-create": "Create the root CA key and certificate",
@@ -443,7 +445,11 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     )
     assert unavailable.status == 1
     assert unavailable.stdout == ""
-    if contract.unified_route in operational_descriptions:
+    if contract.unified_route == "csr-recover":
+        assert unavailable.stderr.startswith(
+            "[ERROR] PKI directory does not exist; run platform-pki-init first: "
+        )
+    elif contract.unified_route in operational_descriptions:
         assert unavailable.stderr == "[ERROR] platform-pki-common.sh not found\n"
     else:
         assert "not available in the Python foundation" in unavailable.stderr

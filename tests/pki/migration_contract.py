@@ -500,18 +500,18 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
     ),
     RuntimeOptionRelationship(
         ("csr-recover",), "conditional-required", "no candidate finalization journal exists",
-        ("--transaction",), "bashly/platform-pki-csr-recover/src/root_command.sh",
+        ("--transaction",), "src/platform_pki/csr_recover.py",
         "--transaction is required for CSR signing recovery",
     ),
     RuntimeOptionRelationship(
         ("csr-recover",), "conditional-conflict", "a candidate finalization journal exists",
-        ("--response-key",), "bashly/platform-pki-csr-recover/src/root_command.sh",
+        ("--response-key",), "src/platform_pki/csr_recover.py",
         "--response-key is not accepted for candidate finalization recovery",
     ),
     RuntimeOptionRelationship(
         ("csr-recover",), "confirmation", "--yes is absent",
-        ("--yes", "--transaction"), "bashly/platform-pki-csr-recover/src/root_command.sh",
-        '[[ $confirmation == "recover $RECOVERY_DESCRIPTION" ]]',
+        ("--yes", "--transaction"), "src/platform_pki/csr_recover.py",
+        'confirmation != f"recover {description}"',
     ),
     *(
         RuntimeOptionRelationship(
@@ -573,6 +573,7 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("inventory-install",), ("--private-repo", "--namespace", "--pki-dir"), "bashly/platform-pki-inventory-install/src/root_command.sh", "reject_repeated_options"),
     DuplicateOptionContract(("csr-trust-install",), ("--private-repo", "--namespace", "--pki-dir"), "bashly/platform-pki-csr-trust-install/src/root_command.sh"),
     DuplicateOptionContract(("csr-recover",), ("--transaction", "--response-key", "--namespace", "--pki-dir", "--yes"), "bashly/platform-pki-csr-recover/src/root_command.sh"),
+    DuplicateOptionContract(("csr-recover",), ("--transaction", "--response-key", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("certificate-export", "publish"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("certificate-export", "resolve"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("csr-candidate", "verify"), ("--request-id", "--format", "--namespace", "--pki-dir"), "bashly/platform-pki-csr-candidate/src/verify_command.sh"),
@@ -899,7 +900,7 @@ PERSISTED_RECORD_CONTRACTS = (
 
 
 _CA_RECOVERY = "bashly/platform-pki-ca-rollover/src/recover_command.sh"
-_CSR_RECOVERY = "bashly/platform-pki-csr-recover/src/root_command.sh"
+_CSR_RECOVERY = "src/platform_pki/csr_recover.py"
 
 RECOVERY_CONTRACTS = (
     RecoveryContract(
@@ -935,9 +936,9 @@ RECOVERY_CONTRACTS = (
         "lib/platform-pki-csr-sign.sh",
         ("rollback-pre-commit", "resume-post-commit"),
         (
-            ("route", _CSR_RECOVERY, "pki_csr_recover"),
-            ("rollback-pre-commit", "lib/platform-pki-csr-sign.sh", "pki_csr_rollback_uncommitted_ca"),
-            ("resume-post-commit", "lib/platform-pki-csr-sign.sh", "pki_csr_resume_committed"),
+            ("route", _CSR_RECOVERY, "_recover_signing_locked"),
+            ("rollback-pre-commit", _CSR_RECOVERY, "_recover_uncommitted_signing"),
+            ("resume-post-commit", _CSR_RECOVERY, "_recover_committed_signing"),
         ),
     ),
     RecoveryContract(
@@ -948,8 +949,8 @@ RECOVERY_CONTRACTS = (
         "lib/platform-pki-csr-candidate.sh",
         ("resume",),
         (
-            ("route", _CSR_RECOVERY, "pki_candidate_recover"),
-            ("resume", "lib/platform-pki-csr-candidate.sh", "pki_candidate_resume_finalization"),
+            ("route", _CSR_RECOVERY, "_recover_finalization_locked"),
+            ("resume", _CSR_RECOVERY, "_recover_finalization_locked"),
         ),
     ),
     RecoveryContract(

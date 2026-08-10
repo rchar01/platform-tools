@@ -13,6 +13,7 @@ from src.platform_pki.root_create import (
     _reservation_bytes,
 )
 from src.platform_pki import intermediate_create as intermediate_writer
+from src.platform_pki.parser import ROUTE_SPECS
 
 from .migration_contract import (
     ACTIVE_ISSUER_FIELDS,
@@ -385,6 +386,12 @@ def test_runtime_relationships_reference_live_routes_options_and_source_guards()
 
 def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
     for contract in PKI_DUPLICATE_OPTION_CONTRACTS:
+        if contract.function == "parser_reject_duplicates":
+            spec = ROUTE_SPECS[contract.route]
+            assert tuple(
+                option.name for option in spec.options if option.reject_duplicate
+            ) == contract.fields
+            continue
         source = _source(contract.source)
         if contract.function == "reject_repeated_options":
             match = re.search(r"for option in ((?:--[a-z0-9-]+ ?)+); do", source)
@@ -952,7 +959,7 @@ def test_certificate_export_duplicate_record_declarations_match_candidate_librar
 
 def test_recovery_contracts_match_authoritative_sources() -> None:
     recovery_routes = {
-        "platform-pki csr-recover": "bashly/platform-pki-csr-recover/src/root_command.sh",
+        "platform-pki csr-recover": "src/platform_pki/csr_recover.py",
         "platform-pki ca-rollover recover": "bashly/platform-pki-ca-rollover/src/recover_command.sh",
     }
     for contract in RECOVERY_CONTRACTS:

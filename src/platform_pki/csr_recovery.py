@@ -504,6 +504,15 @@ def _validate_signing_checkpoint_evidence(
             raise CsrRecoveryError(f"CSR signing {label} evidence is incomplete")
         return states.pop()
 
+    if phase is not SigningPhase.TERMINAL and recovery_step not in {
+        SigningRecoveryStep.PLANNED,
+        SigningRecoveryStep.REPLAY_RESERVED,
+        SigningRecoveryStep.TRANSACTION_STAGED,
+    } and not present("sensitive_key_identity"):
+        raise CsrRecoveryError(
+            "Journaled CSR signing key copy has no recorded identity"
+        )
+
     replay = uniform(
         (
             "replay_request_identity",
@@ -859,6 +868,13 @@ def parse_signing_journal(
         issued_serial = os.path.basename(newcert).removesuffix(".pem")
         _expect_pattern(issued_serial, _SERIAL, "db_newcert_path serial")
         index_path = record["db_index_path"]
+        if (
+            expected_intermediate is not None
+            and index_path != os.path.join(expected_intermediate, "index.txt")
+        ):
+            raise CsrRecoveryError(
+                "CSR recovery CA path is outside the active intermediate: index"
+            )
         journal_intermediate_dir = os.path.dirname(index_path)
         intermediate_parent = os.path.join(root, "authorities", "intermediates")
         relative = os.path.relpath(journal_intermediate_dir, intermediate_parent)

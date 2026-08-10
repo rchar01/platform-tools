@@ -40,7 +40,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
-| `platform-pki-csr-recover` | Recover an interrupted authenticated host-local CSR signing transaction. |
+| `platform-pki-csr-recover` | Recover an interrupted authenticated host-local CSR signing or candidate-finalization transaction. |
 | `platform-pki-certificate-export` | Publish or digest-pin one immutable, unfinalized certificate-only CSR export. |
 | `platform-pki-csr-candidate` | Verify, finalize, or abandon one exact authenticated host-local candidate. |
 | `platform-pki-root-create` | Create the root CA key and certificate. |
@@ -94,7 +94,7 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
+- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-csr-recover`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 

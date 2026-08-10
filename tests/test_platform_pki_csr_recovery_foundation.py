@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import stat
 from dataclasses import FrozenInstanceError
 from itertools import product
 from pathlib import Path
@@ -34,6 +37,14 @@ from src.platform_pki.persisted_identity import IdentitySentinel
 
 PKI_DIR = "/srv/platform/pki"
 ROOT = Path(__file__).resolve().parents[1]
+ORACLE_ROOT = ROOT / "tests/pki/oracles/platform-pki-csr-recover"
+ORACLE_COMMIT = "0843c1c11b952aab39f5c95b5eced82989656eb3"
+ORACLE_HASHES = {
+    "platform-pki-csr-recover": "181528862958bf5a0810b3cae5c773b5f3d395c68226f2e2d17f019ad0757271",
+    "lib/platform-pki-common.sh": "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f",
+    "lib/platform-pki-csr-sign.sh": "8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001",
+    "lib/platform-pki-csr-candidate.sh": "ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f",
+}
 DIGEST = "0" * 64
 DIRECTORY_IDENTITY = "1:2:1000:700:directory"
 FILE_IDENTITY = (
@@ -44,6 +55,27 @@ OBJECT_IDENTITY = "1:4:1000:600:1:1:regular file"
 FILE_DIRECTORY_IDENTITY = FILE_IDENTITY.rsplit(":", 1)[0] + ":directory"
 OBJECT_DIRECTORY_IDENTITY = OBJECT_IDENTITY.rsplit(":", 1)[0] + ":directory"
 OTHER_DIRECTORY_IDENTITY = "1:20:1000:700:directory"
+
+
+def test_frozen_csr_recovery_oracle_matches_provenance_and_modes() -> None:
+    plan = (ROOT / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert ORACLE_COMMIT in plan
+    assert {
+        path.relative_to(ORACLE_ROOT).as_posix()
+        for path in ORACLE_ROOT.rglob("*")
+    } == {"lib", *ORACLE_HASHES}
+    for relative, expected in ORACLE_HASHES.items():
+        path = ORACLE_ROOT / relative
+        assert path.is_file() and not path.is_symlink()
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if relative.startswith("lib/"):
+            assert mode == 0o644
+        else:
+            assert mode == 0o755
+            assert os.access(path, os.X_OK)
 
 
 def _payload(

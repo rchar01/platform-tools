@@ -78,6 +78,12 @@ This file gives a short, release-oriented view of what changed between versions.
   publication windows that Bash leaves recovery-required. The compatibility
   `platform-pki-ca-rollover` executable and other operational routes not yet
   migrated remain on Bash.
+- `platform-pki-csr-recover` and `platform-pki csr-recover` now share one Python
+  recovery handler. It preserves final-Bash signing and candidate-finalization
+  journals, exact confirmation and output contracts, pre-commit rollback,
+  permanent replay consumption, and post-commit resume-only publication. The
+  selected journal kind is rechecked under its exact lock profile after
+  confirmation and recovery fails closed rather than switching protocols.
 - Bashly generation and shell linting now use a dedicated development image,
   while Python 3.14 tests run in a separate pinned image with pytest 9.1.1 and
   pytest-xdist 3.8.0. The canonical container check still runs the complete test

@@ -23,6 +23,10 @@ def _handler(route: tuple[str, ...]):
         from .inventory_install import install_inventory
 
         return install_inventory
+    if route == ("csr-recover",):
+        from .csr_recover import recover_csr
+
+        return recover_csr
     if route == ("export-ansible",):
         from .export_ansible import export_ansible
 
@@ -134,6 +138,39 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "The namespace defaults to platform-infrastructure under the XDG\n"
             "configuration home. The PKI directory defaults to <namespace>/pki.\n"
             "--force never overwrites active inventory, CA keys, certificates, or database state.\n\n",
+            end="",
+        )
+        return
+    if route == ("csr-recover",) and not unified:
+        print(
+            f"{name} - Recover an authenticated host-local CSR signing transaction\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--transaction ID', '35')}\n"
+            "    Exact csr-<request-id> transaction\n\n"
+            f"  {_color('--response-key PATH', '35')}\n"
+            "    Trusted response-signing key when post-commit signing remains\n\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--yes', '35')}\n"
+            "    Confirm deterministic recovery without a TTY\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} --transaction csr-0123456789abcdef0123456789abcdef\n"
+            "  --response-key /secure/response_ed25519\n\n"
+            "Uncommitted recovery restores only exact partial CA publication and keeps the\n"
+            "request and nonce consumed. Committed recovery never rolls back or re-signs;\n"
+            "it resumes exact response and pending-candidate publication. Finalization\n"
+            "recovery resumes exact immutable-outcome and active-pointer publication from\n"
+            "its separate journal. A response key is used only for CSR signing recovery.\n\n",
             end="",
         )
         return

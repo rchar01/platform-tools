@@ -117,6 +117,13 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and leaves recovery required. The `platform-pki-ca-rollover` compatibility
   executable and its sibling leaves remain Bash during the incremental rollover
   migration.
+- Changed `platform-pki-csr-recover` and unified `platform-pki csr-recover` to
+  use one Python 3.14 handler for final-Bash signing and candidate-finalization
+  journals. It preserves exact parser, help, confirmation, output, replay,
+  rollback, and resume-only publication contracts. Journal selection occurs
+  before confirmation and is rechecked under the selected inventory or export
+  lock profile; missing, ambiguous, or changed state fails closed without
+  switching recovery protocols.
 - Separated the Bashly development image from a pinned Python 3.14 test image.
   `make container-check` now verifies generated artifacts and runs ShellCheck in
   the development image, then runs syntax checks, one complete pytest aggregate,

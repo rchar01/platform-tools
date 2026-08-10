@@ -17,7 +17,7 @@ from .migration_harness import (
     managed_openssl_dir_normalizer,
     snapshot_state,
 )
-from .support import BIN, assert_result, digest, environment, write_private
+from .support import assert_result, digest, environment, write_private
 from .test_csr_candidate import (
     CANDIDATE,
     REQUEST_ID,
@@ -33,7 +33,9 @@ pytestmark = pytest.mark.pki
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 DRIVER = REPOSITORY / "tests/pki/csr_finalization_recover_driver.py"
-BASH_RECOVER = BIN / "platform-pki-csr-recover"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-recover"
+BASH_RECOVER = ORACLE_ROOT / "platform-pki-csr-recover"
+ORACLE_LIB = ORACLE_ROOT / "lib"
 RENEWAL_ID = "2123456789abcdef0123456789abcdef"
 
 
@@ -624,7 +626,10 @@ def test_final_bash_and_python_recovery_have_equivalent_terminal_state(
         else:
             result = process_runner(
                 [BASH_RECOVER, "--namespace", workspace.namespace, "--yes"],
-                env=isolated_environment,
+                env=environment(
+                    isolated_environment,
+                    PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB),
+                ),
                 timeout=120,
             )
         results.append(result)
@@ -644,8 +649,5 @@ def test_final_bash_and_python_recovery_have_equivalent_terminal_state(
     ) == snapshot_state(python_root / "namespace/pki", (normalizer,))
 
 
-def test_public_csr_recover_dispatch_remains_bash_owned() -> None:
-    assert "csr_recover" not in (REPOSITORY / "src/platform_pki/cli.py").read_text(
-        encoding="ascii"
-    )
+def test_frozen_csr_recover_oracle_remains_bash_owned() -> None:
     assert BASH_RECOVER.read_bytes().startswith(b"#!/usr/bin/env bash\n")
