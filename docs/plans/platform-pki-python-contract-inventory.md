@@ -12,9 +12,11 @@ Python-backed. Phase 6 has Python-backed compatibility and unified
 `root-create`, `intermediate-create`, and `csr-recover` routes plus unified
 `platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
 compatibility executable and other rollover leaves remain Bash. Phase 6 also
-has a non-public operational recovery engine for future Python managed service
-issue/renew transactions and retained host-local record models, but both public
-service commands remain Bash and no managed service recovery route is exposed.
+has non-public forward journal transitions, exact planned publication, and
+operational recovery for future Python managed service issue/renew transactions
+plus retained host-local record models, but no Python service operation exists,
+both public service commands remain Bash, and no managed service recovery route
+is exposed.
 
 ## Runtime and Interfaces
 
@@ -642,6 +644,20 @@ For initial migration, the following remain byte-identical:
   pre/post-commit interruption, all declared recovery checkpoint applicability,
   mutation-boundary hostile replacement, secret-safe diagnostics, and the
   complete lifecycle-through-inventory lock profile.
+- Non-public writer infrastructure atomically publishes self-sized parser-valid
+  journals, records exact stage/backup/publication prefixes, defers handled
+  signals only across journal or object mutation-to-evidence assignments,
+  applies transaction-wide authenticated preflight and authenticated pre-state
+  replace/no-clobber policy, publishes created directories from exact empty
+  private stages whose identities are journaled before atomic rename, and
+  returns a committed journal accepted by shared cleanup-only recovery. Shared
+  recovery reconciles the exact staged or published inode and never adopts an
+  unbound same-mode destination. Writer and recovery carry that authenticated
+  directory identity, or the authenticated full file identity, through a final
+  destination recheck at the journal replacement boundary and serialize only
+  the carried identity. The writer does not invoke or hand off to recovery. It
+  does not yet perform managed transaction planning, file staging, backups,
+  OpenSSL orchestration, or host-local CSR signing.
 - Host-local service operations do not use this journal or recovery route.
 
 ### Legacy migration

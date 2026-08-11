@@ -7,7 +7,7 @@ import os
 import re
 import secrets
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import NoReturn, TextIO
 
@@ -35,6 +35,7 @@ from .operational import (
 from .persisted_identity import (
     IdentitySentinel,
     parse_file_identity,
+    serialize_directory_identity,
     serialize_file_identity,
     serialize_file_object_state,
 )
@@ -91,6 +92,7 @@ _JOURNAL_FILE = FilePolicy(
 
 _JOURNAL_REWRITE_LABELS = (
     "publication-reconcile",
+    "publication-directory-stage-discard",
     *(f"rollback-{key}-pending" for key in SERVICE_CONTINUITY_KEYS),
     *(f"rollback-{key}-evidence" for key in SERVICE_CONTINUITY_KEYS),
     "archive-root-restore-pending",
@@ -123,6 +125,9 @@ SERVICE_RECOVERY_CHECKPOINTS = (
     "archive-root-restore-after-mutation",
     "rollback-completion-before-mutation",
     "rollback-completion-after-mutation",
+    "publication-reconcile-before-evidence",
+    "publication-directory-stage-discard-before-mutation",
+    "publication-directory-stage-discard-after-mutation",
     "cleanup-archive-marker-before-mutation",
     "cleanup-archive-marker-after-mutation",
     "cleanup-stage-before-mutation",
@@ -312,9 +317,16 @@ class _Control:
         except FilesystemError:
             _die("Managed service recovery journal identity changed")
 
-    def write(self, label: str) -> ServiceTransaction:
+    def write(
+        self,
+        label: str,
+        *,
+        pre_rewrite_check: Callable[[], None] | None = None,
+    ) -> ServiceTransaction:
         if label not in _JOURNAL_REWRITE_LABELS:
             raise ValueError("unknown managed service journal rewrite label")
+        if pre_rewrite_check is not None and not callable(pre_rewrite_check):
+            raise TypeError("pre_rewrite_check must be callable or None")
         _checkpoint(f"{label}-before-journal-rewrite", self.fault, self.pause)
         self.recheck()
         parent, name = _parent(self.path)
@@ -346,6 +358,8 @@ class _Control:
                 ) as opened_stage:
                     if opened_stage.read(MAX_SERVICE_JOURNAL_BYTES) != data:
                         _die("Managed service recovery journal stage is inconsistent")
+                if pre_rewrite_check is not None:
+                    pre_rewrite_check()
                 result = replace_exact(
                     parent,
                     stage.name,
@@ -609,13 +623,15 @@ def _validate_file_state(
     return identity
 
 
-def _validate_destinations(record: ServiceTransaction) -> tuple[bool, bool]:
+def _validate_destinations(
+    record: ServiceTransaction,
+) -> tuple[FileIdentity | DirectoryIdentity | None, bool]:
     mutations = _mutation_map(record)
     published = int(record["published_count"])
     rolled = int(record["rollback_count"])
     rollback_order = managed_rollback_order(record.publication_order[:published])
     published_keys = record.publication_order[:published]
-    active_publication_completed = False
+    active_publication: FileIdentity | DirectoryIdentity | None = None
     active_rollback_completed = False
     failed_cleanup = (
         record.phase in {ServicePhase.CLEANING_UP, ServicePhase.TERMINAL}
@@ -727,7 +743,7 @@ def _validate_destinations(record: ServiceTransaction) -> tuple[bool, bool]:
             if isinstance(mutation.stage_object, FileObjectState):
                 post_matches = _same_expected(actual, mutation.stage_object)
                 if post_matches:
-                    _validate_file_state(
+                    active_publication = _validate_file_state(
                         mutation.destination,
                         mutation.stage_object,
                         mutation.stage_sha256 or "",
@@ -735,17 +751,10 @@ def _validate_destinations(record: ServiceTransaction) -> tuple[bool, bool]:
                     )
             elif isinstance(mutation.post_identity, DirectoryIdentity):
                 post_matches = _same_expected(actual, mutation.post_identity)
-            elif (
-                mutation.stage is None
-                and mutation.pre_identity is IdentitySentinel.ABSENT
-                and isinstance(actual, FileIdentity)
-                and actual.kind == "directory"
-                and actual.uid == _OWNER
-                and actual.permissions == SERVICE_TRANSACTION_DIRECTORY_MODE
-            ):
-                post_matches = True
+                if post_matches:
+                    active_publication = mutation.post_identity
             if post_matches:
-                active_publication_completed = True
+                assert active_publication is not None
 
         if rollback_pending and active_rollback_completed:
             continue
@@ -756,10 +765,10 @@ def _validate_destinations(record: ServiceTransaction) -> tuple[bool, bool]:
         if expected_kind == "post" and not post_matches:
             _die(f"Published service destination {key} identity changed")
         if expected_kind == "pre" and not pre_matches:
-            if not (publication_pending and active_publication_completed):
+            if not (publication_pending and active_publication is not None):
                 _die(f"Original service destination {key} identity changed")
 
-    return active_publication_completed, active_rollback_completed
+    return active_publication, active_rollback_completed
 
 
 def _directory_entries(directory: OpenedDirectory, label: str) -> frozenset[str]:
@@ -769,6 +778,26 @@ def _directory_entries(directory: OpenedDirectory, label: str) -> frozenset[str]
         return names
     except (OSError, FilesystemError):
         _die(f"{label} has unsafe entries")
+
+
+def _pending_directory_stage(
+    record: ServiceTransaction,
+) -> tuple[ServiceMutation, str, DirectoryIdentity] | None:
+    if (
+        record.phase is not ServicePhase.PUBLISHING
+        or record["checkpoint"] != "publication-pending"
+    ):
+        return None
+    mutation = _mutation_map(record)[record["mutation"]]
+    if mutation.stage is not None or not isinstance(
+        mutation.post_identity, DirectoryIdentity
+    ):
+        return None
+    return (
+        mutation,
+        os.path.join(record["stage_dir"], mutation.key),
+        mutation.post_identity,
+    )
 
 
 def _validate_private_tree(
@@ -802,6 +831,7 @@ def _validate_private_tree(
     try:
         mutations = _mutation_map(record)
         if stage:
+            pending_directory = _pending_directory_stage(record)
             all_mutations = {
                 mutation.key: mutation
                 for mutation in record.mutations
@@ -821,8 +851,31 @@ def _validate_private_tree(
                 key = record["mutation"]
                 allowed[key] = all_mutations[key]
             root_names = _directory_entries(root, "Managed service stage")
-            if not root_names <= {*allowed, "inputs"}:
+            allowed_names = {*allowed, "inputs"}
+            if pending_directory is not None:
+                allowed_names.add(pending_directory[0].key)
+            if not root_names <= allowed_names:
                 _die("Managed service stage has unexpected entries")
+            if pending_directory is not None:
+                pending_mutation, _pending_path, pending_identity = pending_directory
+                if pending_mutation.key in root_names:
+                    try:
+                        pending = root.open_directory(
+                            pending_mutation.key,
+                            policy=_PRIVATE_DIRECTORY,
+                            expected_identity=pending_identity,
+                        )
+                    except FilesystemError:
+                        _die("Managed service directory stage identity changed")
+                    try:
+                        if _directory_entries(
+                            pending, "Managed service directory stage"
+                        ):
+                            _die("Managed service directory stage is not empty")
+                    finally:
+                        pending.close()
+                    if active_publication_completed:
+                        _die("Managed service directory stage reappeared after publication")
             inputs_expected = _directory_identity(
                 record.identity("inputs_dir_identity"), "inputs_dir_identity"
             )
@@ -873,6 +926,11 @@ def _validate_private_tree(
             if active_publication_completed:
                 consumed.add(record["mutation"])
             for name in root_names - {"inputs"}:
+                if (
+                    pending_directory is not None
+                    and name == pending_directory[0].key
+                ):
+                    continue
                 mutation = allowed[name]
                 if isinstance(mutation.stage_identity, FileIdentity):
                     _read_exact_file(
@@ -957,45 +1015,116 @@ def _validate_unrecorded_private_file(path: str, label: str) -> FileIdentity:
     raise AssertionError("unreachable")
 
 
-def _preflight(record: ServiceTransaction) -> tuple[bool, bool]:
+def _preflight(
+    record: ServiceTransaction,
+) -> tuple[FileIdentity | DirectoryIdentity | None, bool]:
     _validate_active_authority(record)
     _validate_retained_evidence(record)
     _validate_signing_inputs(record)
-    publication_completed, rollback_completed = _validate_destinations(record)
+    publication, rollback_completed = _validate_destinations(record)
     _validate_private_tree(
         record,
         stage=True,
-        active_publication_completed=publication_completed,
+        active_publication_completed=publication is not None,
         active_rollback_completed=rollback_completed,
     )
     _validate_private_tree(
         record,
         stage=False,
-        active_publication_completed=publication_completed,
+        active_publication_completed=publication is not None,
         active_rollback_completed=rollback_completed,
     )
-    return publication_completed, rollback_completed
+    return publication, rollback_completed
+
+
+def validate_service_writer_publication_preflight(
+    record: ServiceTransaction,
+) -> None:
+    """Authenticate one exact unapplied forward-publication boundary."""
+
+    published = int(record["published_count"])
+    if (
+        record.phase is not ServicePhase.PUBLISHING
+        or record["checkpoint"] != "publication-pending"
+        or published >= len(record.publication_order)
+        or record["mutation"] != record.publication_order[published]
+        or record["committed"] != "false"
+        or record.recovery_mode is not ServiceRecoveryMode.ROLLBACK
+        or record.outcome is not ServiceOutcome.NONE
+        or record["rollback_count"] != "0"
+        or record["rollback_completion_count"] != "0"
+    ):
+        _die("Managed service writer is not at a forward publication boundary")
+    _require_compatible_state(record.pki_dir)
+    publication, rollback_completed = _preflight(record)
+    if publication is not None or rollback_completed:
+        _die("Managed service publication boundary was already applied")
+    pending_directory = _pending_directory_stage(record)
+    if pending_directory is not None:
+        mutation, path, expected = pending_directory
+        actual = _actual(path, "Managed service directory stage")
+        if not _same_expected(actual, expected):
+            _die("Managed service directory stage identity changed")
+        try:
+            with OpenedDirectory(
+                path,
+                policy=_PRIVATE_DIRECTORY,
+                expected_identity=expected,
+            ) as opened:
+                if _directory_entries(opened, "Managed service directory stage"):
+                    _die("Managed service directory stage is not empty")
+        except FilesystemError:
+            _die(f"Managed service directory stage {mutation.key} is unsafe")
 
 
 def _record_post_identity(
     control: _Control,
     record: ServiceTransaction,
     key: str,
-) -> None:
+    published: FileIdentity | DirectoryIdentity,
+) -> Callable[[], None]:
     mutation = _mutation_map(record)[key]
-    actual = _actual(mutation.destination, f"Published service destination {key}")
-    if not isinstance(actual, FileIdentity):
-        _die(f"Published service destination {key} is absent")
+    _checkpoint(
+        "publication-reconcile-before-evidence",
+        control.fault,
+        control.pause,
+    )
+    control.recheck()
+
+    def recheck_publication() -> None:
+        if isinstance(published, DirectoryIdentity):
+            actual = _validate_directory(
+                mutation.destination,
+                published,
+                f"Published service destination {key}",
+            )
+            if actual.directory != published:
+                _die(f"Published service destination {key} identity changed")
+            return
+        actual = _validate_file_state(
+            mutation.destination,
+            published,
+            mutation.stage_sha256 or "",
+            f"Published service destination {key}",
+        )
+        if actual != published:
+            _die(f"Published service destination {key} identity changed")
+
+    recheck_publication()
     if mutation.stage is None:
-        control.values[f"{key}_post_identity"] = (
-            f"{actual.dev}:{actual.ino}:{actual.uid}:"
-            f"{actual.permissions:o}:directory"
+        if not isinstance(published, DirectoryIdentity):
+            raise AssertionError("directory publication lacks authenticated identity")
+        control.values[f"{key}_post_identity"] = serialize_directory_identity(
+            published
         )
     else:
-        control.values[f"{key}_post_identity"] = serialize_file_identity(actual)
+        if not isinstance(published, FileIdentity):
+            raise AssertionError("file publication lacks authenticated identity")
+        control.values[f"{key}_post_identity"] = serialize_file_identity(published)
         control.values[f"{key}_post_sha256"] = mutation.stage_sha256 or "none"
     control.values["published_count"] = str(int(record["published_count"]) + 1)
     control.values["checkpoint"] = "publication-done"
+    return recheck_publication
 
 
 def _record_rollback_identity(
@@ -1021,16 +1150,49 @@ def _record_rollback_identity(
 def _reconcile_pending_window(
     control: _Control,
     record: ServiceTransaction,
-    publication_completed: bool,
+    publication: FileIdentity | DirectoryIdentity | None,
     rollback_completed: bool,
 ) -> ServiceTransaction:
-    if publication_completed:
-        _record_post_identity(control, record, record["mutation"])
-        return control.write("publication-reconcile")
+    if publication is not None:
+        recheck = _record_post_identity(
+            control,
+            record,
+            record["mutation"],
+            publication,
+        )
+        return control.write(
+            "publication-reconcile",
+            pre_rewrite_check=recheck,
+        )
     if rollback_completed:
         key = record["mutation"]
         _record_rollback_identity(control, record, key)
         return control.write(f"rollback-{key}-evidence")
+    pending_directory = _pending_directory_stage(record)
+    if pending_directory is not None:
+        mutation, path, expected = pending_directory
+        actual = _actual(path, "Managed service directory stage")
+        if actual is not ABSENT:
+            if not _same_expected(actual, expected):
+                _die("Managed service directory stage identity changed")
+            _checkpoint(
+                "publication-directory-stage-discard-before-mutation",
+                control.fault,
+                control.pause,
+            )
+            control.recheck()
+            _remove_empty_directory(
+                path,
+                expected,
+                f"Managed service directory stage {mutation.key}",
+            )
+            _checkpoint(
+                "publication-directory-stage-discard-after-mutation",
+                control.fault,
+                control.pause,
+            )
+        control.values[f"{mutation.key}_post_identity"] = "none"
+        return control.write("publication-directory-stage-discard")
     if (
         record.phase is ServicePhase.ROLLING_BACK
         and record["checkpoint"] == "archive-root-restore-pending"
@@ -1944,12 +2106,12 @@ def _recover_service_locked(
     if record["transaction_dir"] != expected_dir:
         _die("Managed service transaction directory is outside its contract")
     _checkpoint("journal-loaded", fault_hook, pause_hook)
-    publication_completed, rollback_completed = _preflight(record)
+    publication, rollback_completed = _preflight(record)
     control.recheck()
     record = _reconcile_pending_window(
         control,
         record,
-        publication_completed,
+        publication,
         rollback_completed,
     )
     if record["committed"] == "true":

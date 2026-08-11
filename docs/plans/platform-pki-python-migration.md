@@ -7,8 +7,10 @@ implemented. Phase 6 has Python-backed compatibility and unified `root-create`
 and `intermediate-create` routes plus unified
 `platform-pki ca-rollover recover`; `csr-recover` compatibility and unified
 dispatch are also Python-backed. Direct rollover compatibility remains Bash.
-Managed service issue/renew now have a behavior-neutral typed Python foundation;
-both public service commands and their compatibility ownership remain Bash.
+Managed service issue/renew now have a behavior-neutral typed Python foundation,
+non-public forward journal transitions and exact planned publication, and
+non-public operational recovery; the Python service operations do not exist yet
+and both public service commands and their compatibility ownership remain Bash.
 
 ## Goal
 
@@ -549,6 +551,21 @@ Managed service foundation checkpoint:
   and use exact publication primitives. Same-name replacements are preserved;
   absence or retained bytes without authenticated resulting identity fail
   closed with the unresolved journal retained.
+- [x] Add a non-public managed writer engine with atomic self-sized journal
+  creation and rewrites, exact stage/backup/publication prefixes, deferred
+  handled signals only across mutation-to-evidence assignments,
+  transaction-wide authenticated publication preflight, authenticated
+  replace/no-clobber publication, identity-journaled empty private directory
+  stages, durable verification/commit transitions, and a committed journal
+  accepted by shared cleanup-only recovery. Directory creation uses atomic
+  no-clobber rename, and recovery reconciles only the exact staged or published
+  inode rather than adopting a same-mode destination. Publication evidence
+  carries the authenticated directory or full file identity through a final
+  destination recheck at the journal replacement boundary; neither writer nor
+  recovery serializes a fresh path observation. Commit returns that journal;
+  the writer does not invoke or hand off to recovery. This is writer
+  infrastructure only; managed planning, file staging, backups, OpenSSL
+  orchestration, and the host-local writer remain unimplemented.
 - [ ] Add exact public confirmation and unified-only dispatch only after the
   Python issue/renew writers, forward publication and verification, and final
   cutover acceptance are complete.

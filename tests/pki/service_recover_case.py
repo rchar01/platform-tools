@@ -121,6 +121,7 @@ def build_service_recovery_case(
     backed_up_count: int | None = None,
     published: int | None = None,
     publication_pending: bool = False,
+    directory_stage_pending: bool = False,
     committed: bool = False,
 ) -> ServiceRecoveryCase:
     if sum(
@@ -130,6 +131,8 @@ def build_service_recovery_case(
         raise ValueError("only one incomplete transaction prefix may be selected")
     if publication_pending and (published is None or committed):
         raise ValueError("publication_pending requires an uncommitted prefix")
+    if directory_stage_pending and not publication_pending:
+        raise ValueError("directory_stage_pending requires publication_pending")
     pki = root / "pki"
     pki.mkdir(mode=0o700)
     values = _service_values(
@@ -400,14 +403,21 @@ def build_service_recovery_case(
         if committed or published == -1
         else (published or 0)
     )
+    if directory_stage_pending and f"{order[count]}_stage" in values:
+        raise ValueError("directory_stage_pending requires a directory mutation")
     mutation_count = count + (1 if publication_pending else 0)
-    for key in order[:mutation_count]:
+    for index, key in enumerate(order[:mutation_count]):
         destination = Path(values[f"{key}_destination"])
         if f"{key}_stage" not in values:
-            destination.mkdir(parents=True, exist_ok=False, mode=0o700)
-            destination.chmod(0o700)
+            target = (
+                Path(values["stage_dir"]) / key
+                if directory_stage_pending and index == count
+                else destination
+            )
+            target.mkdir(parents=True, exist_ok=False, mode=0o700)
+            target.chmod(0o700)
             values[f"{key}_post_identity"] = serialize_directory_identity(
-                _identity(destination).directory
+                _identity(target).directory
             )
         else:
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -428,8 +438,8 @@ def build_service_recovery_case(
         )
     elif publication_pending:
         key = order[count]
-        values[f"{key}_post_identity"] = "none"
         if f"{key}_post_sha256" in values:
+            values[f"{key}_post_identity"] = "none"
             values[f"{key}_post_sha256"] = "none"
         values.update(
             phase="publishing",

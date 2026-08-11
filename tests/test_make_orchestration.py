@@ -28,6 +28,7 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-pki-service-issue",
     "test-pki-service-renew",
     "test-pki-service-recover",
+    "test-pki-service-writer",
     "test-pki-print-cert",
     "test-pki-list-expiry",
     "test-pki-service-verify",

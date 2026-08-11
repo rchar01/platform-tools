@@ -2674,6 +2674,28 @@ def test_every_legal_issue_publication_and_verification_checkpoint_round_trips()
         _parse_values(values)
 
 
+def test_pending_created_directory_may_bind_exact_private_stage_identity() -> None:
+    values = _service_values(existing_service_directories=())
+    key = _order(values)[0]
+    assert key == "service_root"
+    values[f"{key}_post_identity"] = _directory_identity(90)
+    values.update(
+        phase="publishing",
+        checkpoint="publication-pending",
+        mutation=key,
+    )
+
+    journal = _parse_values(values)
+
+    assert isinstance(journal.mutations[0].post_identity, DirectoryIdentity)
+
+    values["checkpoint"] = "planned"
+    values["phase"] = "planned"
+    values["mutation"] = "none"
+    with pytest.raises(ServiceTransactionError, match="post identities"):
+        _parse_values(values)
+
+
 def test_every_reverse_rollback_checkpoint_accepts_only_exact_restoration() -> None:
     order = _order(_service_values())
     for published in range(1, len(order) + 1):

@@ -52,6 +52,9 @@ CHECKPOINT_SCENARIOS = {
     "renew-publication-window": (
         "Renewal reconciliation reaches publication-window journal points."
     ),
+    "issue-directory-stage-window": (
+        "Issue recovery discards an exact unpublished private directory stage."
+    ),
     "renew-postcommit": (
         "Committed renewal reaches cleanup-start and archive-marker cleanup points."
     ),
@@ -353,6 +356,126 @@ def test_recovery_reconciles_every_publication_mutation_window(
     _assert_private_control_final(case, "failed-pre-commit")
 
 
+def test_recovery_discards_exact_unpublished_directory_stage(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    case = build_service_recovery_case(
+        tmp_path,
+        existing_service_directories=(),
+        published=0,
+        publication_pending=True,
+        directory_stage_pending=True,
+    )
+    stage = Path(case.values["stage_dir"]) / "service_root"
+
+    result = _run(process_runner, case)
+
+    assert_result(result, 0, stderr="")
+    assert not stage.exists()
+    _assert_original_destinations(case)
+    _assert_private_control_final(case, "failed-pre-commit")
+
+
+@pytest.mark.parametrize("kind", ("directory", "file"))
+@pytest.mark.parametrize(
+    "point",
+    (
+        "publication-reconcile-before-evidence",
+        "publication-reconcile-before-journal-rewrite",
+    ),
+)
+def test_publication_reconciliation_rejects_replacement_after_preflight(
+    tmp_path: Path,
+    process_starter: Callable[..., ManagedProcess],
+    process_runner: Callable[..., ProcessResult],
+    kind: str,
+    point: str,
+) -> None:
+    case = build_service_recovery_case(
+        tmp_path,
+        existing_service_directories=() if kind == "directory" else SERVICE_CONTAINER_ORDER,
+        published=0,
+        publication_pending=True,
+    )
+    record = _record(case)
+    key = record.publication_order[0]
+    destination = Path(case.values[f"{key}_destination"])
+    next_destination = Path(case.values[f"{record.publication_order[1]}_destination"])
+    next_before = identity_at(next_destination)
+    process, release = _start_paused(
+        process_starter,
+        case,
+        tmp_path,
+        point,
+    )
+    displaced = tmp_path / f"authenticated-{key}"
+    if kind == "directory":
+        os.replace(destination, displaced)
+        destination.mkdir(mode=0o700)
+    else:
+        replacement = tmp_path / f"replacement-{key}"
+        shutil.copy2(destination, replacement)
+        os.replace(destination, displaced)
+        os.replace(replacement, destination)
+    replacement = _live_file(destination)
+    release.write_bytes(b"release\n")
+
+    result = process.wait()
+
+    assert result.status == 1, result
+    assert _live_file(destination) == replacement
+    assert displaced.exists()
+    assert identity_at(next_destination) == next_before
+    assert _record(case)["published_count"] == "0"
+    assert (case.pki / "state/service/recovery-journal").is_file()
+
+    repeated = _run(process_runner, case)
+    assert repeated.status == 1, repeated
+    assert _live_file(destination) == replacement
+    assert displaced.exists()
+    assert identity_at(next_destination) == next_before
+    assert (case.pki / "state/service/recovery-journal").is_file()
+
+
+@pytest.mark.parametrize("kind", ("directory", "file"))
+@pytest.mark.parametrize(
+    "point",
+    (
+        "publication-reconcile-before-evidence",
+        "publication-reconcile-before-journal-rewrite",
+    ),
+)
+def test_publication_reconciliation_restarts_from_authenticated_identity(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    kind: str,
+    point: str,
+) -> None:
+    case = build_service_recovery_case(
+        tmp_path,
+        existing_service_directories=() if kind == "directory" else SERVICE_CONTAINER_ORDER,
+        published=0,
+        publication_pending=True,
+    )
+
+    crashed = _run(
+        process_runner,
+        case,
+        env=environment(
+            os.environ,
+            PLATFORM_PKI_SERVICE_RECOVER_CRASH_AT=point,
+        ),
+    )
+    assert crashed.status == 128 + signal.SIGKILL, crashed
+
+    recovered = _run(process_runner, case)
+
+    assert_result(recovered, 0, stderr="")
+    _assert_original_destinations(case)
+    _assert_private_control_final(case, "failed-pre-commit")
+
+
 def test_every_recovery_checkpoint_has_a_documented_applicable_scenario(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
@@ -384,6 +507,14 @@ def test_every_recovery_checkpoint_has_a_documented_applicable_scenario(
                 root,
                 published=3,
                 publication_pending=True,
+            )
+        elif name == "issue-directory-stage-window":
+            case = build_service_recovery_case(
+                root,
+                existing_service_directories=(),
+                published=0,
+                publication_pending=True,
+                directory_stage_pending=True,
             )
         else:
             assert name == "renew-postcommit"
@@ -425,6 +556,10 @@ def test_every_recovery_checkpoint_has_a_documented_applicable_scenario(
     assert "publication-reconcile-before-journal-rewrite" in observed[
         "renew-publication-window"
     ]
+    assert {
+        "publication-directory-stage-discard-before-mutation",
+        "publication-directory-stage-discard-after-journal-rewrite",
+    } <= observed["issue-directory-stage-window"]
     assert {
         "cleanup-start-before-journal-rewrite",
         "cleanup-archive-marker-before-mutation",

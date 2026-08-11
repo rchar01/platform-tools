@@ -2085,8 +2085,25 @@ def parse_service_transaction(
         raise ServiceTransactionError(
             "service transaction publication precedes completed preparation"
         )
-    post_presence = tuple(mutation_by_key[key].post_identity is not IdentitySentinel.NONE for key in publication_order)
-    if post_presence != tuple(index < published for index in range(len(publication_order))):
+    pending_directory_stage = (
+        phase is ServicePhase.PUBLISHING
+        and record["checkpoint"] == "publication-pending"
+        and published < len(publication_order)
+        and record["mutation"] == publication_order[published]
+        and mutation_by_key[publication_order[published]].stage is None
+        and isinstance(
+            mutation_by_key[publication_order[published]].post_identity,
+            DirectoryIdentity,
+        )
+    )
+    post_presence = tuple(
+        mutation_by_key[key].post_identity is not IdentitySentinel.NONE
+        for key in publication_order
+    )
+    if post_presence != tuple(
+        index < published or (pending_directory_stage and index == published)
+        for index in range(len(publication_order))
+    ):
         raise ServiceTransactionError("service transaction post identities are not the published prefix")
     if phase in {
         ServicePhase.COMMITTED,
