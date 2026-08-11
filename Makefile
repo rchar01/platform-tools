@@ -294,7 +294,17 @@ test-pki-certificate-export:
 
 ## Run authenticated CSR candidate decision and recovery tests
 test-pki-csr-candidate:
-	python3 -m pytest tests/pki/test_csr_candidate.py tests/pki/test_csr_finalization_recover.py
+	@workers=$${PKI_PYTEST_WORKERS-}; \
+	case "$$workers" in \
+		1|2|3|4) ;; \
+		*) printf '%s\n' 'PKI_PYTEST_WORKERS must be an integer from 1 through 4' >&2; exit 2 ;; \
+	esac; \
+	python3 -c 'import xdist' >/dev/null 2>&1 || { \
+		printf '%s\n' 'pytest-xdist is required; use ./scripts/in-test-container' >&2; \
+		exit 2; \
+	}
+	python3 -m pytest -n "$$PKI_PYTEST_WORKERS" --dist load --durations=20 \
+		tests/pki/test_csr_candidate.py tests/pki/test_csr_finalization_recover.py
 
 ## Run PKI inventory value validation tests
 test-pki-inventory:

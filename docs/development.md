@@ -73,6 +73,13 @@ sequential phases. The prior combined serial target took 449.50 seconds for 42
 cases; these measurements are diagnostic observations, not performance
 guarantees.
 
+`make test-pki-csr-candidate` directly collects its candidate and finalization
+recovery modules with bounded `PKI_PYTEST_WORKERS` and pytest `--dist load`. In
+the pinned test image on 2026-08-11, the 77-test target took 169.203 seconds of
+wall time with four workers, compared with 748.21 seconds serially: a 4.42x
+speedup and 77.4% wall-time reduction. These measurements are diagnostic
+observations, not performance guarantees.
+
 The CSR signing, certificate-export, candidate, and schema-2 trust-install
 suites create one immutable PKI seed per pytest process. Every test receives a
 metadata-preserving private copy with its managed OpenSSL paths rebased and
