@@ -15,6 +15,9 @@ compatibility executable and other rollover leaves remain Bash. Managed and
 host-local service issue now share one public Python handler, and exact managed
 transaction recovery is exposed only through unified `service-recover`.
 `platform-pki-service-renew` remains Bash-owned.
+Non-public Python managed and host-local renewal writers now exercise the
+accepted service and CSR transaction/recovery models, including recursive
+schema-2 predecessor authentication, but no renewal route dispatches to them.
 
 ## Runtime and Interfaces
 
@@ -693,8 +696,29 @@ For initial migration, the following remain byte-identical:
   verification, and verifies the published certificate's exact subject,
   issuer, serial, P-384 key, SHA-384 signature, extension set and criticality,
   SAN set, key identifiers, and planned validity duration.
-- Managed renew planning and orchestration are not implemented. No managed
-  service operation or recovery route is public yet.
+- Managed renew planning and orchestration are implemented only through
+  non-public test entry points, with whole-command differentials against the
+  current Bash-owned renewal command. Public managed issue and unified-only
+  recovery are Python-backed, but no renewal route dispatches to Python yet.
+- Host-local renewal treats outcome-path presence as untrusted: only a strict
+  finalized outcome in the authenticated current chain or an exact abandoned
+  outcome whose resulting predecessor belongs to that chain can suppress a
+  pending-candidate conflict. Before replay reservation it enumerates the exact
+  namespace-wide retained candidate and outcome coordinates in bounded sorted
+  service/request order, resolves every service through current inventory, and
+  rejects every pending candidate regardless of predecessor plus orphan,
+  malformed, unsafe, ambiguous, or active-history-conflicting outcomes. Every
+  terminal must resolve to a non-`none` request in the current authenticated
+  chain, so abandoned issue and migration outcomes cannot satisfy renewal
+  admission. All terminal sources survive a final identity and content recheck
+  before journal creation and every CA publication boundary.
+- Historical signer trust has one explicit external root: the exact installed
+  schema-2 five-file tree under `inventory/csr-trust`. Historical request and
+  approval signatures verify directly against its requester and approver files;
+  retained response and deployer signer files must byte-match their installed
+  counterparts before response or deployment signature verification. The
+  installed policy pins the approval and response principals, and the complete
+  trust tree participates in the returned final source recheck.
 - Host-local service operations do not use this journal or recovery route.
 
 ### Legacy migration

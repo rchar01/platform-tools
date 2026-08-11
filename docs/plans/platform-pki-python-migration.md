@@ -572,8 +572,7 @@ Managed service foundation checkpoint:
   source-race, verification-failure, key create/reuse/rotation, days-precedence,
   invalid-state, and Bash/Python semantic differential cases exercise the real
   subprocess path. Unauthenticated post-mutation stage/backup windows remain
-  fail-closed with retained evidence by design. Managed renew orchestration and
-  public service dispatch remain unimplemented.
+  fail-closed with retained evidence by design.
 - [x] Close managed-issue bootstrap and verification gaps with a durable
   pre-tree reservation, immutable transaction-named bootstrap history, exact
   recovery retry across issue and recovery crashes, authoritative terminal
@@ -585,8 +584,25 @@ Managed service foundation checkpoint:
 - [x] Freeze the final Bash service-issue executable and loaded libraries from
   `6a7f162240c9970cf9a17091d9b37c8dea071ad8`; keep managed and host-local
   Bash/Python writer differentials pinned to that oracle.
-- [ ] Freeze final Bash service-renew assets and add Bash/Python writer
-  differentials immediately before its whole-command cutover.
+- [x] Add non-public managed renewal planning/orchestration and host-local
+  renewal writing on the accepted service and 114-field CSR transaction
+  foundations. Managed renewal binds sparse displaced archive sources and exact
+  rollback/cleanup state; host-local renewal authenticates recursive finalized
+  schema-2 predecessor history and treats a retained candidate as resolved only
+  after its exact immutable terminal outcome, transaction, replay, trust,
+  deployment, export, and predecessor evidence authenticate under current
+  inventory and the exact installed schema-2 five-file trust root before replay
+  reservation. Admission scans bounded sorted service/request coordinates
+  globally, so any pending candidate or orphan, malformed, unsafe, ambiguous,
+  or conflicting outcome blocks replay independent of predecessor. Every
+  terminal must resolve to a non-`none` request in the current authenticated
+  chain; abandoned issue or migration outcomes do not satisfy renewal
+  admission. Retained request and approval signatures verify against that root,
+  while retained response and deployer trust copies must byte-match it.
+- [x] Add whole-command Bash/Python managed and host-local renewal
+  differentials against the current Bash-owned command.
+- [ ] Freeze final Bash service-renew assets and repin the differentials
+  immediately before public parser/dispatch cutover.
 
 Root-create checkpoint:
 

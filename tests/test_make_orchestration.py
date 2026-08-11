@@ -29,6 +29,7 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-pki-service-issue-writer",
     "test-pki-csr-issue-writer",
     "test-pki-service-renew",
+    "test-pki-service-renew-writer",
     "test-pki-service-recover",
     "test-pki-service-writer",
     "test-pki-print-cert",
@@ -240,6 +241,71 @@ def test_standalone_rollover_rejects_invalid_workers_before_xdist(
     assert result.status == 2
     assert "PKI_PYTEST_WORKERS must be an integer from 1 through 4" in result.stderr
     assert "pytest-xdist is required" not in result.stderr
+
+
+def _fake_pytest_python(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    fake = tmp_path / "python3"
+    log = tmp_path / "python.log"
+    fake.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == -c ]]; then
+  exit 0
+fi
+printf '%s\n' "$*" >>"$PYTHON_TEST_LOG"
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path}{os.pathsep}{env['PATH']}"
+    env["PYTHON_TEST_LOG"] = str(log)
+    return log, env
+
+
+def test_service_renew_writer_runs_managed_serial_then_host_local_bounded(
+    tmp_path: Path, process_runner
+) -> None:
+    log, env = _fake_pytest_python(tmp_path)
+
+    result = process_runner(
+        [
+            "make",
+            "--no-print-directory",
+            "test-pki-service-renew-writer",
+            "PKI_PYTEST_WORKERS=3",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.status == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "-m pytest --durations=20 tests/pki/test_service_renew_writer.py",
+        "-m pytest -n 3 --dist load --durations=20 tests/pki/test_csr_renew_writer.py",
+    ]
+
+
+@pytest.mark.parametrize("value", ["", "0", "5", "auto"])
+def test_service_renew_writer_rejects_invalid_workers_before_tests(
+    tmp_path: Path, process_runner, value: str
+) -> None:
+    log, env = _fake_pytest_python(tmp_path)
+
+    result = process_runner(
+        [
+            "make",
+            "--no-print-directory",
+            "test-pki-service-renew-writer",
+            f"PKI_PYTEST_WORKERS={value}",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.status == 2
+    assert "PKI_PYTEST_WORKERS must be an integer from 1 through 4" in result.stderr
+    assert not log.exists()
 
 
 @pytest.mark.parametrize(

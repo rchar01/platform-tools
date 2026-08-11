@@ -1,4 +1,4 @@
-"""Managed and host-local service issuance orchestration."""
+"""Managed and host-local service issue and renewal orchestration."""
 
 from __future__ import annotations
 
@@ -12,13 +12,20 @@ import shutil
 import signal
 import sys
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import FrameType
 from typing import NoReturn, TextIO, cast
 
 from .ca_passphrase_verify import _fresh_descriptor, _open_passphrase
+from .csr_history import (
+    CsrHistoryError,
+    CsrHistoryAuthentication,
+    authenticate_active_predecessor,
+    authenticate_current_history,
+    authenticate_terminal_outcome,
+)
 from .csr_protocol import (
     CsrApproval,
     CsrOperation,
@@ -94,6 +101,7 @@ from .service_recover import (
     recover_service_transaction,
 )
 from .service_transaction import (
+    MANAGED_RENEW_ARCHIVE_MEMBER_ORDER,
     SERVICE_CONTAINER_ORDER,
     SERVICE_RETAINED_TRANSACTION_FIELDS,
     SERVICE_SIGNING_INPUT_KEYS,
@@ -126,6 +134,8 @@ _ARCHIVE_NAME = re.compile(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{2})?", re.ASCII)
 _OPENSSL_PATH = re.compile(r"/[A-Za-z0-9._/-]+", re.ASCII)
 _CSR_PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9.-]*", re.ASCII)
 _CSR_MAX_PROTOCOL_BYTES = 1024 * 1024
+_CSR_MAX_RETAINED_SERVICES = 256
+_CSR_MAX_RETAINED_CANDIDATES = 256
 _PUBLIC_CSR_INPUT_OPTIONS = (
     "--csr-file",
     "--request-file",
@@ -188,7 +198,33 @@ _FILE_DESTINATIONS = {
     "ca_serial_old": "authorities/intermediates/{intermediate}/serial.old",
     "ca_newcert": "authorities/intermediates/{intermediate}/newcerts/{serial}.pem",
     "service_key": "services/{service}/private/tls.key",
+    "archive_marker": "services/{service}/archive/{archive}/.platform-pki-renew-archive",
+    "archive_certificate": "services/{service}/archive/{archive}/tls.crt",
+    "archive_csr": "services/{service}/archive/{archive}/tls.csr",
+    "archive_chain": "services/{service}/archive/{archive}/ca-chain.crt",
+    "archive_fullchain": "services/{service}/archive/{archive}/fullchain.crt",
+    "archive_config": "services/{service}/archive/{archive}/openssl.cnf",
+    "archive_issuer": "services/{service}/archive/{archive}/issuer",
     "archive_key": "services/{service}/archive/{archive}/tls.key",
+}
+_ARCHIVE_MEMBER_KEYS = {
+    ".platform-pki-renew-archive": "archive_marker",
+    "tls.crt": "archive_certificate",
+    "tls.csr": "archive_csr",
+    "ca-chain.crt": "archive_chain",
+    "fullchain.crt": "archive_fullchain",
+    "openssl.cnf": "archive_config",
+    "issuer": "archive_issuer",
+    "tls.key": "archive_key",
+}
+_ARCHIVE_SOURCE_KEYS = {
+    "archive_certificate": "service_certificate",
+    "archive_csr": "service_csr",
+    "archive_chain": "service_chain",
+    "archive_fullchain": "service_fullchain",
+    "archive_config": "service_config",
+    "archive_issuer": "service_issuer",
+    "archive_key": "service_key",
 }
 _SIGNING_INPUT_SOURCES = {
     "signing_inventory": "inventory/services.yml",
@@ -221,6 +257,9 @@ _PRIVATE_DESTINATIONS = {
     "ca_index_attr_old",
     "ca_serial_old",
     "archive_key",
+    "archive_csr",
+    "archive_config",
+    "archive_issuer",
 }
 _FIXED_OUTPUT_MODES = {
     "service_csr": 0o600,
@@ -933,6 +972,7 @@ def _plan(
     pki_dir: str,
     service_name: str,
     *,
+    operation: ServiceOperation,
     days_override: str | None,
     safety_days: str,
     rotate_key: bool,
@@ -976,7 +1016,8 @@ def _plan(
     if service is None:
         _die(f"Service is not defined in {inventory_path}: {service_name}")
     if service.key_custody != "managed":
-        _die(f"Host-local service issuance requires authenticated CSR inputs: {service_name}")
+        action = "issuance" if operation is ServiceOperation.ISSUE else "renewal"
+        _die(f"Host-local service {action} requires authenticated CSR inputs: {service_name}")
     days = _validate_days(
         days_override
         or service.days
@@ -1036,7 +1077,7 @@ def _plan(
         private=False,
         required=False,
     )
-    if certificate is not None:
+    if operation is ServiceOperation.ISSUE and certificate is not None:
         _die(
             "Service certificate already exists; use platform-pki-service-renew: "
             f"{certificate_path}"
@@ -1045,11 +1086,13 @@ def _plan(
         key_path,
         "Service private key",
         private=True,
-        required=False,
+        required=operation is ServiceOperation.RENEW,
     )
+    if operation is ServiceOperation.RENEW and current_key is None:
+        _die(f"Service private key is missing; use platform-pki-service-issue first: {key_path}")
     key_action = (
         ServiceKeyAction.CREATE
-        if current_key is None
+        if current_key is None and operation is ServiceOperation.ISSUE
         else ServiceKeyAction.ROTATE
         if rotate_key
         else ServiceKeyAction.REUSE
@@ -1058,6 +1101,33 @@ def _plan(
         evidence["current_key"] = current_key
     if key_action is ServiceKeyAction.REUSE:
         evidence["signing_service_key"] = current_key  # type: ignore[assignment]
+
+    renewal_sources: dict[str, _Evidence] = {}
+    if operation is ServiceOperation.RENEW:
+        for member in MANAGED_RENEW_ARCHIVE_MEMBER_ORDER[1:-1]:
+            archive_key = _ARCHIVE_MEMBER_KEYS[member]
+            source_key = _ARCHIVE_SOURCE_KEYS[archive_key]
+            if source_key == "service_certificate":
+                item = certificate
+            else:
+                source = _path(
+                    pki_dir,
+                    _FILE_DESTINATIONS[source_key].format(
+                        service=service_name,
+                        intermediate=intermediate,
+                        serial="unused",
+                        archive="unused",
+                    ),
+                )
+                item = _snapshot_file(
+                    source,
+                    f"Service renewal source {member}",
+                    private=source_key in _PRIVATE_DESTINATIONS,
+                    required=False,
+                )
+            if item is not None:
+                renewal_sources[source_key] = item
+                evidence[f"renewal:{source_key}"] = item
 
     ca_serial_evidence = _snapshot_file(
         f"{authority}/serial", "Intermediate CA serial", private=True
@@ -1114,7 +1184,9 @@ def _plan(
     )
     inputs_dir = f"{stage_dir}/inputs"
     archive_state = (
-        ServiceArchiveState.ISSUE_KEY
+        ServiceArchiveState.RENEW
+        if operation is ServiceOperation.RENEW
+        else ServiceArchiveState.ISSUE_KEY
         if key_action is ServiceKeyAction.ROTATE
         else ServiceArchiveState.NONE
     )
@@ -1123,12 +1195,25 @@ def _plan(
         if archive_state is not ServiceArchiveState.NONE
         else "none"
     )
-    archive_members = ("tls.key",) if archive_state is ServiceArchiveState.ISSUE_KEY else ()
+    if archive_state is ServiceArchiveState.RENEW:
+        archive_members = (
+            ".platform-pki-renew-archive",
+            *(
+                member
+                for member in MANAGED_RENEW_ARCHIVE_MEMBER_ORDER[1:-1]
+                if _ARCHIVE_SOURCE_KEYS[_ARCHIVE_MEMBER_KEYS[member]] in renewal_sources
+            ),
+            *(("tls.key",) if key_action is ServiceKeyAction.ROTATE else ()),
+        )
+    else:
+        archive_members = (
+            ("tls.key",) if archive_state is ServiceArchiveState.ISSUE_KEY else ()
+        )
 
     values = {field: "none" for field in SERVICE_TRANSACTION_FIELDS}
     values.update(
         schema="1",
-        operation=ServiceOperation.ISSUE.value,
+        operation=operation.value,
         transaction=transaction,
         phase="staging",
         checkpoint="staging-pending",
@@ -1177,7 +1262,9 @@ def _plan(
         archive_root_reference_sha256="none",
         archive_root_restored="none",
         archive_root_restored_identity="none",
-        archive_marker_removed="none",
+        archive_marker_removed=(
+            "false" if operation is ServiceOperation.RENEW else "none"
+        ),
         stage_removed="false",
         backup_removed="false",
         terminal_path=f"{transaction_dir}/terminal",
@@ -1204,7 +1291,7 @@ def _plan(
             existing_directories.append(key)
 
     existing_archive_root = False
-    if archive_state is ServiceArchiveState.ISSUE_KEY:
+    if archive_state is not ServiceArchiveState.NONE:
         archive_root = _path(pki_dir, f"services/{service_name}/archive")
         archive_root_identity = _snapshot_directory(archive_root, "Service archive directory")
         archive_root_full: FileIdentity | None = None
@@ -1254,12 +1341,12 @@ def _plan(
         key for key in SERVICE_CONTAINER_ORDER if key not in existing_directories
     )
     publication_order = managed_publication_order(
-        ServiceOperation.ISSUE,
+        operation,
         key_action,
         archive_state,
         archive_members,
         create_archive_root=(
-            archive_state is ServiceArchiveState.ISSUE_KEY and not existing_archive_root
+            archive_state is not ServiceArchiveState.NONE and not existing_archive_root
         ),
         created_service_directories=created_directories,
     )
@@ -1274,12 +1361,15 @@ def _plan(
             archive=archive,
         )
         destination = _path(pki_dir, relative)
-        pre = _snapshot_file(
-            destination,
-            f"Managed service destination {key}",
-            private=key in _PRIVATE_DESTINATIONS,
-            required=False,
-        )
+        if key in renewal_sources:
+            pre = renewal_sources[key]
+        else:
+            pre = _snapshot_file(
+                destination,
+                f"Managed service destination {key}",
+                private=key in _PRIVATE_DESTINATIONS,
+                required=False,
+            )
         if key in {"ca_index", "ca_index_attr", "ca_serial"} and pre is None:
             _die(f"Required file is missing: {destination}")
         if key == "ca_newcert" and pre is not None:
@@ -1313,6 +1403,21 @@ def _plan(
             archive_key_source_identity=serialize_file_identity(current_key.identity),
             archive_key_source_sha256=current_key.digest,
         )
+        evidence["archive:archive_key"] = current_key
+    if operation is ServiceOperation.RENEW:
+        for member in archive_members[1:]:
+            archive_key = _ARCHIVE_MEMBER_KEYS[member]
+            source_key = _ARCHIVE_SOURCE_KEYS[archive_key]
+            item = current_key if source_key == "service_key" else renewal_sources[source_key]
+            assert item is not None
+            values.update(
+                {
+                    f"{archive_key}_source": item.path,
+                    f"{archive_key}_source_identity": serialize_file_identity(item.identity),
+                    f"{archive_key}_source_sha256": item.digest,
+                }
+            )
+            evidence[f"archive:{archive_key}"] = item
 
     for key in SERVICE_SIGNING_INPUT_KEYS:
         if key == "signing_service_key" and key_action is not ServiceKeyAction.REUSE:
@@ -1665,10 +1770,14 @@ def _stage_operation(
     try:
         while int(writer.record["staged_count"]) < len(writer.record.staging_order):
             key = writer.record.staging_order[int(writer.record["staged_count"])]
-            if key == "archive_key":
-                evidence = plan.evidence["current_key"]
+            if key == "archive_marker":
+                create = lambda: _write_new_file(
+                    writer.values["archive_marker_stage"], b"", 0o600
+                )
+            elif key.startswith("archive_"):
+                evidence = plan.evidence[f"archive:{key}"]
                 create = lambda evidence=evidence: _copy_evidence(
-                    evidence, writer.values["archive_key_stage"]
+                    evidence, writer.values[f"{key}_stage"]
                 )
             else:
                 item = detached[key]
@@ -2594,9 +2703,294 @@ def _csr_publish_database_entry(
     return record
 
 
-def issue_host_local_csr(
+def _csr_reject_unresolved_renewal(
+    pki_dir: str,
+    service: InventoryService,
+    inventory_services: tuple[InventoryService, ...],
+    current_request_id: str,
+    environment: Mapping[str, str],
+    active_history: CsrHistoryAuthentication,
+) -> Callable[[], None]:
+    candidate_root = f"{pki_dir}/state/csr/candidates"
+    outcome_root = f"{pki_dir}/state/csr/outcomes"
+    inventory_by_name = {item.name: item for item in inventory_services}
+    coordinates: list[tuple[str, str]] = []
+    coordinate_set: set[tuple[str, str]] = set()
+    request_ids: set[str] = set()
+    outcome_coordinates: set[tuple[str, str]] = set()
+    outcome_count = 0
+    directory_snapshots: list[
+        tuple[str, DirectoryIdentity, tuple[str, ...], str]
+    ] = []
+    candidate_files: list[tuple[str, FileIdentity]] = []
+    terminal_rechecks: list[CsrHistoryAuthentication] = []
+    active_histories = {service.name: active_history}
+    outcome_root_absent = False
+
+    def retained_service(name: str, kind: str) -> InventoryService:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name, re.ASCII) is None:
+            _die(f"CSR {kind} state contains an invalid service name: {name}")
+        selected = inventory_by_name.get(name)
+        if selected is None:
+            _die(f"Retained CSR {kind} service is absent from current inventory: {name}")
+        if selected.key_custody != "host-local":
+            _die(f"Retained CSR {kind} service is not host-local in current inventory: {name}")
+        return selected
+
+    try:
+        with OpenedDirectory(candidate_root, policy=_PRIVATE_DIRECTORY) as candidates:
+            service_names = tuple(sorted(os.listdir(candidates.fileno())))
+            if len(service_names) > _CSR_MAX_RETAINED_SERVICES:
+                _die("CSR candidate state exceeds the retained service bound")
+            for service_name in service_names:
+                retained_service(service_name, "candidate")
+                service_path = f"{candidate_root}/{service_name}"
+                with candidates.open_directory(
+                    service_name, policy=_PRIVATE_DIRECTORY
+                ) as candidate_service:
+                    candidate_names = tuple(
+                        sorted(os.listdir(candidate_service.fileno()))
+                    )
+                    if (
+                        len(candidate_names) > _CSR_MAX_RETAINED_CANDIDATES
+                        or len(coordinates) + len(candidate_names)
+                        > _CSR_MAX_RETAINED_CANDIDATES
+                    ):
+                        _die("CSR candidate state exceeds the retained candidate bound")
+                    directory_snapshots.append(
+                        (
+                            service_path,
+                            candidate_service.recheck().directory,
+                            candidate_names,
+                            "CSR candidate service directory",
+                        )
+                    )
+                    for request_id in candidate_names:
+                        if re.fullmatch(r"[0-9a-f]{32}", request_id, re.ASCII) is None:
+                            _die(
+                                "CSR candidate state contains an invalid request ID: "
+                                f"{service_name}/{request_id}"
+                            )
+                        if request_id == current_request_id:
+                            _die(
+                                "CSR request candidate path already exists before replay reservation"
+                            )
+                        if request_id in request_ids:
+                            _die(
+                                "CSR candidate request ID is ambiguous across services: "
+                                f"{request_id}"
+                            )
+                        request_ids.add(request_id)
+                        coordinate = (service_name, request_id)
+                        coordinates.append(coordinate)
+                        coordinate_set.add(coordinate)
+                        candidate_path = f"{service_path}/{request_id}"
+                        with candidate_service.open_directory(
+                            request_id, policy=_PRIVATE_DIRECTORY
+                        ) as candidate:
+                            expected = (
+                                "ca-chain.crt",
+                                "candidate",
+                                "fullchain.crt",
+                                "response",
+                                "response.sig",
+                                "tls.crt",
+                            )
+                            if tuple(sorted(os.listdir(candidate.fileno()))) != expected:
+                                _die(
+                                    "Unsafe CSR candidate entry blocks renewal: "
+                                    f"{candidate_path}"
+                                )
+                            for name in expected:
+                                with candidate.open_file(
+                                    name,
+                                    policy=FilePolicy(
+                                        owner=_OWNER,
+                                        mode=0o600,
+                                        links=1,
+                                        max_size=_MAX_EVIDENCE,
+                                    ),
+                                ) as opened:
+                                    candidate_files.append(
+                                        (
+                                            f"{candidate_path}/{name}",
+                                            opened.recheck(),
+                                        )
+                                    )
+                            directory_snapshots.append(
+                                (
+                                    candidate_path,
+                                    candidate.recheck().directory,
+                                    expected,
+                                    "CSR candidate request directory",
+                                )
+                            )
+            directory_snapshots.append(
+                (
+                    candidate_root,
+                    candidates.recheck().directory,
+                    service_names,
+                    "CSR candidate state directory",
+                )
+            )
+
+        if os.path.lexists(outcome_root):
+            with OpenedDirectory(outcome_root, policy=_PRIVATE_DIRECTORY) as outcomes:
+                outcome_services = tuple(sorted(os.listdir(outcomes.fileno())))
+                if len(outcome_services) > _CSR_MAX_RETAINED_SERVICES:
+                    _die("CSR outcome state exceeds the retained service bound")
+                for service_name in outcome_services:
+                    retained_service(service_name, "outcome")
+                    service_path = f"{outcome_root}/{service_name}"
+                    with outcomes.open_directory(
+                        service_name, policy=_PRIVATE_DIRECTORY
+                    ) as outcome_service:
+                        outcome_names = tuple(
+                            sorted(os.listdir(outcome_service.fileno()))
+                        )
+                        if len(outcome_names) > _CSR_MAX_RETAINED_CANDIDATES:
+                            _die("CSR outcome state exceeds the retained outcome bound")
+                        outcome_count += len(outcome_names)
+                        if outcome_count > _CSR_MAX_RETAINED_CANDIDATES:
+                            _die("CSR outcome state exceeds the retained outcome bound")
+                        if not outcome_names:
+                            _die(
+                                "CSR outcome service directory is unexpectedly empty: "
+                                f"{service_name}"
+                            )
+                        directory_snapshots.append(
+                            (
+                                service_path,
+                                outcome_service.recheck().directory,
+                                outcome_names,
+                                "CSR outcome service directory",
+                            )
+                        )
+                        for request_id in outcome_names:
+                            if (
+                                re.fullmatch(r"[0-9a-f]{32}", request_id, re.ASCII)
+                                is None
+                            ):
+                                _die(
+                                    "CSR outcome state contains an invalid request ID: "
+                                    f"{service_name}/{request_id}"
+                                )
+                            coordinate = (service_name, request_id)
+                            if coordinate not in coordinate_set:
+                                _die(
+                                    "CSR outcome has no matching retained candidate: "
+                                    f"{service_name}/{request_id}"
+                                )
+                            outcome_coordinates.add(coordinate)
+                directory_snapshots.append(
+                    (
+                        outcome_root,
+                        outcomes.recheck().directory,
+                        outcome_services,
+                        "CSR outcome state directory",
+                    )
+                )
+        else:
+            outcome_root_absent = True
+    except FilesystemError:
+        _die("CSR candidate or outcome state is unsafe")
+
+    for service_name, request_id in coordinates:
+        if (service_name, request_id) not in outcome_coordinates:
+            _die(f"Retained CSR candidate is pending: {service_name}/{request_id}")
+        retained = inventory_by_name[service_name]
+        try:
+            terminal = authenticate_terminal_outcome(
+                pki_dir,
+                retained,
+                request_id,
+                environment,
+            )
+        except CsrHistoryError as error:
+            _die(
+                "CSR candidate terminal outcome is invalid: "
+                f"{service_name}/{request_id}: {error}"
+            )
+        required_active = (
+            request_id
+            if terminal.root_action == "finalize"
+            else terminal.resulting_active_request_id
+        )
+        if required_active == "none":
+            _die(
+                "CSR candidate terminal outcome conflicts with active history: "
+                f"{service_name}/{request_id}"
+            )
+        history = active_histories.get(service_name)
+        if history is None:
+            try:
+                history = authenticate_current_history(
+                    pki_dir,
+                    retained,
+                    environment,
+                )
+            except CsrHistoryError as error:
+                _die(
+                    "CSR candidate active history is invalid: "
+                    f"{service_name}: {error}"
+                )
+            active_histories[service_name] = history
+        if required_active not in history.request_ids:
+            _die(
+                "CSR candidate terminal outcome conflicts with active history: "
+                f"{service_name}/{request_id}"
+            )
+        terminal_rechecks.append(terminal)
+
+    def recheck() -> None:
+        try:
+            for path, identity, names, label in directory_snapshots:
+                with OpenedDirectory(
+                    path,
+                    policy=_PRIVATE_DIRECTORY,
+                    expected_identity=identity,
+                ) as directory:
+                    if tuple(sorted(os.listdir(directory.fileno()))) != names:
+                        _die(f"{label} changed during renewal validation")
+                    directory.recheck()
+        except FilesystemError:
+            _die("CSR candidate or outcome state changed during renewal validation")
+        if outcome_root_absent and os.path.lexists(outcome_root):
+            _die("CSR outcome state changed during renewal validation")
+        try:
+            for path, identity in candidate_files:
+                with OpenedFile(
+                    path,
+                    policy=FilePolicy(
+                        owner=_OWNER,
+                        mode=0o600,
+                        links=1,
+                        max_size=_MAX_EVIDENCE,
+                    ),
+                    expected_identity=identity,
+                ) as opened:
+                    opened.recheck()
+        except FilesystemError:
+            _die("CSR candidate tree changed during renewal validation")
+        for history in active_histories.values():
+            try:
+                history()
+            except CsrHistoryError as error:
+                _die(f"CSR candidate active history changed: {error}")
+        for terminal_recheck in terminal_rechecks:
+            try:
+                terminal_recheck()
+            except CsrHistoryError as error:
+                _die(f"CSR candidate terminal outcome changed: {error}")
+
+    recheck()
+    return recheck
+
+
+def _run_host_local_csr(
     service: str,
     *,
+    accepted_operations: frozenset[CsrOperation],
     pki_dir: os.PathLike[str] | str,
     request_file: os.PathLike[str] | str,
     request_signature: os.PathLike[str] | str,
@@ -2604,6 +2998,7 @@ def issue_host_local_csr(
     approval_signature: os.PathLike[str] | str,
     csr_file: os.PathLike[str] | str,
     response_key: os.PathLike[str] | str,
+    current_cert_file: os.PathLike[str] | str | None = None,
     intermediate_pass_file: os.PathLike[str] | str | None = None,
     issuer_safety_days: str = "1",
     environment: Mapping[str, str] | None = None,
@@ -2611,8 +3006,10 @@ def issue_host_local_csr(
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
 ) -> int:
-    """Issue or migrate one authenticated host-local CSR."""
+    """Run one authenticated host-local CSR signing operation."""
 
+    if not accepted_operations or not accepted_operations <= frozenset(CsrOperation):
+        raise ValueError("accepted_operations must contain supported CSR operations")
     root = os.fspath(pki_dir)
     if not isinstance(root, str) or not os.path.isabs(root) or os.path.normpath(root) != root:
         raise ValueError("pki_dir must be an absolute normalized text path")
@@ -2710,7 +3107,9 @@ def issue_host_local_csr(
                     _die(str(error))
                 request_record = request.record
                 approval_record = approval.record
-                if request.operation not in {CsrOperation.ISSUE, CsrOperation.MIGRATE}:
+                if request.operation not in accepted_operations:
+                    if accepted_operations == frozenset((CsrOperation.RENEW,)):
+                        _die("Renew accepts only renew CSR requests")
                     _die("Issue accepts only issue or migrate CSR requests")
                 if (
                     request_record["service"] != service
@@ -2782,6 +3181,9 @@ def issue_host_local_csr(
 
                     managed_key = f"{root}/services/{service}/private/tls.key"
                     managed_certificate = f"{root}/services/{service}/certs/tls.crt"
+                    history_recheck: CsrHistoryAuthentication | None = None
+                    unresolved_recheck: Callable[[], None] | None = None
+                    current_certificate: _CsrInput | None = None
                     if request.operation is CsrOperation.ISSUE:
                         if os.path.lexists(managed_key) or os.path.lexists(
                             managed_certificate
@@ -2789,7 +3191,7 @@ def issue_host_local_csr(
                             _die(
                                 "New host-local issue conflicts with existing managed service state"
                             )
-                    else:
+                    elif request.operation is CsrOperation.MIGRATE:
                         key_evidence = _snapshot_file(
                             managed_key, "Managed service private key", private=True
                         )
@@ -2801,6 +3203,28 @@ def issue_host_local_csr(
                         assert key_evidence is not None and certificate_evidence is not None
                         if request_record["current_cert_sha256"] != certificate_evidence.digest:
                             _die("Migration request does not bind the managed certificate")
+                    else:
+                        if current_cert_file is None:
+                            _die("Host-local renewal requires current_cert_file")
+                        if "deployers.allowed_signers" not in trust.files:
+                            _die("Host-local renewal requires CSR trust policy schema 2")
+                        current_certificate = _csr_input(
+                            current_cert_file, "Current host-local certificate"
+                        )
+                        if request_record["current_cert_sha256"] != _sha256(
+                            current_certificate.data
+                        ):
+                            _die("Renewal request does not bind the current certificate")
+                        try:
+                            history_recheck = authenticate_active_predecessor(
+                                root,
+                                selected,
+                                request_record["current_cert_sha256"],
+                                current_certificate.path,
+                                process_environment,
+                            )
+                        except CsrHistoryError as error:
+                            _die(str(error))
 
                     root_certificate = _snapshot_file(
                         f"{root_dir}/certs/root-ca.crt",
@@ -2847,6 +3271,20 @@ def issue_host_local_csr(
                     )
                     assert ca_config is not None and ca_config.data is not None
                     assert serial_evidence is not None and serial_evidence.data is not None
+                    if current_certificate is not None:
+                        _run_openssl(
+                            (
+                                "openssl",
+                                "verify",
+                                "-CAfile",
+                                root_certificate.path,  # type: ignore[union-attr]
+                                "-untrusted",
+                                ca_certificate.path,  # type: ignore[union-attr]
+                                current_certificate.path,
+                            ),
+                            process_environment,
+                            label="current host-local certificate chain verification",
+                        )
                     issued_serial = _canonical_serial(
                         serial_evidence.data, serial_evidence.path
                     )
@@ -2870,17 +3308,35 @@ def issue_host_local_csr(
                         f"{root}/state/csr/replay/nonces/{request_record['nonce']}"
                     ):
                         _die("CSR request nonce has already been consumed")
+                    if request.operation is CsrOperation.RENEW:
+                        assert history_recheck is not None
+                        unresolved_recheck = _csr_reject_unresolved_renewal(
+                            root,
+                            selected,
+                            inventory.services,
+                            request_record["request_id"],
+                            process_environment,
+                            history_recheck,
+                        )
                     transaction = f"csr-{request_id}"
                     transaction_dir = f"{root}/state/csr/transactions/{transaction}"
                     if os.path.lexists(transaction_dir):
                         _die("CSR signing transaction path already exists")
                     _checkpoint("source-before-journal-recheck", fault_hook, pause_hook)
+                    if unresolved_recheck is not None:
+                        unresolved_recheck()
+                    if history_recheck is not None:
+                        history_recheck()
                     for label, item in protocol.items():
                         _csr_recheck_input(item, f"CSR input {label}")
                     _checkpoint("trust-before-journal-recheck", fault_hook, pause_hook)
                     _csr_recheck_trust(trust)
                     _recheck_evidence(inventory_evidence, "Service inventory")
                     _recheck_evidence(active_evidence, "Active issuer record")
+                    if current_certificate is not None:
+                        _csr_recheck_input(
+                            current_certificate, "Current host-local certificate"
+                        )
 
                     values = _csr_initial_values(
                         root,
@@ -3209,11 +3665,23 @@ def issue_host_local_csr(
                             db_evidence[key],
                             f"Intermediate CA database {key}",
                         )
+                    if unresolved_recheck is not None:
+                        unresolved_recheck()
+                    if history_recheck is not None:
+                        history_recheck()
                     _csr_recheck_trust(trust)
                     _recheck_evidence(active_evidence, "Active issuer record")
                     _recheck_evidence(inventory_evidence, "Service inventory")
+                    if current_certificate is not None:
+                        _csr_recheck_input(
+                            current_certificate, "Current host-local certificate"
+                        )
                     retain_uncommitted_journal = False
                     for key in CSR_DB_KEYS:
+                        if unresolved_recheck is not None:
+                            unresolved_recheck()
+                        if history_recheck is not None:
+                            history_recheck()
                         _recheck_evidence(active_evidence, "Active issuer record")
                         _recheck_evidence(inventory_evidence, "Service inventory")
                         record = _csr_publish_database_entry(
@@ -3293,9 +3761,88 @@ def issue_host_local_csr(
     raise AssertionError("unreachable")
 
 
-def issue_managed_service(
+def issue_host_local_csr(
     service: str,
     *,
+    pki_dir: os.PathLike[str] | str,
+    request_file: os.PathLike[str] | str,
+    request_signature: os.PathLike[str] | str,
+    approval_file: os.PathLike[str] | str,
+    approval_signature: os.PathLike[str] | str,
+    csr_file: os.PathLike[str] | str,
+    response_key: os.PathLike[str] | str,
+    intermediate_pass_file: os.PathLike[str] | str | None = None,
+    issuer_safety_days: str = "1",
+    environment: Mapping[str, str] | None = None,
+    output: TextIO | None = None,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> int:
+    """Issue or migrate one authenticated host-local CSR."""
+
+    return _run_host_local_csr(
+        service,
+        accepted_operations=frozenset((CsrOperation.ISSUE, CsrOperation.MIGRATE)),
+        pki_dir=pki_dir,
+        request_file=request_file,
+        request_signature=request_signature,
+        approval_file=approval_file,
+        approval_signature=approval_signature,
+        csr_file=csr_file,
+        response_key=response_key,
+        intermediate_pass_file=intermediate_pass_file,
+        issuer_safety_days=issuer_safety_days,
+        environment=environment,
+        output=output,
+        fault_hook=fault_hook,
+        pause_hook=pause_hook,
+    )
+
+
+def renew_host_local_csr(
+    service: str,
+    *,
+    pki_dir: os.PathLike[str] | str,
+    request_file: os.PathLike[str] | str,
+    request_signature: os.PathLike[str] | str,
+    approval_file: os.PathLike[str] | str,
+    approval_signature: os.PathLike[str] | str,
+    csr_file: os.PathLike[str] | str,
+    response_key: os.PathLike[str] | str,
+    current_cert_file: os.PathLike[str] | str,
+    intermediate_pass_file: os.PathLike[str] | str | None = None,
+    issuer_safety_days: str = "1",
+    environment: Mapping[str, str] | None = None,
+    output: TextIO | None = None,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> int:
+    """Renew one authenticated host-local CSR through the non-public writer."""
+
+    return _run_host_local_csr(
+        service,
+        accepted_operations=frozenset((CsrOperation.RENEW,)),
+        pki_dir=pki_dir,
+        request_file=request_file,
+        request_signature=request_signature,
+        approval_file=approval_file,
+        approval_signature=approval_signature,
+        csr_file=csr_file,
+        response_key=response_key,
+        current_cert_file=current_cert_file,
+        intermediate_pass_file=intermediate_pass_file,
+        issuer_safety_days=issuer_safety_days,
+        environment=environment,
+        output=output,
+        fault_hook=fault_hook,
+        pause_hook=pause_hook,
+    )
+
+
+def _run_managed_service(
+    service: str,
+    *,
+    operation: ServiceOperation,
     pki_dir: os.PathLike[str] | str,
     days: str | None = None,
     issuer_safety_days: str = "1",
@@ -3306,8 +3853,10 @@ def issue_managed_service(
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
 ) -> int:
-    """Issue one managed service through the Python transaction writer."""
+    """Run one managed service operation through the Python transaction writer."""
 
+    if operation not in {ServiceOperation.ISSUE, ServiceOperation.RENEW}:
+        raise ValueError("unsupported managed service operation")
     root = os.fspath(pki_dir)
     if not isinstance(root, str) or not os.path.isabs(root) or os.path.normpath(root) != root:
         raise ValueError("pki_dir must be an absolute normalized text path")
@@ -3320,7 +3869,7 @@ def issue_managed_service(
     if not isinstance(rotate_key, bool):
         raise TypeError("rotate_key must be a boolean")
     if not callable(fault_hook) or not callable(pause_hook):
-        raise TypeError("service issue hooks must be callable")
+        raise TypeError(f"service {operation.value} hooks must be callable")
     process_environment = dict(os.environ if environment is None else environment)
     stream = sys.stdout if output is None else output
     require_program("openssl", process_environment)
@@ -3336,11 +3885,12 @@ def issue_managed_service(
         passphrase = _open_passphrase(os.fspath(intermediate_pass_file))
     previous_umask = os.umask(0o077)
     try:
-        with _handled_signals():
+        with _handled_signals(f"Managed service {operation.value}"):
             with acquire_operational_locks(root, "inventory"):
                 plan = _plan(
                     root,
                     service,
+                    operation=operation,
                     days_override=days,
                     safety_days=safety_days,
                     rotate_key=rotate_key,
@@ -3429,19 +3979,94 @@ def issue_managed_service(
         output=io.StringIO(),
     )
     print(f"[OK] Verified service certificate: {service}", file=stream)
-    if plan.values["archive_state"] == ServiceArchiveState.ISSUE_KEY.value:
+    if operation is ServiceOperation.ISSUE and plan.values["archive_state"] == ServiceArchiveState.ISSUE_KEY.value:
         print(
             f"[WARN] Archived previous service private key: "
             f"{plan.values['archive_key_destination']}",
             file=stream,
         )
+    if operation is ServiceOperation.RENEW:
+        for member in plan.values["archive_members"].split(",")[1:]:
+            archive_key = _ARCHIVE_MEMBER_KEYS[member]
+            print(
+                f"[INFO] Archived {plan.values[f'{archive_key}_source']} to "
+                f"{plan.values[f'{archive_key}_destination']}",
+                file=stream,
+            )
+        if plan.values["key_action"] == ServiceKeyAction.ROTATE.value:
+            print(
+                f"[WARN] Rotated service private key: "
+                f"{plan.values['service_key_destination']}",
+                file=stream,
+            )
+    verb = "Issued" if operation is ServiceOperation.ISSUE else "Renewed"
     print(
-        f"[OK] Issued service certificate: "
+        f"[OK] {verb} service certificate: "
         f"{plan.values['service_certificate_destination']}",
         file=stream,
     )
     stream.flush()
     return 0
+
+
+def issue_managed_service(
+    service: str,
+    *,
+    pki_dir: os.PathLike[str] | str,
+    days: str | None = None,
+    issuer_safety_days: str = "1",
+    intermediate_pass_file: os.PathLike[str] | str | None = None,
+    rotate_key: bool = False,
+    environment: Mapping[str, str] | None = None,
+    output: TextIO | None = None,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> int:
+    """Issue one managed service through the Python transaction writer."""
+
+    return _run_managed_service(
+        service,
+        operation=ServiceOperation.ISSUE,
+        pki_dir=pki_dir,
+        days=days,
+        issuer_safety_days=issuer_safety_days,
+        intermediate_pass_file=intermediate_pass_file,
+        rotate_key=rotate_key,
+        environment=environment,
+        output=output,
+        fault_hook=fault_hook,
+        pause_hook=pause_hook,
+    )
+
+
+def renew_managed_service(
+    service: str,
+    *,
+    pki_dir: os.PathLike[str] | str,
+    days: str | None = None,
+    issuer_safety_days: str = "1",
+    intermediate_pass_file: os.PathLike[str] | str | None = None,
+    rotate_key: bool = False,
+    environment: Mapping[str, str] | None = None,
+    output: TextIO | None = None,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> int:
+    """Renew one managed service through the non-public Python writer."""
+
+    return _run_managed_service(
+        service,
+        operation=ServiceOperation.RENEW,
+        pki_dir=pki_dir,
+        days=days,
+        issuer_safety_days=issuer_safety_days,
+        intermediate_pass_file=intermediate_pass_file,
+        rotate_key=rotate_key,
+        environment=environment,
+        output=output,
+        fault_hook=fault_hook,
+        pause_hook=pause_hook,
+    )
 
 
 def issue_service(

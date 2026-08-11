@@ -63,6 +63,16 @@ serial non-rollover ordering diagnostics. Do not use unbounded Make jobs or
 pytest `-n auto`; the test harness supervises real process trees and the PKI
 suites perform filesystem durability operations.
 
+`make test-pki-service-renew-writer` keeps its four managed renewal cases
+serial, then runs only `test_csr_renew_writer.py` with bounded
+`PKI_PYTEST_WORKERS` and pytest `--dist load`. Direct focused pytest invocation
+remains available for either module. In the pinned test image on 2026-08-11
+with `PKI_PYTEST_WORKERS=2`, the target completed 4 managed cases in 74.50
+seconds and 47 host-local cases in 268.57 seconds, or 343.07 seconds across its
+sequential phases. The prior combined serial target took 449.50 seconds for 42
+cases; these measurements are diagnostic observations, not performance
+guarantees.
+
 The CSR signing, certificate-export, candidate, and schema-2 trust-install
 suites create one immutable PKI seed per pytest process. Every test receives a
 metadata-preserving private copy with its managed OpenSSL paths rebased and
