@@ -31,6 +31,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/ca_rollover_recovery.py",
     "platform_pki/cli.py",
     "platform_pki/compat.py",
+    "platform_pki/csr_history.py",
     "platform_pki/csr_protocol.py",
     "platform_pki/csr_recover.py",
     "platform_pki/csr_recovery.py",
@@ -53,6 +54,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/publication.py",
     "platform_pki/records.py",
     "platform_pki/root_create.py",
+    "platform_pki/service_issue.py",
     "platform_pki/service_recover.py",
     "platform_pki/service_transaction.py",
     "platform_pki/service_verify.py",
@@ -287,7 +289,10 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         ("print-cert",),
         ("root-create",),
         ("intermediate-create",),
+        ("service-issue",),
+        ("service-recover",),
         ("service-verify",),
+        ("service-renew",),
         ("export-ansible",),
     }:
         assert result.stderr.startswith(
@@ -325,8 +330,16 @@ def test_every_frozen_unified_route_rejects_abbreviations_without_state(
 
 @pytest.mark.parametrize(
     "route",
-    PKI_PARSER_ROUTES,
-    ids=("-".join(route.unified_route) for route in PKI_PARSER_ROUTES),
+    tuple(
+        route
+        for route in PKI_PARSER_ROUTES
+        if route.compatibility_executable is not None
+    ),
+    ids=(
+        "-".join(route.unified_route)
+        for route in PKI_PARSER_ROUTES
+        if route.compatibility_executable is not None
+    ),
 )
 @pytest.mark.parametrize(
     "probe",
@@ -377,8 +390,16 @@ def test_every_route_matches_bashly_unknown_token_normalization(
 
 @pytest.mark.parametrize(
     "contract",
-    PKI_COMMAND_CONTRACTS,
-    ids=(contract.compatibility_name for contract in PKI_COMMAND_CONTRACTS),
+    tuple(
+        contract
+        for contract in PKI_COMMAND_CONTRACTS
+        if contract.compatibility_name is not None
+    ),
+    ids=(
+        contract.compatibility_name
+        for contract in PKI_COMMAND_CONTRACTS
+        if contract.compatibility_name is not None
+    ),
 )
 def test_copied_compatibility_name_dispatches_outside_checkout(
     process_runner: Callable[..., ProcessResult],
@@ -403,6 +424,8 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
         "print-cert": "Print readable details for a generated service certificate",
         "root-create": "Create the root CA key and certificate",
         "intermediate-create": "Create the intermediate CA key, certificate, and CA chain",
+        "service-issue": "Issue a service certificate from PKI inventory",
+        "service-renew": "Renew a service certificate from PKI inventory",
         "service-verify": "Verify a generated service certificate",
         "export-ansible": "Export generated PKI files into an Ansible-consumable layout",
         "backup": "Create a backup archive of the outside-Git PKI directory",

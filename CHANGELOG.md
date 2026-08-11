@@ -36,7 +36,14 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one Python handler for managed issuance and authenticated host-local issue or
   migration. Added unified-only `platform-pki service-recover --transaction`
   with exact interactive confirmation or `--yes`; host-local recovery remains
-  owned by `csr-recover`, and `platform-pki-service-renew` remains Bash-owned.
+  owned by `csr-recover`.
+- Changed `platform-pki-service-renew` and `platform-pki service-renew` to use
+  one Python whole-command handler for managed and authenticated host-local
+  renewal while preserving the final-Bash parser, help, output, status,
+  transaction, and recovery contracts. Managed transactions recover only
+  through unified `service-recover`; host-local transactions continue to use
+  `csr-recover`. Frozen final-Bash assets remain test oracles, not runtime
+  ownership.
 - Changed `platform-pki-init` to use one Python 3.14 handler for its
   compatibility command and unified `platform-pki init` route, preserving its
   parser, help, path validation, private-tree creation, template publication,

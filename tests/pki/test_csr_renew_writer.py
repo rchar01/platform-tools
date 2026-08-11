@@ -42,7 +42,10 @@ from .test_csr_signing import (
 
 pytestmark = pytest.mark.pki
 REPOSITORY = Path(__file__).resolve().parents[2]
-WRITER = REPOSITORY / "tests/pki/csr_renew_writer_driver.py"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-renew"
+ORACLE_RENEW = ORACLE_ROOT / "platform-pki-service-renew"
+ORACLE_LIB = ORACLE_ROOT / "lib"
+UNIFIED = BIN / "platform-pki"
 RECOVER = BIN / "platform-pki-csr-recover"
 RENEWAL_ID = "2123456789abcdef0123456789abcdef"
 SECOND_RENEWAL_ID = "3123456789abcdef0123456789abcdef"
@@ -58,11 +61,10 @@ def _renew(
 ):
     return workspace.runner(
         [
-            sys.executable,
-            WRITER,
+            RENEW,
             "external",
-            "--pki-dir",
-            workspace.pki,
+            "--namespace",
+            workspace.namespace,
             "--request-file",
             workspace.artifacts / "request",
             "--request-signature",
@@ -916,11 +918,10 @@ def test_python_host_local_renew_rechecks_terminal_outcome_at_source_boundaries(
     release = csr_workspace.artifacts / f"{checkpoint}.release"
     process = process_starter(
         [
-            sys.executable,
-            WRITER,
+            RENEW,
             "external",
-            "--pki-dir",
-            csr_workspace.pki,
+            "--namespace",
+            csr_workspace.namespace,
             "--request-file",
             csr_workspace.artifacts / "request",
             "--request-signature",
@@ -1167,17 +1168,22 @@ def test_bash_python_host_local_renewal_protocol_is_equivalent(
             approval_expires=fixed + 3600,
         )
 
-    def arguments(root: Path, tool: Path) -> tuple[str | os.PathLike[str], ...]:
+    def arguments(
+        root: Path,
+        prefix: tuple[Path | str, ...],
+        *,
+        pki_dir: bool,
+    ) -> tuple[str | os.PathLike[str], ...]:
         value = copied(root, {})
         predecessor = (
             value.pki
             / f"export/certificates/v1/artifacts/external/{REQUEST_ID}/tls.crt"
         )
         return (
-            tool,
+            *prefix,
             "external",
-            "--namespace" if tool == RENEW else "--pki-dir",
-            value.namespace if tool == RENEW else value.pki,
+            "--pki-dir" if pki_dir else "--namespace",
+            value.pki if pki_dir else value.namespace,
             "--request-file",
             value.artifacts / "request",
             "--request-signature",
@@ -1197,10 +1203,10 @@ def test_bash_python_host_local_renewal_protocol_is_equivalent(
         )
 
     def bash_argv(root: Path) -> tuple[str | os.PathLike[str], ...]:
-        return arguments(root, RENEW)
+        return arguments(root, (ORACLE_RENEW,), pki_dir=False)
 
     def python_argv(root: Path) -> tuple[str | os.PathLike[str], ...]:
-        return (sys.executable, *arguments(root, WRITER))
+        return arguments(root, (UNIFIED, "service-renew"), pki_dir=True)
 
     def normalize_output(root: Path, value: str) -> str:
         normalized = value.replace(os.fspath(root), "<WORKSPACE>")
@@ -1221,7 +1227,7 @@ def test_bash_python_host_local_renewal_protocol_is_equivalent(
         python_argv,
         dict(
             isolated_environment,
-            PLATFORM_TOOLS_LIB_DIR=os.fspath(REPOSITORY / "lib"),
+            PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB),
         ),
         output_normalizers=(normalize_output,),
         content_normalizers=(_csr_differential_content,),

@@ -339,6 +339,14 @@ def test_command_inventory_matches_make_and_bashly_sources() -> None:
     }
     assert maintained == expected
     assert bashly == expected
+    active_bashly = {
+        name
+        for name in _make_words("BASHLY_TOOLS")
+        if name.startswith("platform-pki-")
+    }
+    assert active_bashly <= bashly
+    assert "platform-pki-service-renew" not in active_bashly
+    assert "platform-pki-service-renew" in _make_words("PYTHON_ZIPAPPS")
 
 
 def test_all_lock_profiles_are_ordered_prefixes() -> None:

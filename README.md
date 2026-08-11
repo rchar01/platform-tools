@@ -46,7 +46,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
 | `platform-pki-service-issue` | Issue a service certificate from PKI inventory through the shared Python handler. |
-| `platform-pki-service-renew` | Renew a service certificate, reusing the private key by default. |
+| `platform-pki-service-renew` | Renew a service certificate through the shared Python handler, reusing the private key by default. |
 | `platform-pki-service-verify` | Verify a generated service certificate. |
 | `platform-pki-list-expiry` | List service certificate expiry status. |
 | `platform-pki-print-cert` | Print readable certificate details for a service. |
@@ -94,7 +94,7 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-csr-recover`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
+- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-csr-recover`, `platform-pki-service-issue`, `platform-pki-service-renew`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
@@ -437,7 +437,8 @@ example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
 The equivalent unified routes are `platform-pki init`,
-`platform-pki inventory-install`, and `platform-pki service-issue`. Managed
+`platform-pki inventory-install`, `platform-pki service-issue`, and
+`platform-pki service-renew`. Managed
 service transaction recovery is unified-only:
 
 ```bash
@@ -562,7 +563,10 @@ Service renewal requires an existing private key, reuses it unless
 `--rotate-key` is requested, and archives previous service material while
 transactionally replacing the certificate and intermediate CA database. Both
 operations hold ordered root, intermediate, and inventory locks through
-verification and consume one validated inventory snapshot.
+verification and consume one validated inventory snapshot. The compatibility
+command and `platform-pki service-renew` use the same Python whole-command
+handler. Interrupted managed renewal uses unified-only `service-recover`;
+host-local renewal continues to use `csr-recover`.
 
 `platform-pki-root-create` and `platform-pki root-create` use the same Python
 transaction writer. It generates the key and certificate in private staging,

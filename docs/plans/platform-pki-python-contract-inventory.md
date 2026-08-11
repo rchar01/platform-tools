@@ -9,15 +9,15 @@ The three Phase 3 read-oriented commands, all Phase 4 bounded-publication
 commands (`platform-pki-init`, `platform-pki-inventory-install`, and
 `platform-pki-export-ansible`), and the Phase 5 utility commands are
 Python-backed. Phase 6 has Python-backed compatibility and unified
-`root-create`, `intermediate-create`, `csr-recover`, and `service-issue` routes plus unified
+`root-create`, `intermediate-create`, `csr-recover`, `service-issue`, and
+`service-renew` routes plus unified
 `platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
 compatibility executable and other rollover leaves remain Bash. Managed and
-host-local service issue now share one public Python handler, and exact managed
-transaction recovery is exposed only through unified `service-recover`.
-`platform-pki-service-renew` remains Bash-owned.
-Non-public Python managed and host-local renewal writers now exercise the
-accepted service and CSR transaction/recovery models, including recursive
-schema-2 predecessor authentication, but no renewal route dispatches to them.
+host-local service issue and renew compatibility and unified routes share their
+Python handlers. Exact managed transaction recovery is exposed only through
+unified `service-recover`. The remaining Bash-owned PKI command families are
+`csr-trust-install`, `certificate-export`, `csr-candidate`, and direct
+`ca-rollover` operations.
 
 ## Runtime and Interfaces
 
@@ -663,7 +663,7 @@ For initial migration, the following remain byte-identical:
   pre/post-commit interruption, all declared recovery checkpoint applicability,
   mutation-boundary hostile replacement, secret-safe diagnostics, and the
   complete lifecycle-through-inventory lock profile.
-- Non-public writer infrastructure atomically publishes self-sized parser-valid
+- Writer infrastructure atomically publishes self-sized parser-valid
   journals, records exact stage/backup/publication prefixes, defers handled
   signals only across journal or object mutation-to-evidence assignments,
   applies transaction-wide authenticated preflight and authenticated pre-state
@@ -675,7 +675,7 @@ For initial migration, the following remain byte-identical:
   directory identity, or the authenticated full file identity, through a final
   destination recheck at the journal replacement boundary and serialize only
   the carried identity. The writer does not invoke or hand off to recovery.
-- Non-public managed issue orchestration snapshots one authenticated inventory
+- Managed issue/renew orchestration snapshots one authenticated inventory
   and active issuer, validates managed custody and generation paths, plans the
   complete issue transaction, copies fixed private signing inputs, invokes real
   OpenSSL with passphrases available only through inherited descriptors, stages
@@ -696,10 +696,10 @@ For initial migration, the following remain byte-identical:
   verification, and verifies the published certificate's exact subject,
   issuer, serial, P-384 key, SHA-384 signature, extension set and criticality,
   SAN set, key identifiers, and planned validity duration.
-- Managed renew planning and orchestration are implemented only through
-  non-public test entry points, with whole-command differentials against the
-  current Bash-owned renewal command. Public managed issue and unified-only
-  recovery are Python-backed, but no renewal route dispatches to Python yet.
+- Managed and host-local renew dispatch publicly through the shared Python
+  whole-command handler. Whole-command differentials remain pinned to the
+  frozen final-Bash executable and loaded libraries; managed recovery is
+  unified-only and host-local recovery remains under `csr-recover`.
 - Host-local renewal treats outcome-path presence as untrusted: only a strict
   finalized outcome in the authenticated current chain or an exact abandoned
   outcome whose resulting predecessor belongs to that chain can suppress a

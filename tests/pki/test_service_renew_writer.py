@@ -32,9 +32,11 @@ from src.platform_pki.service_transaction import (
 pytestmark = pytest.mark.pki
 REPOSITORY = Path(__file__).resolve().parents[2]
 ISSUE_DRIVER = REPOSITORY / "tests/pki/service_issue_writer_driver.py"
-RENEW_DRIVER = REPOSITORY / "tests/pki/service_renew_writer_driver.py"
-RECOVER_DRIVER = REPOSITORY / "tests/pki/service_recover_driver.py"
-BASH_RENEW = REPOSITORY / "bin/platform-pki-service-renew"
+RENEW_DRIVER = REPOSITORY / "bin/platform-pki-service-renew"
+PUBLIC = REPOSITORY / "bin/platform-pki"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-renew"
+BASH_RENEW = ORACLE_ROOT / "platform-pki-service-renew"
+ORACLE_LIB = ORACLE_ROOT / "lib"
 INVENTORY = """services:
   app:
     common_name: app.example.internal
@@ -91,6 +93,33 @@ def _operational_files(value: CreateWorkspace, service: str) -> dict[str, tuple[
         for path in paths
         if path.is_file()
     }
+
+
+def _renewal_public_state(value: CreateWorkspace, service: str) -> tuple[object, ...]:
+    archive = value.pki / "services" / service / "archive"
+    archive_state = (
+        tuple(
+            (
+                os.fspath(path.relative_to(archive)),
+                "directory" if path.is_dir() else "file",
+                mode(path),
+                None if path.is_dir() else digest(path),
+            )
+            for path in sorted(archive.rglob("*"))
+            if path.name != ".platform-pki-renew-archive"
+        )
+        if archive.is_dir()
+        else ()
+    )
+    newcerts = value.pki / "authorities/intermediates/g1-i1/newcerts"
+    return (
+        _operational_files(value, service),
+        tuple(
+            (path.name, mode(path), digest(path))
+            for path in sorted(newcerts.iterdir())
+        ),
+        archive_state,
+    )
 
 
 def _ready(
@@ -219,6 +248,7 @@ def test_bash_python_managed_renewal_operational_state_is_equivalent(
     bash = _clone(seed, tmp_path / "bash")
     python = _clone(seed, tmp_path / "python")
     bash_environment = environment(tmp_path / "bash-environment")
+    bash_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ORACLE_LIB)
     python_environment = environment(tmp_path / "python-environment")
 
     bash_result = run(
@@ -373,15 +403,7 @@ def test_managed_renew_writer_hard_crash_uses_exact_public_recovery(
     ):
         value = _clone(seed, tmp_path / f"recovery-{index}")
         process_environment = environment(tmp_path / f"recovery-environment-{index}")
-        before = (
-            _operational_files(value, "app"),
-            tuple(
-                (path.name, mode(path), digest(path))
-                for path in sorted(
-                    (value.pki / "authorities/intermediates/g1-i1/newcerts").iterdir()
-                )
-            ),
-        )
+        before = _renewal_public_state(value, "app")
         crashed = run(
             process_runner,
             _command(RENEW_DRIVER, value, "app", "--rotate-key"),
@@ -394,20 +416,50 @@ def test_managed_renew_writer_hard_crash_uses_exact_public_recovery(
         journal = value.pki / "state/service/recovery-journal"
         record = parse_service_transaction(journal.read_bytes(), pki_dir=value.pki)
         transaction = record["transaction"]
+        recovery_command = [
+            PUBLIC,
+            "service-recover",
+            "--pki-dir",
+            value.pki,
+            "--transaction",
+            transaction,
+            "--yes",
+        ]
+        crashed_public_state = _renewal_public_state(value, "app")
+        crashed_state = (
+            crashed_public_state,
+            mode(journal),
+            digest(journal),
+        )
+
+        interrupted = run(
+            process_runner,
+            recovery_command,
+            dict(
+                process_environment,
+                PLATFORM_PKI_SERVICE_RECOVER_FAILURE_AT="journal-loaded",
+            ),
+        )
+        assert interrupted.status == 1
+        assert interrupted.stdout == ""
+        assert interrupted.stderr == "[ERROR] Injected operation failure\n"
+        assert (
+            _renewal_public_state(value, "app"),
+            mode(journal),
+            digest(journal),
+        ) == crashed_state
 
         recovered = run(
             process_runner,
-            [
-                sys.executable,
-                RECOVER_DRIVER,
-                "--pki-dir",
-                value.pki,
-                "--transaction",
-                transaction,
-            ],
+            recovery_command,
             process_environment,
         )
-        require_success(recovered, f"managed renewal recovery at {checkpoint}")
+        outcome = "succeeded" if committed else "failed-pre-commit"
+        assert recovered.status == 0
+        assert recovered.stdout == (
+            f"[OK] Recovered managed service transaction: app ({outcome})\n"
+        )
+        assert recovered.stderr == ""
         assert not journal.exists()
         retained = value.pki / f"state/service/transactions/{transaction}"
         assert (retained / "terminal").is_file()
@@ -416,17 +468,7 @@ def test_managed_renew_writer_hard_crash_uses_exact_public_recovery(
         if committed:
             archive = next((value.pki / "services/app/archive").iterdir())
             assert not (archive / ".platform-pki-renew-archive").exists()
-            assert _operational_files(value, "app") != before[0]
+            assert _renewal_public_state(value, "app") == crashed_public_state
         else:
-            assert (
-                _operational_files(value, "app"),
-                tuple(
-                    (path.name, mode(path), digest(path))
-                    for path in sorted(
-                        (
-                            value.pki
-                            / "authorities/intermediates/g1-i1/newcerts"
-                        ).iterdir()
-                    )
-                ),
-            ) == before
+            assert not (value.pki / "services/app/archive").exists()
+            assert _renewal_public_state(value, "app") == before

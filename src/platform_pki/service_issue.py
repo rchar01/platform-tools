@@ -1086,7 +1086,7 @@ def _plan(
         key_path,
         "Service private key",
         private=True,
-        required=operation is ServiceOperation.RENEW,
+        required=False,
     )
     if operation is ServiceOperation.RENEW and current_key is None:
         _die(f"Service private key is missing; use platform-pki-service-issue first: {key_path}")
@@ -3206,8 +3206,6 @@ def _run_host_local_csr(
                     else:
                         if current_cert_file is None:
                             _die("Host-local renewal requires current_cert_file")
-                        if "deployers.allowed_signers" not in trust.files:
-                            _die("Host-local renewal requires CSR trust policy schema 2")
                         current_certificate = _csr_input(
                             current_cert_file, "Current host-local certificate"
                         )
@@ -3817,7 +3815,7 @@ def renew_host_local_csr(
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
 ) -> int:
-    """Renew one authenticated host-local CSR through the non-public writer."""
+    """Renew one authenticated host-local CSR."""
 
     return _run_host_local_csr(
         service,
@@ -4052,7 +4050,7 @@ def renew_managed_service(
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
 ) -> int:
-    """Renew one managed service through the non-public Python writer."""
+    """Renew one managed service through the Python transaction writer."""
 
     return _run_managed_service(
         service,
@@ -4124,6 +4122,102 @@ def issue_service(
         )
     days_value = arguments.values.get("--days")
     return issue_managed_service(
+        service,
+        pki_dir=paths.pki_dir,
+        days=None if days_value is None else str(days_value),
+        issuer_safety_days=safety_days,
+        intermediate_pass_file=passphrase,
+        rotate_key="--rotate-key" in arguments.provided,
+        environment=process_environment,
+        fault_hook=fault,
+        pause_hook=pause,
+    )
+
+
+def renew_service(
+    arguments: ParseResult,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Renew one managed or host-local service through public dispatch."""
+
+    if not isinstance(arguments, ParseResult):
+        raise TypeError("arguments must be a ParseResult")
+    process_environment = dict(os.environ if environment is None else environment)
+    require_pilot_common_library(process_environment)
+    paths = resolve_paths(arguments.values, process_environment)
+    service = arguments["service"]
+    assert isinstance(service, str)
+    home = process_environment.get("HOME")
+    if home is None:
+        _die("HOME is required")
+
+    def optional_path(option: str) -> str | None:
+        value = arguments.values.get(option)
+        if value is None:
+            return None
+        return expand_home(value, home=home)
+
+    passphrase = optional_path("--intermediate-pass-file")
+    safety_days = str(arguments["--issuer-safety-days"])
+    if any(option in arguments.provided for option in _PUBLIC_CSR_INPUT_OPTIONS):
+        fault = FaultHook(
+            crash_at=(
+                process_environment.get("PLATFORM_PKI_CSR_PYTHON_WRITER_CRASH_AT")
+                or process_environment.get("PLATFORM_PKI_CSR_CRASH_AT")
+            ),
+            signal_at=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_SIGNAL_AT"
+            ),
+            failure_at=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_FAILURE_AT"
+            ),
+            signum=int(
+                process_environment.get(
+                    "PLATFORM_PKI_CSR_PYTHON_WRITER_SIGNAL", "15"
+                )
+            ),
+        )
+        pause = PauseHook(
+            pause_at=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_AT"
+            ),
+            marker=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_MARKER"
+            ),
+            release=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_RELEASE"
+            ),
+        )
+        return renew_host_local_csr(
+            service,
+            pki_dir=paths.pki_dir,
+            request_file=cast(str, optional_path("--request-file")),
+            request_signature=cast(str, optional_path("--request-signature")),
+            approval_file=cast(str, optional_path("--approval-file")),
+            approval_signature=cast(str, optional_path("--approval-signature")),
+            csr_file=cast(str, optional_path("--csr-file")),
+            response_key=cast(str, optional_path("--response-key")),
+            current_cert_file=cast(str, optional_path("--current-cert-file")),
+            intermediate_pass_file=passphrase,
+            issuer_safety_days=safety_days,
+            environment=process_environment,
+            fault_hook=fault,
+            pause_hook=pause,
+        )
+    fault = FaultHook(
+        crash_at=process_environment.get("PLATFORM_PKI_SERVICE_RENEW_CRASH_AT"),
+        signal_at=process_environment.get("PLATFORM_PKI_SERVICE_RENEW_SIGNAL_AT"),
+        failure_at=process_environment.get("PLATFORM_PKI_SERVICE_RENEW_FAILURE_AT"),
+        signum=int(process_environment.get("PLATFORM_PKI_SERVICE_RENEW_SIGNAL", "15")),
+    )
+    pause = PauseHook(
+        pause_at=process_environment.get("PLATFORM_PKI_SERVICE_RENEW_PAUSE_AT"),
+        marker=process_environment.get("PLATFORM_PKI_SERVICE_RENEW_PAUSE_MARKER"),
+        release=process_environment.get("PLATFORM_PKI_SERVICE_RENEW_PAUSE_RELEASE"),
+    )
+    days_value = arguments.values.get("--days")
+    return renew_managed_service(
         service,
         pki_dir=paths.pki_dir,
         days=None if days_value is None else str(days_value),

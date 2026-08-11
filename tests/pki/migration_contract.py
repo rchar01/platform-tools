@@ -513,13 +513,13 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
     ),
     RuntimeOptionRelationship(
         ("service-renew",), "conditional-required", "any host-local CSR field is present",
-        _CSR_INPUT_FLAGS, "bashly/platform-pki-service-renew/src/root_command.sh",
-        "Authenticated host-local renewal requires $option",
+        _CSR_INPUT_FLAGS, "src/platform_pki/parser.py",
+        "Authenticated host-local {operation} requires {option}",
     ),
     RuntimeOptionRelationship(
         ("service-renew",), "conditional-conflict", "host-local CSR mode is selected",
-        ("--days", "--rotate-key"), "bashly/platform-pki-service-renew/src/root_command.sh",
-        "--days is unavailable for host-local CSR signing",
+        ("--days", "--rotate-key"), "src/platform_pki/parser.py",
+        "--days is unavailable for host-local CSR signing; inventory is authoritative",
     ),
     RuntimeOptionRelationship(
         ("ca-passphrase-verify",), "conditional-required", "at least one member must be present",
@@ -614,6 +614,7 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("csr-candidate", "abandon"), _CANDIDATE_DECISION_DUPLICATES, "bashly/platform-pki-csr-candidate/src/abandon_command.sh"),
     DuplicateOptionContract(("service-issue",), _CSR_INPUT_FLAGS, "bashly/platform-pki-service-issue/src/root_command.sh"),
     DuplicateOptionContract(("service-renew",), _CSR_INPUT_FLAGS, "bashly/platform-pki-service-renew/src/root_command.sh"),
+    DuplicateOptionContract(("service-renew",), _CSR_INPUT_FLAGS, "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("service-recover",), ("--transaction", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("custody-report",), ("--namespace", "--pki-dir", "--format"), "bashly/platform-pki-custody-report/src/root_command.sh"),
     DuplicateOptionContract(("ca-passphrase-verify",), ("--namespace", "--pki-dir", "--root-pass-file", "--intermediate-pass-file"), "bashly/platform-pki-ca-passphrase-verify/src/root_command.sh"),

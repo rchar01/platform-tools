@@ -838,7 +838,6 @@ def _authenticate_history(
     validation_boundary_sha256 = service.validation_boundary_sha256
     rollback_hold_seconds = int(service.rollback_hold_seconds, 10)
     evidence = _Evidence()
-    trust, approver_principal, response_principal = _schema2_trust(evidence, pki_dir)
     active: OrderedRecord | None = None
     if root_request_id is None:
         if (request_current_certificate_sha256 is None) != (
@@ -869,6 +868,15 @@ def _authenticate_history(
             "decision_sha256",
         ):
             _require_digest(active[field], f"Active pointer {field}")
+    elif (
+        request_current_certificate_sha256 is not None
+        or current_certificate_path is not None
+        or _REQUEST_ID.fullmatch(root_request_id) is None
+    ):
+        raise ValueError("terminal history authentication arguments are invalid")
+
+    trust, approver_principal, response_principal = _schema2_trust(evidence, pki_dir)
+    if active is not None:
         if request_current_certificate_sha256 is not None:
             assert current_certificate_path is not None
             if active["certificate_sha256"] != request_current_certificate_sha256:
@@ -881,12 +889,6 @@ def _authenticate_history(
             if current.digest != request_current_certificate_sha256:
                 raise CsrHistoryError("Renewal request does not bind the current certificate")
         root_request_id = active["request_id"]
-    elif (
-        request_current_certificate_sha256 is not None
-        or current_certificate_path is not None
-        or _REQUEST_ID.fullmatch(root_request_id) is None
-    ):
-        raise ValueError("terminal history authentication arguments are invalid")
 
     stack: set[str] = set()
     authenticated: dict[str, _Outcome] = {}

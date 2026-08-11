@@ -133,7 +133,7 @@ startup (`-I -S`) so checkout modules, `PYTHONPATH`, and user or system site
 packages cannot alter application imports.
 
 `platform-pki` provides the unified hierarchy, help, version, and frozen
-24-route parser contract. Migrated compatibility commands dispatch to the same
+25-route parser contract. Migrated compatibility commands dispatch to the same
 handlers as their unified routes; unavailable handlers fail closed. Shared
 modules provide safe diagnostics, strict
 ordered `key=value` records, strict inventory parsing, and bounded exact-argv

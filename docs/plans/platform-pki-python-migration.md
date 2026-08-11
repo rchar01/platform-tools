@@ -9,7 +9,12 @@ implemented. Phase 6 has Python-backed compatibility and unified `root-create`,
 dispatch are also Python-backed. Direct rollover compatibility remains Bash.
 Managed service issue uses its Python schema-1 transaction writer, and exact
 managed recovery is public through unified-only `platform-pki service-recover`.
-Managed service renew remains Bash-owned.
+Managed and host-local service renew now dispatch through the same Python
+handler for compatibility and unified routes. Remaining Bash-owned PKI command
+families are `csr-trust-install`, `certificate-export`, `csr-candidate`, and
+direct `ca-rollover` operations. Migration remains forward-only: installing an
+older Bash release after Python has written state is unsupported, and retained
+PKI shell libraries cannot be removed while those Bash commands remain.
 
 ## Goal
 
@@ -540,7 +545,7 @@ Managed service foundation checkpoint:
 - [x] CSR response/candidate, managed service, retained transaction, and CSR
   signing recovery paths enforce the retained canonical OpenSSL serial form.
 - [x] Preserve Bash ownership until each whole service command is ready for
-  cutover; service issue is now Python-backed while service renew remains Bash.
+  cutover; service issue and renew are now Python-backed.
 - [x] Expose managed recovery only as unified `service-recover`; do not add a
   compatibility executable.
 - [x] Non-public operational recovery now provides descriptor-bound exact-
@@ -584,7 +589,7 @@ Managed service foundation checkpoint:
 - [x] Freeze the final Bash service-issue executable and loaded libraries from
   `6a7f162240c9970cf9a17091d9b37c8dea071ad8`; keep managed and host-local
   Bash/Python writer differentials pinned to that oracle.
-- [x] Add non-public managed renewal planning/orchestration and host-local
+- [x] Add managed renewal planning/orchestration and host-local
   renewal writing on the accepted service and 114-field CSR transaction
   foundations. Managed renewal binds sparse displaced archive sources and exact
   rollback/cleanup state; host-local renewal authenticates recursive finalized
@@ -600,9 +605,19 @@ Managed service foundation checkpoint:
   admission. Retained request and approval signatures verify against that root,
   while retained response and deployer trust copies must byte-match it.
 - [x] Add whole-command Bash/Python managed and host-local renewal
-  differentials against the current Bash-owned command.
-- [ ] Freeze final Bash service-renew assets and repin the differentials
-  immediately before public parser/dispatch cutover.
+  differentials against the frozen final-Bash command.
+- [x] Freeze final Bash service-renew assets from
+  `c5a66cd846fe84bf7917da84613762b1f2db09ce` and repin the differentials
+  immediately before public parser/dispatch cutover. The executable is mode 755
+  with SHA-256
+  `5956ab87ff665da4dd2d4820b9676771ad1e809de6aeedf28d0acb29a2634562`;
+  the loaded mode-644 common, CSR-sign, and CSR-candidate libraries have
+  SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`,
+  `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`,
+  and `ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f`.
+- [x] Dispatch compatibility and unified service-renew through one Python
+  handler, retain managed recovery only under unified `service-recover`, and
+  retain host-local recovery under `csr-recover`.
 
 Root-create checkpoint:
 
@@ -840,6 +855,7 @@ implementation.
 | 2026-08-11 | Non-public Python host-local CSR issue/migration writing implemented and final review findings resolved. | `issue_host_local_csr` in `src/platform_pki/service_issue.py` authenticates canonical request and approval records against installed no-options Ed25519 trust, pins and repeatedly rechecks the exact trust tree plus authenticated inventory, authority, and protocol sources, rejects duplicate or non-exact SAN profiles, enforces issued `notBefore` skew and exact inventory-authoritative lifetime, transports the intermediate passphrase through an inherited descriptor, writes every durable phase through the frozen 114-field parser, publishes all seven CA database entries in order, and delegates committed response signing plus candidate-before-response publication to the existing Python recovery engine. The final pre-publication authorization window now rechecks the exact journal identity, both active authority directory identities, root certificate, intermediate key/certificate/closed configuration/CRL number, every snapshotted CA database input, active-issuer record, inventory, and complete trust tree; replacement failures retain the uncommitted journal without CA mutation so exact source restoration can be followed by recovery. Exception and signal handling reloads the durable journal: pre-commit cleanup permanently consumes replay and restores CA state, while a committed journal is retained for forward-only recovery without rollback or CA re-signing. Complete semantic state-tree differential coverage matches final Bash after normalizing only copied roots and certificate time/signature dynamics. The 68-test focused suite passed in 38.98 seconds and covers issue, migration preservation, trust/source races, malformed trust, exact CSR/certificate profiles, replay retries, all 22 post-journal writer crash checkpoints, commit-rewrite failure/signal gaps, response-key replacement, and response-signing invocation count. Copied CSR fixtures now authenticate the source-bound committed terminal `g1-i1` intermediate-bootstrap journal through authoritative CA recovery semantics before removing only its byte-identical copied path; the six targeted positive/malformed/pending/unknown-operation/wrong-operation/wrong-transaction fixture checks passed in 3.29 seconds. Public service issue remains final-Bash-owned; no CLI, compatibility, or Make command-ownership cutover occurred. Full `make container-check` was intentionally not run for this non-public tranche. |
 | 2026-08-11 | Host-local response-signature mutation ownership and test interception boundaries hardened. | Python recovery now writes a durable `response-signing` checkpoint before invoking `ssh-keygen`; only that owned post-sign/pre-evidence window may authenticate and adopt an exact safe signature after rechecking complete committed sources, while final-Bash-compatible `ca-committed` recovery removes and recreates a safe unowned signature. Malformed, unsafe-mode, hard-linked, or replaced signatures fail closed. OpenSSL interception regressions resolve the real executable before prepending an executable fake and assert invocation markers before profile or commit-gap outcomes. Pinned verification passed the expanded 73-test writer suite in 48.07 seconds, the 680-test CSR recovery foundation, two isolated descriptor/replacement signing tests, and six authenticated fixture-copy tests. Public issue dispatch and final-Bash compatibility remain unchanged; full acceptance was intentionally not run for this focused follow-up. |
 | 2026-08-11 | Service issue and managed recovery public cutover implemented. | `platform-pki-service-issue` and unified `service-issue` now share the Python managed/host-local handler; unified-only `service-recover` confirms and recovers one exact managed transaction. The final Bash executable from `6a7f162240c9970cf9a17091d9b37c8dea071ad8` is frozen at mode 755 and SHA-256 `c06bb8baba8d7a75f0a3a88f814b86740aab03f78eef2e8fcd05140534206fa5`, with loaded common and CSR-sign libraries pinned at SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f` and `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`. Service renew remains Bash-owned. |
+| 2026-08-11 | Service renewal public cutover implemented. | `platform-pki-service-renew` and unified `service-renew` now share one Python managed/host-local whole-command handler; managed interruption recovery remains unified-only through `service-recover`, while host-local recovery remains under `csr-recover`. Final Bash commit `c5a66cd846fe84bf7917da84613762b1f2db09ce` is frozen with mode/hash provenance and both managed and host-local differentials. Final focused verification passed 12 public renewal tests in 63.83 seconds, four managed writer/differential tests in 75.60 seconds, 47 host-local tests with four workers in 159.42 seconds, 167 managed recovery tests, 473 command-contract tests, 1,750 foundation tests, 175 installed-tool tests, and 48 migration-contract tests. Deterministic Bash/Python generation, static checks, and ShellCheck passed; full `make container-check` was intentionally not run for this focused cutover. |
 
 ## Decision Log
 

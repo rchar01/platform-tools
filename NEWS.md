@@ -9,6 +9,12 @@ This file gives a short, release-oriented view of what changed between versions.
   migration. Managed schema-1 transactions can now be recovered through the
   unified-only `platform-pki service-recover --transaction` route with exact
   confirmation; host-local transactions continue to use `csr-recover`.
+- `platform-pki-service-renew` and `platform-pki service-renew` now share the
+  same Python whole-command handler for managed and authenticated host-local
+  renewal. Managed interruption recovery remains unified-only through
+  `service-recover`; host-local interruption recovery remains with
+  `csr-recover`. The final Bash command and its loaded libraries are retained
+  only as frozen compatibility-test evidence.
 - Added the deterministic, standard-library-only `platform-pki` Python 3.14
   zipapp as the unified migration interface. The foundation build provides the
   frozen 25-route parser, strict ordered-record and inventory models, bounded

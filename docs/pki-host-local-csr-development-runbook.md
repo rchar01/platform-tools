@@ -620,6 +620,11 @@ Finalization records historical evidence; it performs no deployment/discovery.
 | `platform-pki-certificate-export publish/resolve` | Exact six-file digest-pinned export. |
 | `platform-pki-csr-candidate verify/finalize/abandon` | Historical authenticated decisions; no live action. |
 
+The service issue and renew compatibility commands share their Python handlers
+with unified `platform-pki service-issue` and `platform-pki service-renew`.
+Host-local interruption recovery remains `platform-pki csr-recover`; managed
+renewal uses unified-only `platform-pki service-recover`.
+
 | Manual/future operation | Status |
 | --- | --- |
 | Migration hypothesis preflight | Manual; must prove exact active/predecessor/issuer/inventory state. |

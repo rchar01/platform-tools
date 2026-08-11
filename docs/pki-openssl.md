@@ -545,6 +545,11 @@ platform-pki-service-renew external \
   --current-cert-file ./current-tls.crt
 ```
 
+The compatibility commands and unified `platform-pki service-issue` or
+`platform-pki service-renew` routes use the same Python handlers. Managed
+renewal recovery is unified-only through `platform-pki service-recover`; this
+host-local flow continues to recover through `platform-pki csr-recover`.
+
 These inputs are current-user-owned, singly linked, non-writable-by-others
 regular files. Records are printable ASCII, ordered exactly as documented, and
 reject missing, duplicate, unknown, reordered, or trailing fields. Request IDs
@@ -961,6 +966,12 @@ publication, verification, and handled signal failures restore the CA database,
 service key, certificate files, and archive state. If a published destination
 is replaced by foreign state during recovery, that state and the locked staging
 directory are preserved for manual recovery rather than overwritten.
+
+`platform-pki-service-renew` and `platform-pki service-renew` run this same
+Python whole-command handler. An interrupted managed transaction is recovered
+with exact transaction selection through `platform-pki service-recover`; an
+interrupted authenticated host-local transaction uses `platform-pki
+csr-recover`.
 
 The renew command does not deploy anything to remote hosts. Deployment belongs in `platform-config`.
 

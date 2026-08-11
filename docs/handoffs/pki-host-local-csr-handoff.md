@@ -116,6 +116,11 @@ platform-pki-service-issue SERVICE --csr-file PATH <authenticated-request-inputs
 platform-pki-service-renew SERVICE --csr-file PATH <authenticated-request-inputs>
 ```
 
+Both compatibility commands share their Python handlers with unified
+`platform-pki service-issue` and `platform-pki service-renew`. This host-local
+path retains `platform-pki csr-recover`; unified-only `service-recover` is for
+managed service transactions.
+
 `--csr-file` is allowed only for inventory `key_custody: host-local`, conflicts
 with `--rotate-key`, and never authorizes CSR-controlled names or extensions.
 The signer derives subject, SANs, EKU, key usage, and validity from one locked

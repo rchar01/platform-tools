@@ -19,6 +19,15 @@ ROOT = BIN / "platform-pki-root-create"
 INTERMEDIATE = BIN / "platform-pki-intermediate-create"
 ISSUE = BIN / "platform-pki-service-issue"
 TOOL = BIN / "platform-pki-service-renew"
+UNIFIED = BIN / "platform-pki"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-renew"
+ORACLE = ORACLE_ROOT / "platform-pki-service-renew"
+ORACLE_LIB = ORACLE_ROOT / "lib"
+ORACLE_COMMIT = "c5a66cd846fe84bf7917da84613762b1f2db09ce"
+ORACLE_SHA256 = "5956ab87ff665da4dd2d4820b9676771ad1e809de6aeedf28d0acb29a2634562"
+COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
+CSR_SIGN_SHA256 = "8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001"
+CANDIDATE_SHA256 = "ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f"
 INVENTORY = """services:
   app:
     common_name: app.example.internal
@@ -63,9 +72,18 @@ class Workspace:
     env: Mapping[str, str]
     runner: Callable[..., ProcessResult]
 
-    def renew(self, service: str, *arguments: object, env: Mapping[str, str] | None = None) -> ProcessResult:
+    def renew(
+        self,
+        service: str,
+        *arguments: object,
+        env: Mapping[str, str] | None = None,
+        unified: bool = False,
+    ) -> ProcessResult:
+        prefix: tuple[object, ...] = (
+            (UNIFIED, "service-renew") if unified else (TOOL,)
+        )
         return self.runner(
-            [TOOL, service, "--namespace", self.namespace, *arguments, "--intermediate-pass-file", self.intermediate_pass],
+            [*prefix, service, "--namespace", self.namespace, *arguments, "--intermediate-pass-file", self.intermediate_pass],
             env=self.env if env is None else env,
             timeout=120,
         )
@@ -103,6 +121,7 @@ def no_residue(pki: Path) -> None:
     assert not (pki / "authorities/roots/g1/.platform-pki-root-operation.lock").exists()
     assert not (pki / "authorities/intermediates/g1-i1/.platform-pki-intermediate-operation.lock").exists()
     assert not list((pki / "authorities/intermediates/g1-i1").glob(".platform-pki-service-renew.*"))
+    assert not (pki / "state/service/recovery-journal").exists()
 
 
 def openssl(workspace: Workspace, *arguments: object) -> ProcessResult:
@@ -148,6 +167,65 @@ def state_snapshot(service: Path, pki: Path, newcert: Path) -> tuple[tuple[objec
     if archive.is_dir():
         paths.extend(sorted(archive.rglob("*")))
     return tuple(path_record(path) for path in paths)
+
+
+def test_frozen_oracle_and_loaded_libraries_match_recorded_provenance() -> None:
+    plan = (REPOSITORY / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    expected = {
+        ORACLE: ORACLE_SHA256,
+        ORACLE_LIB / "platform-pki-common.sh": COMMON_SHA256,
+        ORACLE_LIB / "platform-pki-csr-sign.sh": CSR_SIGN_SHA256,
+        ORACLE_LIB / "platform-pki-csr-candidate.sh": CANDIDATE_SHA256,
+    }
+    for path, expected_digest in expected.items():
+        assert sha256(path.read_bytes()).hexdigest() == expected_digest
+    assert ORACLE_COMMIT in plan
+    assert file_mode(ORACLE) == 0o755
+    assert all(file_mode(path) == 0o644 for path in tuple(expected)[1:])
+
+
+@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
+def test_compatibility_help_matches_frozen_oracle(
+    process_runner, isolated_environment, tty
+) -> None:
+    env = dict(isolated_environment)
+    env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ORACLE_LIB)
+    pty_mode = None
+    if tty:
+        env.pop("NO_COLOR")
+        pty_mode = "canonical"
+    expected = process_runner(
+        [ORACLE, "--help"], env=env, timeout=30, pty_mode=pty_mode
+    )
+    actual = process_runner(
+        [TOOL, "--help"], env=env, timeout=30, pty_mode=pty_mode
+    )
+    assert (actual.status, actual.stdout, actual.stderr) == (
+        expected.status,
+        expected.stdout,
+        expected.stderr,
+    )
+
+
+def test_compatibility_and_unified_routes_share_public_handler(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    pki = tmp_path / "missing-pki"
+    compatibility = process_runner(
+        [TOOL, "app", "--pki-dir", pki], env=isolated_environment, timeout=30
+    )
+    unified = process_runner(
+        [UNIFIED, "service-renew", "app", "--pki-dir", pki],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert (compatibility.status, compatibility.stdout, compatibility.stderr) == (
+        unified.status,
+        unified.stdout,
+        unified.stderr,
+    )
 
 
 def test_service_renew_cli_contract(tmp_path, process_runner, isolated_environment) -> None:
@@ -273,7 +351,9 @@ def test_service_renew_rotate_key_archives_old_key(renew_workspace: Workspace) -
     key = workspace.pki / "services/rotate/private/tls.key"
     old_key = digest(key)
     key.chmod(0o400)
-    result = workspace.renew("rotate", "--days", "31", "--rotate-key")
+    result = workspace.renew(
+        "rotate", "--days", "31", "--rotate-key", unified=True
+    )
     assert_result(result, 0)
     assert digest(key) != old_key
     archive_keys = list((workspace.pki / "services/rotate/archive").glob("*/tls.key"))
@@ -313,15 +393,51 @@ exec "$REAL_OPENSSL" "$@"
     no_residue(workspace.pki)
 
 
-def test_service_renew_verification_failure_restores_complete_state(renew_workspace: Workspace, executable_directory) -> None:
+def test_service_renew_verification_failure_restores_complete_state(
+    renew_workspace: Workspace,
+    executable_directory,
+) -> None:
     workspace = renew_workspace
     service, newcert, before = prepare_failure_state(workspace)
-    fake_lib = executable_directory / "verify-lib"
-    write_executable(fake_lib / "platform-pki-common.sh", """#!/usr/bin/env bash
-source "$REAL_COMMON"
-pki_verify_service_certificate() { exit 43; }
-""")
-    result = workspace.renew("failure", "--rotate-key", env=environment(workspace.env, REAL_COMMON=os.fspath(REPOSITORY / "lib/platform-pki-common.sh"), PLATFORM_TOOLS_LIB_DIR=os.fspath(fake_lib)))
-    assert result.status == 43
+    fake_bin = executable_directory / "verification-bin"
+    invocation = fake_bin / "verify-invocation"
+    write_executable(
+        fake_bin / "openssl",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == verify ]] && printf '%s\n' "$@" | grep -Fxq -- -untrusted; then
+  "$REAL_OPENSSL" "$@"
+  printf '%s\n' "$@" >"$VERIFY_INVOCATION"
+  exit 42
+fi
+exec "$REAL_OPENSSL" "$@"
+""",
+    )
+    result = workspace.renew(
+        "failure",
+        "--rotate-key",
+        env=environment(
+            workspace.env,
+            PATH=f"{fake_bin}:{workspace.env['PATH']}",
+            REAL_OPENSSL=executable("openssl"),
+            VERIFY_INVOCATION=os.fspath(invocation),
+        ),
+    )
+    assert result.status == 42
+    assert result.stdout == ""
+    assert result.stderr.endswith(
+        "[ERROR] OpenSSL published certificate chain verification failed\n"
+    )
+    assert invocation.read_text(encoding="ascii").splitlines() == [
+        "verify",
+        "-CAfile",
+        os.fspath(workspace.pki / "authorities/roots/g1/certs/root-ca.crt"),
+        "-untrusted",
+        os.fspath(
+            workspace.pki
+            / "authorities/intermediates/g1-i1/certs/intermediate-ca.crt"
+        ),
+        os.fspath(service / "certs/tls.crt"),
+    ]
     assert state_snapshot(service, workspace.pki, newcert) == before
     no_residue(workspace.pki)

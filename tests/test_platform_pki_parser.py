@@ -311,6 +311,20 @@ def test_host_local_relationships_are_checked_before_handler_dispatch() -> None:
     )
     with pytest.raises(ParserError, match="--days is unavailable"):
         parse_route(("service-issue",), ("api", *complete, "--days", "30"))
+    with pytest.raises(ParserError, match="host-local renewal requires --current-cert-file"):
+        parse_route(("service-renew",), ("api", *complete))
+    renewal = tuple(
+        item
+        for option in _host_local_options(include_current=True)
+        for item in (option, f"{option[2:]}.value")
+    )
+    with pytest.raises(
+        ParserError,
+        match="--days is unavailable for host-local CSR signing; inventory is authoritative",
+    ):
+        parse_route(("service-renew",), ("api", *renewal, "--days", "30"))
+    with pytest.raises(ParserError, match="--rotate-key conflicts with --csr-file"):
+        parse_route(("service-renew",), ("api", *renewal, "--rotate-key"))
 
 
 def _host_local_options(*, include_current: bool) -> tuple[str, ...]:

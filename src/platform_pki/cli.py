@@ -71,6 +71,10 @@ def _handler(route: tuple[str, ...]):
         from .service_issue import issue_service
 
         return issue_service
+    if route == ("service-renew",):
+        from .service_issue import renew_service
+
+        return renew_service
     if route == ("service-recover",):
         from .service_recover import recover_service
 
@@ -206,6 +210,65 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "Host-local issue and migration require the complete authenticated CSR,\n"
             "request, approval, and response-signing inputs. They publish only a pending\n"
             "certificate candidate and signed response; managed migration state remains.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n\n",
+            end="",
+        )
+        return
+    if route == ("service-renew",) and not unified:
+        print(
+            f"{name} - Renew a service certificate from PKI inventory\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} SERVICE [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--days DAYS', '35')}\n"
+            "    Service certificate lifetime\n\n"
+            f"  {_color('--issuer-safety-days DAYS', '35')}\n"
+            "    Required validity margin before the intermediate expires\n"
+            "    Default: 1\n\n"
+            f"  {_color('--intermediate-pass-file PATH', '35')}\n"
+            "    Restricted file containing the encrypted intermediate-key passphrase\n\n"
+            f"  {_color('--rotate-key', '35')}\n"
+            "    Archive and replace the existing service private key\n\n"
+            f"  {_color('--csr-file PATH', '35')}\n"
+            "    Host-generated P-384 CSR\n\n"
+            f"  {_color('--request-file PATH', '35')}\n"
+            "    Canonical authenticated CSR request manifest\n\n"
+            f"  {_color('--request-signature PATH', '35')}\n"
+            "    Detached OpenSSH request signature\n\n"
+            f"  {_color('--approval-file PATH', '35')}\n"
+            "    Canonical offline approval manifest\n\n"
+            f"  {_color('--approval-signature PATH', '35')}\n"
+            "    Detached OpenSSH approval signature\n\n"
+            f"  {_color('--response-key PATH', '35')}\n"
+            "    Trusted Ed25519 response-signing private key\n\n"
+            f"  {_color('--current-cert-file PATH', '35')}\n"
+            "    Current host-local certificate bound by the request\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICE', '34')}\n"
+            "    Inventory service name\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} platform-example\n"
+            f"  {name} platform-example --rotate-key\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "The lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397\n"
+            "days, in that order. The existing private key is reused unless --rotate-key\n"
+            "is used. Previous service state is archived only when renewal and verification\n"
+            "complete successfully. Passphrase files must be mode 600 or stricter and have\n"
+            "a first line of at least 16 characters containing non-whitespace content.\n"
+            "Host-local renewal requires the complete authenticated CSR, current\n"
+            "certificate, request, approval, and response-signing inputs. It publishes\n"
+            "only a pending certificate candidate and signed response.\n"
             "Legacy singleton CA state must be migrated before this command can run.\n\n",
             end="",
         )
@@ -643,7 +706,7 @@ def _dispatch(name: str, command: str, arguments: list[str], *, unified: bool) -
             return 0
 
     if (
-        route == ("service-issue",)
+        route in (("service-issue",), ("service-renew",))
         and len(arguments) >= 2
         and not arguments[0].startswith("-")
         and leading_action(arguments[1], version=False) == "help"

@@ -590,15 +590,15 @@ def _runtime_relationships(
                         application=True,
                     )
             if "--days" in provided:
-                message = "--days is unavailable for host-local CSR signing"
-                if route == ("service-issue",):
-                    message += "; inventory is authoritative"
-                raise ParserError(message, application=True)
+                raise ParserError(
+                    "--days is unavailable for host-local CSR signing; inventory is authoritative",
+                    application=True,
+                )
             if "--rotate-key" in provided:
-                message = "--rotate-key is unavailable for host-local CSR signing"
-                if route == ("service-issue",):
-                    message = "--rotate-key conflicts with --csr-file"
-                raise ParserError(message, application=True)
+                raise ParserError(
+                    "--rotate-key conflicts with --csr-file",
+                    application=True,
+                )
             if route == ("service-issue",) and "--current-cert-file" in provided:
                 raise ParserError(
                     "--current-cert-file is available only for host-local renewal",
