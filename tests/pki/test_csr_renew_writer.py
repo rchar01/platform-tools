@@ -302,7 +302,10 @@ def test_python_host_local_renew_authenticates_predecessor_and_publishes_candida
     )
     unresolved = _renew(csr_workspace, next_current)
     assert unresolved.status == 1
-    assert "Retained CSR candidate is pending" in unresolved.stderr
+    assert unresolved.stderr == (
+        "[ERROR] An unresolved renewal candidate already exists for the active predecessor: "
+        f"{SECOND_RENEWAL_ID}\n"
+    )
     assert not (
         csr_workspace.pki / f"state/csr/replay/requests/{THIRD_RENEWAL_ID}"
     ).exists()
@@ -336,7 +339,9 @@ def test_python_host_local_renew_rejects_pending_candidate_for_different_predece
     result = _renew(csr_workspace, current)
 
     assert result.status == 1
-    assert f"pending: external/{RENEWAL_ID}" in result.stderr
+    assert result.stderr == (
+        f"[ERROR] Retained CSR candidate is pending: external/{RENEWAL_ID}\n"
+    )
     _assert_request_unconsumed(csr_workspace, THIRD_RENEWAL_ID)
 
 
@@ -545,7 +550,9 @@ def test_python_host_local_renew_rejects_pending_candidate_for_other_service(
     result = _attempt_next_renewal(csr_workspace, current)
 
     assert result.status == 1
-    assert f"pending: other/{FOURTH_RENEWAL_ID}" in result.stderr
+    assert result.stderr == (
+        f"[ERROR] Retained CSR candidate is pending: other/{FOURTH_RENEWAL_ID}\n"
+    )
     _assert_next_request_unconsumed(csr_workspace)
 
 

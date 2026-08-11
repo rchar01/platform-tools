@@ -32,9 +32,12 @@ from .csr_protocol import (
     CsrProtocolError,
     CsrRequest,
     parse_csr_approval,
+    parse_csr_candidate,
     parse_csr_request,
+    parse_csr_response,
     serialize_csr_response,
     validate_request_approval_binding,
+    validate_response_candidate_binding,
 )
 from .csr_recover import (
     _SigningControl,
@@ -2708,7 +2711,9 @@ def _csr_reject_unresolved_renewal(
     service: InventoryService,
     inventory_services: tuple[InventoryService, ...],
     current_request_id: str,
+    current_certificate_sha256: str,
     environment: Mapping[str, str],
+    trust: _CsrTrust,
     active_history: CsrHistoryAuthentication,
 ) -> Callable[[], None]:
     candidate_root = f"{pki_dir}/state/csr/candidates"
@@ -2723,6 +2728,7 @@ def _csr_reject_unresolved_renewal(
         tuple[str, DirectoryIdentity, tuple[str, ...], str]
     ] = []
     candidate_files: list[tuple[str, FileIdentity]] = []
+    candidate_file_identities: dict[tuple[str, str, str], FileIdentity] = {}
     terminal_rechecks: list[CsrHistoryAuthentication] = []
     active_histories = {service.name: active_history}
     outcome_root_absent = False
@@ -2736,6 +2742,86 @@ def _csr_reject_unresolved_renewal(
         if selected.key_custody != "host-local":
             _die(f"Retained CSR {kind} service is not host-local in current inventory: {name}")
         return selected
+
+    def matches_active_predecessor(service_name: str, request_id: str) -> bool:
+        candidate_path = f"{candidate_root}/{service_name}/{request_id}"
+        request_path = f"{pki_dir}/state/csr/transactions/csr-{request_id}/request"
+        inputs: dict[str, _CsrInput] = {}
+        request_data = b""
+        try:
+            for name in ("candidate", "response", "response.sig"):
+                path = f"{candidate_path}/{name}"
+                with OpenedFile(
+                    path,
+                    policy=FilePolicy(
+                        owner=_OWNER,
+                        mode=0o600,
+                        links=1,
+                        max_size=_MAX_EVIDENCE,
+                    ),
+                    expected_identity=candidate_file_identities[
+                        (service_name, request_id, name)
+                    ],
+                ) as opened:
+                    data = opened.read(_CSR_MAX_PROTOCOL_BYTES)
+                    inputs[name] = _CsrInput(path, opened.recheck(), data)
+            with OpenedFile(
+                request_path,
+                policy=FilePolicy(
+                    owner=_OWNER,
+                    mode=0o600,
+                    links=1,
+                    max_size=_CSR_MAX_PROTOCOL_BYTES,
+                ),
+            ) as opened:
+                request_data = opened.read(_CSR_MAX_PROTOCOL_BYTES)
+                opened.recheck()
+            request = parse_csr_request(request_data)
+            response = parse_csr_response(inputs["response"].data)
+            candidate = parse_csr_candidate(inputs["candidate"].data)
+            validate_response_candidate_binding(response, candidate)
+            if (
+                response.record["request_id"] != request_id
+                or response.record["service"] != service_name
+                or response.record["target"]
+                != inventory_by_name[service_name].target
+                or response.record["request_sha256"] != _sha256(request_data)
+                or candidate.record["response_signature_sha256"]
+                != _sha256(inputs["response.sig"].data)
+                or response.record["response_principal"] != trust.response_principal
+                or any(
+                    request.record[field] != response.record[field]
+                    for field in (
+                        "request_id",
+                        "nonce",
+                        "operation",
+                        "service",
+                        "target",
+                        "inventory_sha256",
+                        "csr_sha256",
+                        "csr_spki_sha256",
+                        "response_principal",
+                    )
+                )
+            ):
+                return False
+            _csr_verify_signature(
+                trust.files["responses.allowed_signers"],
+                response.record["response_principal"],
+                "platform-pki-csr-response-v1",
+                inputs["response.sig"],
+                inputs["response"].data,
+                environment,
+                "Pending CSR response",
+            )
+        except (ApplicationError, CsrProtocolError, FilesystemError, KeyError):
+            return False
+        return (
+            request.operation is CsrOperation.RENEW
+            and request.record["service"] == service.name
+            and request.record["current_cert_sha256"]
+            == current_certificate_sha256
+        )
 
     try:
         with OpenedDirectory(candidate_root, policy=_PRIVATE_DIRECTORY) as candidates:
@@ -2811,12 +2897,16 @@ def _csr_reject_unresolved_renewal(
                                         max_size=_MAX_EVIDENCE,
                                     ),
                                 ) as opened:
+                                    identity = opened.recheck()
                                     candidate_files.append(
                                         (
                                             f"{candidate_path}/{name}",
-                                            opened.recheck(),
+                                            identity,
                                         )
                                     )
+                                    candidate_file_identities[
+                                        (service_name, request_id, name)
+                                    ] = identity
                             directory_snapshots.append(
                                 (
                                     candidate_path,
@@ -2897,6 +2987,11 @@ def _csr_reject_unresolved_renewal(
 
     for service_name, request_id in coordinates:
         if (service_name, request_id) not in outcome_coordinates:
+            if matches_active_predecessor(service_name, request_id):
+                _die(
+                    "An unresolved renewal candidate already exists for the active "
+                    f"predecessor: {request_id}"
+                )
             _die(f"Retained CSR candidate is pending: {service_name}/{request_id}")
         retained = inventory_by_name[service_name]
         try:
@@ -3313,7 +3408,9 @@ def _run_host_local_csr(
                             selected,
                             inventory.services,
                             request_record["request_id"],
+                            request_record["current_cert_sha256"],
                             process_environment,
+                            trust,
                             history_recheck,
                         )
                     transaction = f"csr-{request_id}"

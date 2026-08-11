@@ -301,7 +301,10 @@ def test_verify_finalize_and_exact_rerun(csr_workspace: CsrWorkspace) -> None:
     )
     unresolved = csr_workspace.sign(RENEW, current_cert=current)
     assert unresolved.status == 1
-    assert "unresolved renewal candidate" in unresolved.stderr
+    assert unresolved.stderr == (
+        "[ERROR] An unresolved renewal candidate already exists for the active predecessor: "
+        "2123456789abcdef0123456789abcdef\n"
+    )
 
 
 def test_abandon_not_activated_is_not_active(csr_workspace: CsrWorkspace) -> None:
