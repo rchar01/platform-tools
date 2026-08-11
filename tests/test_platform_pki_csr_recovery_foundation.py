@@ -275,7 +275,10 @@ def _signing_state_values(
         values["sensitive_key_removed"] = "true"
         _set_artifact_evidence(values, present=True)
         _set_signature_path(values, present=True)
-        if step is not SigningRecoveryStep.CA_COMMITTED:
+        if step not in {
+            SigningRecoveryStep.CA_COMMITTED,
+            SigningRecoveryStep.RESPONSE_SIGNING,
+        }:
             _set_signature_evidence(values, present=True)
         if step is SigningRecoveryStep.CANDIDATE_PUBLISHED:
             _set_publication_evidence(values, (True, True, True, False))
@@ -747,6 +750,7 @@ VALID_SIGNING_STATE_VALUES = frozenset(
             ("ca-committed", "true", step)
             for step in (
                 "ca-committed",
+                "response-signing",
                 "response-signed",
                 "candidate-published",
                 "response-published",
@@ -824,7 +828,10 @@ def _allowed_publication_states(
         return frozenset((none,))
     if phase is SigningPhase.TERMINAL:
         return frozenset((complete if committed else none,))
-    if step is SigningRecoveryStep.CA_COMMITTED:
+    if step in {
+        SigningRecoveryStep.CA_COMMITTED,
+        SigningRecoveryStep.RESPONSE_SIGNING,
+    }:
         return frozenset((none,))
     if step is SigningRecoveryStep.RESPONSE_SIGNED:
         return frozenset(

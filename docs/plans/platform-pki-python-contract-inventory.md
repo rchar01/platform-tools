@@ -13,10 +13,10 @@ Python-backed. Phase 6 has Python-backed compatibility and unified
 `platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
 compatibility executable and other rollover leaves remain Bash. Phase 6 also
 has non-public forward journal transitions, exact planned publication, and
-operational recovery for future Python managed service issue/renew transactions
-plus retained host-local record models, but no Python service operation exists,
-both public service commands remain Bash, and no managed service recovery route
-is exposed.
+operational recovery for future Python managed service issue/renew transactions,
+plus a non-public host-local issue/migrate writer. No Python service operation is
+publicly dispatched, both public service commands remain Bash, and no managed
+service recovery route is exposed.
 
 ## Runtime and Interfaces
 
@@ -144,6 +144,17 @@ also require that path to remain absent.
 | `ca-rollover status` | none | format `text` | rollover status and parser modules |
 | `ca-rollover prepare` | type, backup receipt, intermediate name, organization, country | root/intermediate defaults 3650/1825 | rollover prepare, fault, lifecycle, recovery modules |
 | `ca-rollover recover` | transaction and resume/rollback action | optional `--yes` | rollover recovery modules |
+
+The public `service-issue` route remains final-Bash-owned. A non-public Python
+`issue_host_local_csr` interface now writes authenticated host-local `issue` and
+`migrate` transactions using the same 114-field journal consumed by public
+Python CSR recovery. It pins and repeatedly rechecks the exact installed trust
+tree and authenticated sources, enforces exact inventory lifetime and SAN
+profiles, reauthenticates the journal plus every active authority directory and
+source immediately before CA publication, and derives rollback-versus-forward
+recovery from the reloaded durable commit record. Its focused coverage is
+`test_csr_issue_writer.py`; no managed service key or certificate publication is
+part of this interface.
 
 The retained init oracle is
 `tests/pki/oracles/platform-pki-init/platform-pki-init` from commit
@@ -383,7 +394,13 @@ branch mutation. Committed recovery authenticates the retained response trust
 and signing sources, signs through an inherited response-key descriptor only
 when needed, stages candidate and response trees before ordered no-clobber
 publication, and freshly rechecks committed database and source state in each
-publication authorization window. Public `csr-recover` selects the existing
+publication authorization window. A durable `response-signing` checkpoint
+owns the Python post-sign/pre-evidence mutation window: recovery adopts a
+signature from that checkpoint only after authenticating its content, trust,
+mode, identity, and complete committed sources. The compatible
+`ca-committed` checkpoint never adopts an unowned signature and instead
+removes and recreates one only when its file state is safe. Public
+`csr-recover` selects the existing
 journal without parsing it, obtains exact operator confirmation, acquires only
 that protocol's lock profile, and rechecks the same selection under lock before
 parsing or mutation. Ambiguous, missing, or changed selection fails closed

@@ -9,6 +9,15 @@ from pathlib import Path
 
 import pytest
 
+from src.platform_pki.ca_rollover_recovery import (
+    MAX_RECOVERY_RECORD_BYTES,
+    IntermediateBootstrapRecoveryRecord,
+    RecoveryOperation,
+    RecoveryRecordOrder,
+    parse_recovery_semantics,
+)
+from src.platform_pki.filesystem import FilePolicy, FilesystemError, OpenedFile
+
 from ..harness import ProcessResult, copy_tree, run_process
 
 
@@ -231,23 +240,147 @@ def _csr_workspace_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+def _authenticate_csr_seed_intermediate_transaction(seed: Path) -> str:
+    reservation = seed / "namespace/pki/state/generation-reservations/g1-i1"
+    data = b""
+    try:
+        with OpenedFile(
+            os.fspath(reservation),
+            policy=FilePolicy(
+                owner=os.geteuid(),
+                mode=0o600,
+                links=1,
+                max_size=4096,
+            ),
+        ) as opened:
+            data = opened.read(opened.identity.size)
+            opened.recheck()
+    except FilesystemError:
+        raise ValueError(
+            f"CSR seed intermediate reservation is unsafe: {reservation}"
+        ) from None
+    match = re.fullmatch(
+        rb"generation=g1-i1\n"
+        rb"kind=intermediate\n"
+        rb"status=consumed\n"
+        rb"fingerprint_sha256=[0-9A-F]{64}\n"
+        rb"transaction=(intermediate-bootstrap-[0-9]{8}-[0-9]{6}-[0-9]+)\n",
+        data,
+    )
+    if match is None:
+        raise ValueError(
+            f"CSR seed intermediate reservation is not canonical: {reservation}"
+        )
+    return match.group(1).decode("ascii")
+
+
+@pytest.fixture(scope="session")
+def _csr_workspace_seed_transaction(_csr_workspace_seed: Path) -> str:
+    return _authenticate_csr_seed_intermediate_transaction(_csr_workspace_seed)
+
+
+def _validate_csr_seed_rollover_journal(
+    data: bytes, pki_dir: Path, expected_transaction: str
+) -> None:
+    record = parse_recovery_semantics(data, pki_dir=pki_dir)
+    if not (
+        isinstance(record, IntermediateBootstrapRecoveryRecord)
+        and record.operation is RecoveryOperation.INTERMEDIATE_BOOTSTRAP
+        and record.schema == 3
+        and record.order is RecoveryRecordOrder.WRITER
+        and record.committed
+        and record.phase == "complete"
+        and record.recovery_action is None
+        and record.recovery_step is None
+        and record["transaction"] == expected_transaction
+        and record.root_generation == "g1"
+        and record.intermediate_generation == "g1-i1"
+        and record.root_mutated
+    ):
+        raise ValueError(
+            "CSR seed rollover journal is not the expected terminal intermediate bootstrap"
+        )
+
+
+def _authenticate_csr_seed_rollover_journal(
+    seed: Path, expected_transaction: str
+) -> bytes:
+    pki_dir = seed / "namespace/pki"
+    journal = pki_dir / "state/rollover/journal"
+    data = b""
+    try:
+        with OpenedFile(
+            os.fspath(journal),
+            policy=FilePolicy(
+                owner=os.geteuid(),
+                mode=0o600,
+                links=1,
+                max_size=MAX_RECOVERY_RECORD_BYTES,
+            ),
+        ) as opened:
+            data = opened.read(opened.identity.size)
+            opened.recheck()
+    except FilesystemError:
+        raise ValueError(f"CSR seed rollover journal is unsafe: {journal}") from None
+    _validate_csr_seed_rollover_journal(data, pki_dir, expected_transaction)
+    return data
+
+
+def _copy_csr_seed_tree(
+    source: Path, destination: Path, *, rebase_journal: bool
+) -> None:
+    from .migration_harness import rebase_openssl_config
+
+    copy_tree(source, destination)
+    for relative in (
+        "namespace/pki/authorities/roots/g1/openssl.cnf",
+        "namespace/pki/authorities/intermediates/g1-i1/openssl.cnf",
+    ):
+        rebase_openssl_config(destination / relative, source, destination)
+    if rebase_journal:
+        journal = destination / "namespace/pki/state/rollover/journal"
+        data = journal.read_bytes()
+        source_bytes = os.fsencode(source)
+        if source_bytes not in data:
+            raise ValueError("Copied CSR seed journal lacks its source path binding")
+        rebased = data.replace(source_bytes, os.fsencode(destination))
+        if source_bytes in rebased:
+            raise ValueError("Copied CSR seed journal path rebasing is incomplete")
+        journal.write_bytes(rebased)
+
+
+@pytest.fixture
+def csr_workspace_private_seed_copy(
+    _csr_workspace_seed: Path,
+) -> Callable[[Path], None]:
+    def copy(destination: Path) -> None:
+        _copy_csr_seed_tree(
+            _csr_workspace_seed, destination, rebase_journal=True
+        )
+
+    return copy
+
+
 @pytest.fixture
 def csr_workspace_seed_copy(
     _csr_workspace_seed: Path,
-) -> Callable[[Path], None]:
-    from .migration_harness import rebase_openssl_config
-
-    def copy(destination: Path) -> None:
-        copy_tree(_csr_workspace_seed, destination)
-        for relative in (
-            "namespace/pki/authorities/roots/g1/openssl.cnf",
-            "namespace/pki/authorities/intermediates/g1-i1/openssl.cnf",
+    _csr_workspace_seed_transaction: str,
+) -> Callable[..., None]:
+    def copy(destination: Path, *, source: Path | None = None) -> None:
+        source = _csr_workspace_seed if source is None else source
+        source_journal = _authenticate_csr_seed_rollover_journal(
+            source, _csr_workspace_seed_transaction
+        )
+        _copy_csr_seed_tree(source, destination, rebase_journal=False)
+        journal = destination / "namespace/pki/state/rollover/journal"
+        journal_stat = journal.lstat()
+        if not stat.S_ISREG(journal_stat.st_mode) or stat.S_ISLNK(
+            journal_stat.st_mode
         ):
-            rebase_openssl_config(
-                destination / relative,
-                _csr_workspace_seed,
-                destination,
-            )
+            raise ValueError(f"Copied terminal bootstrap journal is unsafe: {journal}")
+        if journal.read_bytes() != source_journal:
+            raise ValueError(f"Copied terminal bootstrap journal changed: {journal}")
+        journal.unlink()
 
     return copy
 

@@ -220,6 +220,13 @@ def test_normalizer_ignores_signed_records_and_rejects_prefix_collisions(
     with pytest.raises(ValueError, match="escapes known workspaces"):
         normalizer("pki/authorities/roots/g1/openssl.cnf", config)
 
+    transaction = (
+        f"[ ca ]\ndir = {source}/pki/state/csr/transactions/t1/signing\n".encode()
+    )
+    assert normalizer(
+        "pki/state/csr/transactions/t1/signing/openssl.cnf", transaction
+    ) == b"[ ca ]\ndir = <WORKSPACE>/pki/state/csr/transactions/t1/signing\n"
+
 
 def test_differential_runner_uses_private_state_and_environments(tmp_path: Path) -> None:
     seed = tmp_path / "seed"

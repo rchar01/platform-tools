@@ -1,4 +1,4 @@
-"""Non-public managed-custody service issuance orchestration."""
+"""Non-public managed and host-local service issuance orchestration."""
 
 from __future__ import annotations
 
@@ -16,9 +16,37 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import FrameType
-from typing import NoReturn, TextIO
+from typing import NoReturn, TextIO, cast
 
 from .ca_passphrase_verify import _fresh_descriptor, _open_passphrase
+from .csr_protocol import (
+    CsrApproval,
+    CsrOperation,
+    CsrProtocolError,
+    CsrRequest,
+    parse_csr_approval,
+    parse_csr_request,
+    serialize_csr_response,
+    validate_request_approval_binding,
+)
+from .csr_recover import (
+    _SigningControl,
+    _ensure_signing_replay,
+    _load_active_signing_authority,
+    _load_signing_journal,
+    _recover_committed_signing,
+    _recover_uncommitted_signing,
+    _remove_sensitive_signing_key,
+    _require_compatible_signing_state,
+    _serialize_signing_journal,
+)
+from .csr_recovery import (
+    CSR_DB_KEYS,
+    CSR_DB_PATHS,
+    CSR_SIGNING_JOURNAL_FIELDS,
+    SigningJournal,
+    SigningRecoveryStep,
+)
 from .errors import ApplicationError
 from .faults import DEFAULT_FAULT_HOOK, DEFAULT_PAUSE_HOOK, FaultHook, PauseHook
 from .filesystem import (
@@ -43,8 +71,17 @@ from .operational import (
     require_program,
 )
 from .persisted_identity import (
+    IdentitySentinel,
     serialize_directory_identity,
     serialize_file_identity,
+    serialize_file_object_state,
+)
+from .publication import (
+    PublicationError,
+    atomic_write_bytes,
+    fsync_tree,
+    publish_no_clobber,
+    replace_exact,
 )
 from .service_recover import (
     SERVICE_BOOTSTRAP_RELATIVE_PATH,
@@ -83,6 +120,27 @@ _HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 _SERIAL = re.compile(r"[0-9A-Fa-f]+", re.ASCII)
 _ARCHIVE_NAME = re.compile(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{2})?", re.ASCII)
 _OPENSSL_PATH = re.compile(r"/[A-Za-z0-9._/-]+", re.ASCII)
+_CSR_PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9.-]*", re.ASCII)
+_CSR_MAX_PROTOCOL_BYTES = 1024 * 1024
+
+CSR_SIGNING_WRITER_CHECKPOINTS = (
+    "after-journal",
+    "replay-reserved",
+    "transaction-staged",
+    "trust-before-sensitive-staging",
+    "signing-ready",
+    "trust-before-signing",
+    "signing-complete",
+    "sensitive-key-removed",
+    "source-before-ca-publication",
+    *(f"after-ca-{key}-publish" for key in CSR_DB_KEYS),
+    "ca-committed",
+    "ca-commit-after-journal-rewrite",
+    "response-signed",
+    "candidate-published",
+    "response-published",
+    "before-journal-cleanup",
+)
 
 SERVICE_ISSUE_CHECKPOINTS = (
     "planning-after-journal",
@@ -208,6 +266,23 @@ class _Setup:
     transaction: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CsrInput:
+    path: str
+    identity: FileIdentity
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _CsrTrust:
+    directory: DirectoryIdentity
+    files: Mapping[str, _CsrInput]
+    requester_keys: Mapping[str, str]
+    approver_principal: str
+    approver_key: str
+    response_principal: str
+
+
 def _die(message: str, *, status: int = 1) -> NoReturn:
     raise ApplicationError(message, status=status)
 
@@ -218,13 +293,13 @@ def _checkpoint(point: str, fault: FaultHook, pause: PauseHook) -> None:
 
 
 @contextmanager
-def _handled_signals() -> Iterator[None]:
+def _handled_signals(operation: str = "Managed service issuance") -> Iterator[None]:
     previous: dict[signal.Signals, object] = {}
 
     def stop(signum: int, _frame: FrameType | None) -> NoReturn:
         process_signal = signal.Signals(signum)
         raise _SignalExit(
-            f"Managed service issuance interrupted by {process_signal.name}",
+            f"{operation} interrupted by {process_signal.name}",
             status=128 + signum,
         )
 
@@ -568,6 +643,34 @@ def _recheck_evidence(evidence: _Evidence, label: str) -> None:
         _die(f"{label} identity changed")
 
 
+def _recheck_directory_identity(
+    path: str, identity: DirectoryIdentity, label: str
+) -> None:
+    try:
+        with OpenedDirectory(
+            path,
+            policy=_SAFE_DIRECTORY,
+            expected_identity=identity,
+        ) as opened:
+            opened.recheck()
+    except FilesystemError:
+        _die(f"{label} identity changed")
+
+
+def _recheck_optional_evidence(
+    path: str, evidence: _Evidence | None, label: str
+) -> None:
+    if evidence is not None:
+        _recheck_evidence(evidence, label)
+        return
+    try:
+        actual = identity_at(path)
+    except FilesystemError:
+        _die(f"{label} state changed")
+    if actual is not ABSENT:
+        _die(f"{label} state changed")
+
+
 def _canonical_serial(data: bytes, path: str) -> str:
     try:
         value = data.decode("ascii").strip()
@@ -709,6 +812,28 @@ def _processed_ca_config(data: bytes, source: str, authority: str, work: str, in
     missing = next((key for key in needed if key not in required), None)
     if missing is not None:
         _die(f"Intermediate CA configuration is missing signing path '{missing}': {source}")
+    return ("\n".join(output) + "\n").encode("utf-8")
+
+
+def _csr_processed_ca_config(
+    data: bytes, source: str, authority: str, signing: str
+) -> bytes:
+    # Reuse the strict validator, then retain final Bash's exact transform: only
+    # the CA_default dir assignment changes and all relative paths remain intact.
+    _processed_ca_config(data, source, authority, signing, signing)
+    lines = data.decode("utf-8").splitlines()
+    section = ""
+    output = []
+    for original in lines:
+        stripped = original.lstrip()
+        match = re.match(r"^\[\s*([^]]+?)\s*\]\s*(?:[#;].*)?$", stripped)
+        if match is not None:
+            section = match.group(1).strip()
+        setting = re.match(r"^([A-Za-z0-9_.]+)\s*=", stripped)
+        if section == "CA_default" and setting is not None and setting.group(1).lower() == "dir":
+            output.append(f"dir = {signing}")
+        else:
+            output.append(original)
     return ("\n".join(output) + "\n").encode("utf-8")
 
 
@@ -1778,6 +1903,1379 @@ def _verify_published(plan: _Plan, environment: Mapping[str, str]) -> None:
         environment,
         label="published certificate lifetime verification",
     )
+
+
+def _csr_input(path: os.PathLike[str] | str, label: str, *, private: bool = False) -> _CsrInput:
+    value = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    data = b""
+    identity: FileIdentity | None = None
+    try:
+        with OpenedFile(
+            value,
+            policy=FilePolicy(
+                owner=_OWNER,
+                forbidden_bits=0o077 if private else 0o022,
+                links=1,
+                max_size=_CSR_MAX_PROTOCOL_BYTES,
+            ),
+        ) as opened:
+            if opened.identity.size == 0:
+                _die(f"{label} must not be empty: {value}")
+            data = opened.read(_CSR_MAX_PROTOCOL_BYTES)
+            identity = opened.recheck()
+    except FilesystemError:
+        _die(f"{label} must be a safe current-user-owned regular file: {value}")
+    assert identity is not None
+    return _CsrInput(value, identity, data)
+
+
+def _csr_recheck_input(item: _CsrInput, label: str) -> None:
+    try:
+        with OpenedFile(
+            item.path,
+            policy=FilePolicy(
+                owner=_OWNER,
+                forbidden_bits=0o022,
+                links=1,
+                max_size=_CSR_MAX_PROTOCOL_BYTES,
+            ),
+            expected_identity=item.identity,
+        ) as opened:
+            if opened.read(_CSR_MAX_PROTOCOL_BYTES) != item.data:
+                _die(f"{label} changed during validation")
+    except FilesystemError:
+        _die(f"{label} changed during validation")
+
+
+def _csr_recheck_trust(trust: _CsrTrust) -> None:
+    root = os.path.dirname(trust.files["policy"].path)
+    try:
+        with OpenedDirectory(
+            root,
+            policy=_PRIVATE_DIRECTORY,
+            expected_identity=trust.directory,
+        ) as directory:
+            if frozenset(os.listdir(directory.fileno())) != frozenset(trust.files):
+                _die("Installed CSR trust directory contents changed during signing")
+            for name, item in sorted(trust.files.items()):
+                with directory.open_file(
+                    name,
+                    policy=FilePolicy(
+                        owner=_OWNER,
+                        mode=0o600,
+                        links=1,
+                        max_size=_CSR_MAX_PROTOCOL_BYTES,
+                    ),
+                    expected_identity=item.identity,
+                ) as opened:
+                    if opened.read(_CSR_MAX_PROTOCOL_BYTES) != item.data:
+                        _die(f"Installed CSR trust changed during signing: {name}")
+                    opened.recheck()
+            directory.recheck()
+    except FilesystemError:
+        _die("Installed CSR trust directory changed during signing")
+
+
+def _csr_allowed_signers(data: bytes, label: str) -> dict[str, str]:
+    try:
+        lines = data.decode("ascii").splitlines()
+    except UnicodeDecodeError:
+        _die(f"Installed CSR {label} trust is invalid")
+    keys: dict[str, str] = {}
+    for line in lines:
+        fields = line.split(" ")
+        if (
+            len(fields) != 3
+            or _CSR_PRINCIPAL.fullmatch(fields[0]) is None
+            or fields[1] != "ssh-ed25519"
+            or re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", fields[2], re.ASCII) is None
+            or fields[0] in keys
+        ):
+            _die(f"Installed CSR {label} trust is not canonical")
+        keys[fields[0]] = fields[2]
+    if not keys:
+        _die(f"Installed CSR {label} trust is empty")
+    return keys
+
+
+def _csr_load_trust(pki_dir: str) -> _CsrTrust:
+    root = f"{pki_dir}/inventory/csr-trust"
+    files: dict[str, _CsrInput] = {}
+    directory_identity: DirectoryIdentity | None = None
+    approver_match: re.Match[str] | None = None
+    response_match: re.Match[str] | None = None
+    try:
+        with OpenedDirectory(root, policy=_PRIVATE_DIRECTORY) as directory:
+            names = frozenset(os.listdir(directory.fileno()))
+            policy_file = directory.open_file(
+                "policy",
+                policy=FilePolicy(
+                    owner=_OWNER, mode=0o600, links=1, max_size=4096
+                ),
+            )
+            try:
+                policy = policy_file.read(4096)
+                policy_input = _CsrInput(
+                    f"{root}/policy", policy_file.recheck(), policy
+                )
+            finally:
+                policy_file.close()
+            try:
+                lines = policy.decode("ascii").splitlines()
+            except UnicodeDecodeError:
+                _die("Installed CSR trust policy is invalid")
+            if lines[:1] == ["schema=1"]:
+                expected = {
+                    "policy",
+                    "requesters.allowed_signers",
+                    "approvers.allowed_signers",
+                    "responses.allowed_signers",
+                }
+                fixed = (
+                    "request_namespace=platform-pki-csr-request-v1",
+                    "approval_namespace=platform-pki-csr-approval-v1",
+                    "response_namespace=platform-pki-csr-response-v1",
+                    "request_max_age_seconds=604800",
+                    "sole_operator_min_delay_seconds=86400",
+                    "approval_max_age_seconds=86400",
+                    "clock_skew_seconds=300",
+                )
+                principal_index = 8
+            elif lines[:1] == ["schema=2"]:
+                expected = {
+                    "policy",
+                    "requesters.allowed_signers",
+                    "approvers.allowed_signers",
+                    "responses.allowed_signers",
+                    "deployers.allowed_signers",
+                }
+                fixed = (
+                    "request_namespace=platform-pki-csr-request-v1",
+                    "approval_namespace=platform-pki-csr-approval-v1",
+                    "response_namespace=platform-pki-csr-response-v1",
+                    "deployment_namespace=platform-pki-csr-deployment-v1",
+                    "request_max_age_seconds=604800",
+                    "sole_operator_min_delay_seconds=86400",
+                    "approval_max_age_seconds=86400",
+                    "deployment_max_age_seconds=86400",
+                    "clock_skew_seconds=300",
+                )
+                principal_index = 10
+            else:
+                _die("Installed CSR trust policy is invalid")
+            if names != expected or tuple(lines[1 : 1 + len(fixed)]) != fixed:
+                _die("Installed CSR trust policy or directory contents are invalid")
+            if len(lines) != principal_index + 2:
+                _die("Installed CSR trust policy is invalid")
+            approver_match = re.fullmatch(
+                r"approver_principal=([a-z0-9][a-z0-9.-]*)",
+                lines[principal_index],
+                re.ASCII,
+            )
+            response_match = re.fullmatch(
+                r"response_principal=([a-z0-9][a-z0-9.-]*)",
+                lines[principal_index + 1],
+                re.ASCII,
+            )
+            if approver_match is None or response_match is None:
+                _die("Installed CSR trust policy is invalid")
+
+            files = {"policy": policy_input}
+            for name in sorted(expected - {"policy"}):
+                with directory.open_file(
+                    name,
+                    policy=FilePolicy(
+                        owner=_OWNER,
+                        mode=0o600,
+                        links=1,
+                        max_size=_CSR_MAX_PROTOCOL_BYTES,
+                    ),
+                ) as opened:
+                    data = opened.read(_CSR_MAX_PROTOCOL_BYTES)
+                    if not data:
+                        _die(f"Installed CSR trust file is empty: {name}")
+                    files[name] = _CsrInput(
+                        f"{root}/{name}", opened.recheck(), data
+                    )
+            directory_identity = directory.recheck().directory
+    except FilesystemError:
+        _die("Installed CSR trust directory is unsafe")
+
+    assert directory_identity is not None
+    assert approver_match is not None and response_match is not None
+    requester_keys = _csr_allowed_signers(
+        files["requesters.allowed_signers"].data, "requester"
+    )
+    approver_keys = _csr_allowed_signers(
+        files["approvers.allowed_signers"].data, "approver"
+    )
+    response_keys = _csr_allowed_signers(
+        files["responses.allowed_signers"].data, "response"
+    )
+    if "deployers.allowed_signers" in files:
+        _csr_allowed_signers(files["deployers.allowed_signers"].data, "deployer")
+    approver = approver_match.group(1)
+    response = response_match.group(1)
+    if len(approver_keys) != 1 or approver not in approver_keys:
+        _die("Installed CSR trust does not contain one pinned approver")
+    if len(response_keys) != 1 or response not in response_keys:
+        _die("Installed CSR trust does not contain one pinned response signer")
+    return _CsrTrust(
+        directory_identity,
+        files,
+        requester_keys,
+        approver,
+        approver_keys[approver],
+        response,
+    )
+
+
+def _csr_verify_signature(
+    trust: _CsrInput,
+    principal: str,
+    namespace: str,
+    signature: _CsrInput,
+    content: bytes,
+    environment: Mapping[str, str],
+    label: str,
+) -> None:
+    try:
+        with OpenedFile(
+            trust.path,
+            policy=FilePolicy(owner=_OWNER, mode=0o600, links=1),
+            expected_identity=trust.identity,
+        ) as allowed, OpenedFile(
+            signature.path,
+            policy=FilePolicy(
+                owner=_OWNER,
+                forbidden_bits=0o022,
+                links=1,
+                max_size=_CSR_MAX_PROTOCOL_BYTES,
+            ),
+            expected_identity=signature.identity,
+        ) as detached:
+            result = run_process(
+                (
+                    "ssh-keygen",
+                    "-Y",
+                    "verify",
+                    "-f",
+                    f"/proc/self/fd/{allowed.fileno()}",
+                    "-I",
+                    principal,
+                    "-n",
+                    namespace,
+                    "-s",
+                    f"/proc/self/fd/{detached.fileno()}",
+                ),
+                env=environment,
+                input=content,
+                pass_fds=(allowed.fileno(), detached.fileno()),
+                timeout=30.0,
+                term_grace=1.0,
+                stdout_limit=1024 * 1024,
+                stderr_limit=1024 * 1024,
+            )
+            assert isinstance(result, ProcessResult)
+            if result.status:
+                _die(f"{label} signature verification failed")
+            allowed.recheck()
+            detached.recheck()
+    except (ApplicationError, FilesystemError):
+        _die(f"{label} signature verification failed")
+
+
+def _csr_validate_times(request: CsrRequest, approval: CsrApproval) -> None:
+    now = int(datetime.datetime.now(datetime.UTC).timestamp())
+    if now + 300 < request.created_epoch or now > request.expires_epoch + 300:
+        _die("CSR request is not currently valid")
+    if now + 300 < approval.created_epoch or now > approval.expires_epoch + 300:
+        _die("CSR approval is not currently valid")
+
+
+def _csr_sans(
+    text: str, label: str
+) -> tuple[tuple[str, ...], tuple[tuple[str, bool], ...]]:
+    lines = text.splitlines()
+    extensions: list[tuple[str, bool]] = []
+    sans: tuple[str, ...] = ()
+    for index, line in enumerate(lines):
+        match = re.match(r"^\s+X509v3 ([^:]+):( critical)?\s*$", line)
+        if match is None or match.group(1) == "extensions":
+            continue
+        name = match.group(1)
+        extensions.append((name, bool(match.group(2))))
+        if name == "Subject Alternative Name":
+            if index + 1 >= len(lines):
+                _die(f"{label} has an invalid subjectAltName extension")
+            values = tuple(
+                value.strip() for value in lines[index + 1].strip().split(",")
+            )
+            if not values or any(
+                not value
+                or (
+                    not value.startswith("DNS:")
+                    and not value.startswith("IP Address:")
+                )
+                or value in {"DNS:", "IP Address:"}
+                for value in values
+            ):
+                _die(f"{label} has an invalid subjectAltName entry")
+            if len(values) != len(set(values)):
+                _die(f"{label} has duplicate subjectAltName entries")
+            sans = values
+    return sans, tuple(extensions)
+
+
+def _csr_spki_digest(path: str, kind: str, work: str, environment: Mapping[str, str]) -> str:
+    public = f"{work}/{kind}.public.pem"
+    der = f"{work}/{kind}.public.der"
+    command = "req" if kind == "csr" else "x509"
+    data = _run_openssl(
+        ("openssl", command, "-in", path, "-pubkey", "-noout"),
+        environment,
+        label=f"{kind} public-key extraction",
+    )
+    _write_new_file(public, data, 0o600)
+    _run_openssl(
+        (
+            "openssl",
+            "pkey",
+            "-pubin",
+            "-in",
+            public,
+            "-outform",
+            "DER",
+            "-out",
+            der,
+        ),
+        environment,
+        label=f"{kind} public-key encoding",
+    )
+    try:
+        with OpenedFile(der, policy=FilePolicy(links=1, max_size=1024 * 1024)) as opened:
+            return _sha256(opened.read(1024 * 1024))
+    except FilesystemError:
+        _die(f"OpenSSL {kind} public-key encoding was unsafe")
+    raise AssertionError("unreachable")
+
+
+def _csr_validate_request(
+    path: str,
+    service: InventoryService,
+    work: str,
+    environment: Mapping[str, str],
+) -> str:
+    _run_openssl(
+        ("openssl", "req", "-in", path, "-verify", "-noout"),
+        environment,
+        label="CSR self-signature verification",
+    )
+    subject = _run_openssl(
+        ("openssl", "req", "-in", path, "-noout", "-subject", "-nameopt", "RFC2253"),
+        environment,
+        label="CSR subject inspection",
+    ).decode("ascii", errors="replace").strip()
+    if subject != f"subject=CN={service.common_name}":
+        _die("CSR subject does not match inventory common_name")
+    text = _run_openssl(
+        ("openssl", "req", "-in", path, "-noout", "-text"),
+        environment,
+        label="CSR profile inspection",
+    ).decode("ascii", errors="replace")
+    if "Public-Key: (384 bit)" not in text or "ASN1 OID: secp384r1" not in text:
+        _die("CSR public key must be EC P-384")
+    if len(re.findall(r"^    Signature Algorithm: ecdsa-with-SHA384$", text, re.MULTILINE)) != 1:
+        _die("CSR signature algorithm must be ECDSA-with-SHA384")
+    sans, extensions = _csr_sans(text, "CSR")
+    try:
+        attribute_start = text.splitlines().index("        Attributes:")
+        signature_start = next(
+            index
+            for index, line in enumerate(text.splitlines()[attribute_start + 1 :], attribute_start + 1)
+            if line.startswith("    Signature Algorithm:")
+        )
+    except (ValueError, StopIteration):
+        _die("CSR has an invalid attribute profile")
+    attribute_headers = [
+        line.strip()
+        for line in text.splitlines()[attribute_start + 1 : signature_start]
+        if line.startswith("            ") and not line.startswith("                ")
+    ]
+    if attribute_headers != ["Requested Extensions:"] or extensions != (("Subject Alternative Name", False),):
+        _die("CSR has an invalid or unexpected extension profile")
+    expected = {f"DNS:{value}" for value in service.dns}
+    expected.update(f"IP Address:{value}" for value in service.ips)
+    if set(sans) != expected:
+        _die("CSR subjectAltName set does not match inventory")
+    return _csr_spki_digest(path, "csr", work, environment)
+
+
+def _csr_ensure_private_directory(path: str, label: str) -> DirectoryIdentity:
+    parent_path, name = os.path.split(path)
+    try:
+        with OpenedDirectory(parent_path, policy=_PRIVATE_DIRECTORY) as parent:
+            actual = parent.identity_at(name)
+            if actual is ABSENT:
+                os.mkdir(name, 0o700, dir_fd=parent.fileno())
+                os.fsync(parent.fileno())
+            with parent.open_directory(name, policy=_PRIVATE_DIRECTORY) as directory:
+                return directory.recheck().directory
+    except (OSError, FilesystemError):
+        _die(f"{label} could not be prepared safely: {path}")
+    raise AssertionError("unreachable")
+
+
+def _csr_prepare_state(pki_dir: str, service: str) -> None:
+    for relative in (
+        "state/csr",
+        "state/csr/transactions",
+        "state/csr/replay",
+        "state/csr/replay/requests",
+        "state/csr/replay/nonces",
+        "state/csr/candidates",
+        "state/csr/responses",
+        f"state/csr/candidates/{service}",
+        f"state/csr/responses/{service}",
+    ):
+        _csr_ensure_private_directory(
+            f"{pki_dir}/{relative}", "CSR protocol state directory"
+        )
+
+
+def _csr_validate_certificate(
+    certificate: str,
+    csr: str,
+    service: InventoryService,
+    root_certificate: str,
+    intermediate_certificate: str,
+    serial: str,
+    csr_spki: str,
+    days: str,
+    safety_days: str,
+    work: str,
+    environment: Mapping[str, str],
+) -> tuple[int, int]:
+    _run_openssl(
+        (
+            "openssl",
+            "verify",
+            "-CAfile",
+            root_certificate,
+            "-untrusted",
+            intermediate_certificate,
+            certificate,
+        ),
+        environment,
+        label="issued host-local certificate chain verification",
+    )
+    metadata = _certificate_metadata(certificate, environment)
+    issuer = _certificate_metadata(intermediate_certificate, environment)
+    if metadata["subject"] != f"CN={service.common_name}":
+        _die("Issued certificate subject does not match inventory")
+    if metadata["issuer"] != issuer["subject"]:
+        _die("Issued certificate issuer does not match the active intermediate")
+    if metadata["serial"].upper() != serial:
+        _die("Issued certificate serial does not match the reserved serial")
+    text = _certificate_text(certificate, environment)
+    if (
+        "Version: 3 (0x2)" not in text
+        or "Public Key Algorithm: id-ecPublicKey" not in text
+        or "Public-Key: (384 bit)" not in text
+        or "ASN1 OID: secp384r1" not in text
+    ):
+        _die("Issued certificate has an invalid P-384 service profile")
+    signatures = set(
+        re.findall(r"^\s*Signature Algorithm: ([^\r\n]+)$", text, re.MULTILINE)
+    )
+    if signatures != {"ecdsa-with-SHA384"}:
+        _die("Issued certificate signature algorithm is invalid")
+    sans, extensions = _csr_sans(text, "Issued certificate")
+    required = {
+        ("Basic Constraints", True),
+        ("Key Usage", True),
+        ("Extended Key Usage", False),
+        ("Subject Alternative Name", False),
+        ("Subject Key Identifier", False),
+        ("Authority Key Identifier", False),
+    }
+    if len(extensions) != len(required) or set(extensions) != required:
+        _die("Issued certificate has an invalid or unexpected extension profile")
+    expected_sans = {f"DNS:{value}" for value in service.dns}
+    expected_sans.update(f"IP Address:{value}" for value in service.ips)
+    if set(sans) != expected_sans:
+        _die("Issued certificate subjectAltName set does not match inventory")
+    basic_critical, basic = _extension(certificate, "basicConstraints", environment)
+    usage_critical, usage = _extension(certificate, "keyUsage", environment)
+    eku_critical, eku = _extension(certificate, "extendedKeyUsage", environment)
+    san_critical, _san = _extension(certificate, "subjectAltName", environment)
+    ski_critical, ski = _extension(
+        certificate, "subjectKeyIdentifier", environment
+    )
+    aki_critical, aki = _extension(
+        certificate, "authorityKeyIdentifier", environment
+    )
+    issuer_ski_critical, issuer_ski = _extension(
+        intermediate_certificate, "subjectKeyIdentifier", environment
+    )
+    key_identifier = re.compile(r"(?:[0-9A-F]{2}:){19}[0-9A-F]{2}", re.ASCII)
+    if (
+        not basic_critical
+        or basic != "CA:FALSE"
+        or not usage_critical
+        or usage != "Digital Signature"
+        or eku_critical
+        or eku != "TLS Web Server Authentication"
+        or san_critical
+        or ski_critical
+        or key_identifier.fullmatch(ski) is None
+        or issuer_ski_critical
+        or key_identifier.fullmatch(issuer_ski) is None
+        or aki_critical
+        or aki != issuer_ski
+    ):
+        _die("Issued certificate has an invalid service extension profile")
+    if _csr_spki_digest(certificate, "certificate", work, environment) != csr_spki:
+        _die("Issued certificate public key does not match the CSR")
+    not_before, not_after = _certificate_dates(certificate, environment)
+    now = int(datetime.datetime.now(datetime.UTC).timestamp())
+    if abs(not_before - now) > 300:
+        _die("Issued certificate notBefore is outside the five-minute issuance tolerance")
+    if not_after - not_before != int(days, 10) * 86400:
+        _die("Issued certificate validity does not match the planned days policy")
+    _validate_child_validity(
+        certificate, intermediate_certificate, safety_days, environment
+    )
+    return not_before, not_after
+
+
+def _csr_initial_values(
+    pki_dir: str,
+    intermediate_dir: str,
+    request: CsrRequest,
+    approval: CsrApproval,
+    *,
+    request_sha256: str,
+    approval_sha256: str,
+    inventory_sha256: str,
+    csr_sha256: str,
+    csr_spki_sha256: str,
+) -> dict[str, str]:
+    values = {field: "none" for field in CSR_SIGNING_JOURNAL_FIELDS}
+    record = request.record
+    request_id = record["request_id"]
+    transaction = f"csr-{request_id}"
+    transaction_dir = f"{pki_dir}/state/csr/transactions/{transaction}"
+    signing = f"{transaction_dir}/signing"
+    values.update(
+        {
+            "schema": "1",
+            "operation": "csr-sign",
+            "transaction": transaction,
+            "phase": "planned",
+            "committed": "false",
+            "recovery_step": "planned",
+            "request_id": request_id,
+            "nonce": record["nonce"],
+            "operation_kind": record["operation"],
+            "service": record["service"],
+            "target": record["target"],
+            "requester_principal": record["requester_principal"],
+            "approver_principal": approval.record["approver_principal"],
+            "response_principal": record["response_principal"],
+            "request_sha256": request_sha256,
+            "approval_sha256": approval_sha256,
+            "inventory_sha256": inventory_sha256,
+            "csr_sha256": csr_sha256,
+            "csr_spki_sha256": csr_spki_sha256,
+            "current_cert_sha256": record["current_cert_sha256"],
+            "created_epoch": str(int(datetime.datetime.now(datetime.UTC).timestamp())),
+            "transaction_dir": transaction_dir,
+            "response_trust_path": f"{transaction_dir}/responses.allowed_signers",
+            "sensitive_key_path": f"{signing}/private/intermediate-ca.key",
+            "candidate_stage": f"{transaction_dir}/candidate.publish",
+            "candidate_destination": (
+                f"{pki_dir}/state/csr/candidates/{record['service']}/{request_id}"
+            ),
+            "response_stage": f"{transaction_dir}/response.publish",
+            "response_destination": (
+                f"{pki_dir}/state/csr/responses/{record['service']}/{request_id}"
+            ),
+            "replay_request_path": f"{pki_dir}/state/csr/replay/requests/{request_id}",
+            "replay_nonce_path": f"{pki_dir}/state/csr/replay/nonces/{record['nonce']}",
+        }
+    )
+    _serialize_signing_journal(values, pki_dir, intermediate_dir)
+    return values
+
+
+def _csr_create_control(
+    pki_dir: str,
+    intermediate_dir: str,
+    values: dict[str, str],
+) -> tuple[_SigningControl, SigningJournal]:
+    journal = f"{pki_dir}/state/csr/recovery-journal"
+    data = _serialize_signing_journal(values, pki_dir, intermediate_dir)
+    try:
+        with OpenedDirectory(f"{pki_dir}/state/csr", policy=_PRIVATE_DIRECTORY) as parent:
+            atomic_write_bytes(parent, "recovery-journal", data)
+    except (FilesystemError, PublicationError):
+        _die("CSR signing recovery journal could not be created safely")
+    return _load_signing_journal(journal, pki_dir, intermediate_dir)
+
+
+def _csr_publish_database_entry(
+    record: SigningJournal,
+    control: _SigningControl,
+    key: str,
+    fault: FaultHook,
+    pause: PauseHook,
+) -> SigningJournal:
+    source = record.path(f"db_{key}_source")
+    destination = record.path(f"db_{key}_path")
+    assert source is not None and destination is not None
+    expected_source = record.identity(f"db_{key}_source_identity")
+    expected_destination = record.identity(f"db_{key}_pre_identity")
+    assert isinstance(expected_source, FileIdentity)
+    source_parent_path, source_name = os.path.split(source)
+    destination_parent_path, destination_name = os.path.split(destination)
+    result = None
+    try:
+        with OpenedDirectory(
+            source_parent_path, policy=_PRIVATE_DIRECTORY
+        ) as source_parent, OpenedDirectory(
+            destination_parent_path, policy=_PRIVATE_DIRECTORY
+        ) as destination_parent:
+            control.recheck()
+            if expected_destination is IdentitySentinel.ABSENT:
+                result = publish_no_clobber(
+                    source_parent,
+                    source_name,
+                    expected_source,
+                    destination_parent,
+                    destination_name,
+                )
+            else:
+                assert isinstance(expected_destination, FileIdentity)
+                result = replace_exact(
+                    source_parent,
+                    source_name,
+                    expected_source,
+                    destination_parent,
+                    destination_name,
+                    expected_destination,
+                    pre_exchange_check=control.recheck,
+                )
+    except (FilesystemError, PublicationError):
+        _die(f"Cannot publish staged CSR CA state: {key}")
+    _checkpoint(f"after-ca-{key}-publish", fault, pause)
+    identity = getattr(result, "destination_identity", None)
+    if identity is None:
+        identity = getattr(result, "identity", None)
+    if not isinstance(identity, FileIdentity):
+        raise AssertionError("CA publication returned no identity")
+    control.values[f"db_{key}_post_identity"] = serialize_file_identity(identity)
+    control.values["recovery_step"] = f"ca-{key}-published"
+    record = control.write()
+    _checkpoint(f"ca-{key}-published", fault, pause)
+    return record
+
+
+def issue_host_local_csr(
+    service: str,
+    *,
+    pki_dir: os.PathLike[str] | str,
+    request_file: os.PathLike[str] | str,
+    request_signature: os.PathLike[str] | str,
+    approval_file: os.PathLike[str] | str,
+    approval_signature: os.PathLike[str] | str,
+    csr_file: os.PathLike[str] | str,
+    response_key: os.PathLike[str] | str,
+    intermediate_pass_file: os.PathLike[str] | str | None = None,
+    issuer_safety_days: str = "1",
+    environment: Mapping[str, str] | None = None,
+    output: TextIO | None = None,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> int:
+    """Issue or migrate one authenticated host-local CSR without public dispatch."""
+
+    root = os.fspath(pki_dir)
+    if not isinstance(root, str) or not os.path.isabs(root) or os.path.normpath(root) != root:
+        raise ValueError("pki_dir must be an absolute normalized text path")
+    _validate_openssl_path("PKI directory", root)
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", service, re.ASCII) is None:
+        _die(f"Invalid service name: {service}")
+    safety_days = _validate_days(issuer_safety_days)
+    if not callable(fault_hook) or not callable(pause_hook):
+        raise TypeError("CSR signing hooks must be callable")
+    process_environment = dict(os.environ if environment is None else environment)
+    stream = sys.stdout if output is None else output
+    require_program("openssl", process_environment)
+    require_program("ssh-keygen", process_environment)
+    require_pki_directory(root)
+    prepare_control_state(root)
+    response_key_path = os.path.abspath(os.path.expanduser(os.fspath(response_key)))
+
+    passphrase: OpenedFile | None = None
+    if intermediate_pass_file is not None:
+        passphrase = _open_passphrase(os.fspath(intermediate_pass_file))
+    journal_started = False
+    retain_uncommitted_journal = False
+    transaction = ""
+    intermediate_dir = ""
+    try:
+        with _handled_signals("Host-local CSR signing"):
+            with acquire_operational_locks(root, "inventory"):
+                _require_compatible_signing_state(root)
+                root_dir, intermediate_dir = _load_active_signing_authority(root)
+                root_dir_identity = _snapshot_directory(
+                    root_dir, "Active root authority directory"
+                )
+                intermediate_dir_identity = _snapshot_directory(
+                    intermediate_dir, "Active intermediate authority directory"
+                )
+                assert root_dir_identity is not None
+                assert intermediate_dir_identity is not None
+                active_root = os.path.basename(root_dir)
+                active_intermediate = os.path.basename(intermediate_dir)
+                active_evidence = _snapshot_file(
+                    f"{root}/state/active-issuer",
+                    "Active issuer record",
+                    private=True,
+                    keep_data=True,
+                )
+                inventory_evidence = _snapshot_file(
+                    f"{root}/inventory/services.yml",
+                    "Service inventory",
+                    private=False,
+                    keep_data=True,
+                )
+                assert active_evidence is not None and active_evidence.data is not None
+                assert inventory_evidence is not None and inventory_evidence.data is not None
+                if active_evidence.data != (
+                    f"root={active_root}\nintermediate={active_intermediate}\n"
+                ).encode("ascii"):
+                    _die("Active issuer record changed during CSR signing planning")
+                try:
+                    inventory = parse_inventory(inventory_evidence.data)
+                except InventoryError as error:
+                    _die(str(error))
+                selected = next(
+                    (entry for entry in inventory.services if entry.name == service), None
+                )
+                if selected is None:
+                    _die(
+                        f"Service is not defined in {inventory_evidence.path}: {service}"
+                    )
+                if selected.key_custody != "host-local":
+                    _die(f"Authenticated CSR signing requires key_custody: host-local: {service}")
+                assert selected.target is not None
+                days = _validate_days(
+                    selected.days
+                    or process_environment.get("PLATFORM_PKI_SERVICE_DAYS", "")
+                    or "397"
+                )
+
+                trust = _csr_load_trust(root)
+                protocol = {
+                    "request": _csr_input(request_file, "CSR request manifest"),
+                    "request.sig": _csr_input(
+                        request_signature, "CSR request signature"
+                    ),
+                    "approval": _csr_input(approval_file, "CSR approval manifest"),
+                    "approval.sig": _csr_input(
+                        approval_signature, "CSR approval signature"
+                    ),
+                    "tls.csr": _csr_input(csr_file, "Host-local CSR"),
+                }
+                try:
+                    request = parse_csr_request(protocol["request"].data)
+                    approval = parse_csr_approval(protocol["approval"].data)
+                except CsrProtocolError as error:
+                    _die(str(error))
+                request_record = request.record
+                approval_record = approval.record
+                if request.operation not in {CsrOperation.ISSUE, CsrOperation.MIGRATE}:
+                    _die("Issue accepts only issue or migrate CSR requests")
+                if (
+                    request_record["service"] != service
+                    or request_record["target"] != selected.target
+                    or request_record["response_principal"] != trust.response_principal
+                ):
+                    _die("CSR request service, target, or response signer is invalid")
+                requester_key = trust.requester_keys.get(
+                    request_record["requester_principal"]
+                )
+                if requester_key is None:
+                    _die(
+                        "CSR signer principal is not trusted: "
+                        f"{request_record['requester_principal']}"
+                    )
+                if approval_record["approver_principal"] != trust.approver_principal:
+                    _die("CSR approval principal does not match policy")
+                try:
+                    validate_request_approval_binding(
+                        request,
+                        approval,
+                        signer_keys_match=requester_key == trust.approver_key,
+                    )
+                except CsrProtocolError as error:
+                    _die(str(error))
+                request_sha256 = _sha256(protocol["request"].data)
+                approval_sha256 = _sha256(protocol["approval"].data)
+                inventory_sha256 = _sha256(inventory_evidence.data)
+                csr_sha256 = _sha256(protocol["tls.csr"].data)
+                if (
+                    request_record["inventory_sha256"] != inventory_sha256
+                    or request_record["csr_sha256"] != csr_sha256
+                    or approval_record["csr_sha256"] != csr_sha256
+                    or approval_record["inventory_sha256"] != inventory_sha256
+                    or approval_record["request_sha256"] != request_sha256
+                ):
+                    _die("CSR request, approval, inventory, or CSR digest binding failed")
+                _csr_verify_signature(
+                    trust.files["requesters.allowed_signers"],
+                    request_record["requester_principal"],
+                    "platform-pki-csr-request-v1",
+                    protocol["request.sig"],
+                    protocol["request"].data,
+                    process_environment,
+                    "CSR request",
+                )
+                _csr_verify_signature(
+                    trust.files["approvers.allowed_signers"],
+                    approval_record["approver_principal"],
+                    "platform-pki-csr-approval-v1",
+                    protocol["approval.sig"],
+                    protocol["approval"].data,
+                    process_environment,
+                    "CSR approval",
+                )
+                _csr_validate_times(request, approval)
+
+                with tempfile.TemporaryDirectory(
+                    prefix="platform-pki-csr-sign."
+                ) as work:
+                    os.chmod(work, 0o700)
+                    for name, item in protocol.items():
+                        _write_new_file(f"{work}/{name}", item.data, 0o600)
+                    csr_spki = _csr_validate_request(
+                        f"{work}/tls.csr", selected, work, process_environment
+                    )
+                    if request_record["csr_spki_sha256"] != csr_spki:
+                        _die("CSR public-key digest binding failed")
+
+                    managed_key = f"{root}/services/{service}/private/tls.key"
+                    managed_certificate = f"{root}/services/{service}/certs/tls.crt"
+                    if request.operation is CsrOperation.ISSUE:
+                        if os.path.lexists(managed_key) or os.path.lexists(
+                            managed_certificate
+                        ):
+                            _die(
+                                "New host-local issue conflicts with existing managed service state"
+                            )
+                    else:
+                        key_evidence = _snapshot_file(
+                            managed_key, "Managed service private key", private=True
+                        )
+                        certificate_evidence = _snapshot_file(
+                            managed_certificate,
+                            "Managed service certificate",
+                            private=False,
+                        )
+                        assert key_evidence is not None and certificate_evidence is not None
+                        if request_record["current_cert_sha256"] != certificate_evidence.digest:
+                            _die("Migration request does not bind the managed certificate")
+
+                    root_certificate = _snapshot_file(
+                        f"{root_dir}/certs/root-ca.crt",
+                        "Root CA certificate",
+                        private=False,
+                    )
+                    ca_key = _snapshot_file(
+                        f"{intermediate_dir}/private/intermediate-ca.key",
+                        "Intermediate CA key",
+                        private=True,
+                    )
+                    ca_certificate = _snapshot_file(
+                        f"{intermediate_dir}/certs/intermediate-ca.crt",
+                        "Intermediate CA certificate",
+                        private=False,
+                    )
+                    ca_config = _snapshot_file(
+                        f"{intermediate_dir}/openssl.cnf",
+                        "Intermediate CA configuration",
+                        private=True,
+                        keep_data=True,
+                    )
+                    crlnumber = _snapshot_file(
+                        f"{intermediate_dir}/crlnumber",
+                        "Intermediate CA CRL number",
+                        private=True,
+                    )
+                    serial_evidence = _snapshot_file(
+                        f"{intermediate_dir}/serial",
+                        "Intermediate CA serial",
+                        private=True,
+                        keep_data=True,
+                    )
+                    assert all(
+                        item is not None
+                        for item in (
+                            root_certificate,
+                            ca_key,
+                            ca_certificate,
+                            ca_config,
+                            crlnumber,
+                            serial_evidence,
+                        )
+                    )
+                    assert ca_config is not None and ca_config.data is not None
+                    assert serial_evidence is not None and serial_evidence.data is not None
+                    issued_serial = _canonical_serial(
+                        serial_evidence.data, serial_evidence.path
+                    )
+                    db_evidence: dict[str, _Evidence | None] = {}
+                    for key, template in CSR_DB_PATHS:
+                        relative = template.format(serial=issued_serial)
+                        db_evidence[key] = _snapshot_file(
+                            f"{intermediate_dir}/{relative}",
+                            f"Intermediate CA database {key}",
+                            private=True,
+                            required=False,
+                        )
+
+                    _csr_prepare_state(root, service)
+                    request_id = request_record["request_id"]
+                    if os.path.lexists(
+                        f"{root}/state/csr/replay/requests/{request_id}"
+                    ):
+                        _die("CSR request ID has already been consumed")
+                    if os.path.lexists(
+                        f"{root}/state/csr/replay/nonces/{request_record['nonce']}"
+                    ):
+                        _die("CSR request nonce has already been consumed")
+                    transaction = f"csr-{request_id}"
+                    transaction_dir = f"{root}/state/csr/transactions/{transaction}"
+                    if os.path.lexists(transaction_dir):
+                        _die("CSR signing transaction path already exists")
+                    _checkpoint("source-before-journal-recheck", fault_hook, pause_hook)
+                    for label, item in protocol.items():
+                        _csr_recheck_input(item, f"CSR input {label}")
+                    _checkpoint("trust-before-journal-recheck", fault_hook, pause_hook)
+                    _csr_recheck_trust(trust)
+                    _recheck_evidence(inventory_evidence, "Service inventory")
+                    _recheck_evidence(active_evidence, "Active issuer record")
+
+                    values = _csr_initial_values(
+                        root,
+                        intermediate_dir,
+                        request,
+                        approval,
+                        request_sha256=request_sha256,
+                        approval_sha256=approval_sha256,
+                        inventory_sha256=inventory_sha256,
+                        csr_sha256=csr_sha256,
+                        csr_spki_sha256=csr_spki,
+                    )
+                    control, record = _csr_create_control(
+                        root, intermediate_dir, values
+                    )
+                    journal_started = True
+                    _checkpoint("after-journal", fault_hook, pause_hook)
+                    record = _ensure_signing_replay(
+                        record, control, fault_hook, pause_hook
+                    )
+                    _checkpoint("replay-reserved", fault_hook, pause_hook)
+
+                    transaction_identity = _csr_ensure_private_directory(
+                        transaction_dir, "CSR signing transaction directory"
+                    )
+                    signing = f"{transaction_dir}/signing"
+                    for directory in (
+                        signing,
+                        f"{signing}/private",
+                        f"{signing}/certs",
+                        f"{signing}/crl",
+                        f"{signing}/newcerts",
+                        f"{transaction_dir}/ca-backup",
+                    ):
+                        _csr_ensure_private_directory(
+                            directory, "CSR signing transaction directory"
+                        )
+                    for name, item in protocol.items():
+                        _write_new_file(f"{transaction_dir}/{name}", item.data, 0o600)
+                    response_trust = trust.files["responses.allowed_signers"].data
+                    response_trust_identity = _write_new_file(
+                        f"{transaction_dir}/responses.allowed_signers",
+                        response_trust,
+                        0o600,
+                    )
+                    control.values["transaction_identity"] = (
+                        serialize_directory_identity(transaction_identity)
+                    )
+                    control.values["response_trust_identity"] = (
+                        serialize_file_identity(response_trust_identity)
+                    )
+                    control.values["response_trust_sha256"] = _sha256(response_trust)
+                    control.values["recovery_step"] = (
+                        SigningRecoveryStep.TRANSACTION_STAGED.value
+                    )
+                    record = control.write()
+                    _checkpoint("transaction-staged", fault_hook, pause_hook)
+
+                    assert ca_key is not None and ca_certificate is not None
+                    assert crlnumber is not None and root_certificate is not None
+                    _checkpoint("trust-before-sensitive-staging", fault_hook, pause_hook)
+                    _csr_recheck_trust(trust)
+                    _recheck_evidence(ca_config, "Intermediate CA configuration")
+                    sensitive_identity = _copy_evidence(
+                        ca_key, f"{signing}/private/intermediate-ca.key", mode=0o600
+                    )
+                    _copy_evidence(
+                        ca_certificate,
+                        f"{signing}/certs/intermediate-ca.crt",
+                        mode=ca_certificate.identity.permissions,
+                    )
+                    _copy_evidence(crlnumber, f"{signing}/crlnumber", mode=0o600)
+                    _copy_evidence(
+                        root_certificate, f"{work}/root-ca.crt", mode=0o600
+                    )
+                    processed_config = _csr_processed_ca_config(
+                        ca_config.data,
+                        ca_config.path,
+                        intermediate_dir,
+                        signing,
+                    )
+                    _write_new_file(f"{signing}/openssl.cnf", processed_config, 0o600)
+                    control.values["sensitive_key_identity"] = serialize_file_identity(
+                        sensitive_identity
+                    )
+                    for key, template in CSR_DB_PATHS:
+                        relative = template.format(serial=issued_serial)
+                        destination = f"{intermediate_dir}/{relative}"
+                        source = f"{signing}/{relative}"
+                        backup = f"{transaction_dir}/ca-backup/{key}"
+                        evidence = db_evidence[key]
+                        control.values[f"db_{key}_path"] = destination
+                        control.values[f"db_{key}_pre_identity"] = (
+                            "absent"
+                            if evidence is None
+                            else serialize_file_identity(evidence.identity)
+                        )
+                        control.values[f"db_{key}_source"] = source
+                        control.values[f"db_{key}_backup"] = backup
+                        if evidence is not None:
+                            backup_identity = _copy_evidence(
+                                evidence, backup, mode=0o600
+                            )
+                            control.values[f"db_{key}_backup_identity"] = (
+                                serialize_file_identity(backup_identity)
+                            )
+                    for key, name in (
+                        ("index", "index.txt"),
+                        ("index_attr", "index.txt.attr"),
+                        ("serial", "serial"),
+                    ):
+                        evidence = db_evidence[key]
+                        assert evidence is not None
+                        _copy_evidence(evidence, f"{signing}/{name}", mode=0o600)
+                    control.values["recovery_step"] = SigningRecoveryStep.SIGNING_READY.value
+                    record = control.write()
+                    _checkpoint("signing-ready", fault_hook, pause_hook)
+
+                    service_config = f"{work}/service.cnf"
+                    _write_new_file(service_config, _service_config(selected), 0o600)
+                    _checkpoint("trust-before-signing", fault_hook, pause_hook)
+                    _csr_recheck_trust(trust)
+                    argv = (
+                        "openssl",
+                        "ca",
+                        "-batch",
+                        "-config",
+                        f"{signing}/openssl.cnf",
+                        "-extfile",
+                        service_config,
+                        "-extensions",
+                        "server_cert",
+                        "-days",
+                        days,
+                        "-notext",
+                        "-md",
+                        "sha384",
+                        "-in",
+                        f"{transaction_dir}/tls.csr",
+                        "-out",
+                        f"{signing}/tls.crt",
+                    )
+                    pass_fds: tuple[int, ...] = ()
+                    passphrase_descriptor = -1
+                    if passphrase is not None:
+                        passphrase_descriptor = _fresh_descriptor(
+                            passphrase,
+                            "Cannot duplicate passphrase file descriptor for OpenSSL",
+                        )
+                        argv = (*argv, "-passin", f"fd:{passphrase_descriptor}")
+                        pass_fds = (passphrase_descriptor,)
+                    try:
+                        _run_openssl(
+                            argv,
+                            process_environment,
+                            pass_fds=pass_fds,
+                            label="host-local CSR signing",
+                        )
+                    finally:
+                        if passphrase_descriptor >= 0:
+                            os.close(passphrase_descriptor)
+                    for path in (
+                        f"{signing}/tls.crt",
+                        *(record.path(f"db_{key}_source") or "" for key in CSR_DB_KEYS),
+                    ):
+                        if not path or not os.path.isfile(path) or os.path.islink(path):
+                            _die("Staged CA signing output is missing or unsafe")
+                        os.chmod(path, 0o600)
+                    not_before, not_after = _csr_validate_certificate(
+                        f"{signing}/tls.crt",
+                        f"{transaction_dir}/tls.csr",
+                        selected,
+                        f"{work}/root-ca.crt",
+                        f"{signing}/certs/intermediate-ca.crt",
+                        issued_serial,
+                        csr_spki,
+                        days,
+                        safety_days,
+                        work,
+                        process_environment,
+                    )
+                    intermediate_bytes = b""
+                    root_bytes = b""
+                    with OpenedFile(
+                        ca_certificate.path,
+                        policy=FilePolicy(links=1, max_size=_MAX_EVIDENCE),
+                        expected_identity=ca_certificate.identity,
+                    ) as intermediate_source, OpenedFile(
+                        root_certificate.path,
+                        policy=FilePolicy(links=1, max_size=_MAX_EVIDENCE),
+                        expected_identity=root_certificate.identity,
+                    ) as root_source:
+                        intermediate_bytes = intermediate_source.read(_MAX_EVIDENCE)
+                        root_bytes = root_source.read(_MAX_EVIDENCE)
+                    certificate_input = _csr_input(
+                        f"{signing}/tls.crt", "Issued host-local certificate"
+                    )
+                    chain = intermediate_bytes + root_bytes
+                    fullchain = certificate_input.data + intermediate_bytes
+                    chain_identity = _write_new_file(
+                        f"{signing}/ca-chain.crt", chain, 0o600
+                    )
+                    fullchain_identity = _write_new_file(
+                        f"{signing}/fullchain.crt", fullchain, 0o600
+                    )
+                    response = serialize_csr_response(
+                        {
+                            "schema": "1",
+                            "request_id": request_id,
+                            "nonce": request_record["nonce"],
+                            "operation": request_record["operation"],
+                            "service": service,
+                            "target": request_record["target"],
+                            "request_sha256": request_sha256,
+                            "approval_sha256": approval_sha256,
+                            "inventory_sha256": inventory_sha256,
+                            "csr_sha256": csr_sha256,
+                            "csr_spki_sha256": csr_spki,
+                            "certificate_sha256": _sha256(certificate_input.data),
+                            "certificate_spki_sha256": csr_spki,
+                            "chain_sha256": _sha256(chain),
+                            "issuer_root": active_root,
+                            "issuer_intermediate": active_intermediate,
+                            "serial": issued_serial,
+                            "not_before_epoch": str(not_before),
+                            "not_after_epoch": str(not_after),
+                            "candidate_state": "pending",
+                            "response_principal": trust.response_principal,
+                            "created_epoch": control.values["created_epoch"],
+                        }
+                    )
+                    response_identity = _write_new_file(
+                        f"{signing}/response", response, 0o600
+                    )
+                    control.values.update(
+                        {
+                            "certificate_path": f"{signing}/tls.crt",
+                            "certificate_identity": serialize_file_identity(
+                                certificate_input.identity
+                            ),
+                            "certificate_sha256": _sha256(certificate_input.data),
+                            "chain_path": f"{signing}/ca-chain.crt",
+                            "chain_identity": serialize_file_identity(chain_identity),
+                            "chain_sha256": _sha256(chain),
+                            "fullchain_path": f"{signing}/fullchain.crt",
+                            "fullchain_identity": serialize_file_identity(
+                                fullchain_identity
+                            ),
+                            "fullchain_sha256": _sha256(fullchain),
+                            "response_manifest_path": f"{signing}/response",
+                            "response_manifest_identity": serialize_file_identity(
+                                response_identity
+                            ),
+                            "response_manifest_sha256": _sha256(response),
+                            "response_signature_path": f"{signing}/response.sig",
+                        }
+                    )
+                    for key in CSR_DB_KEYS:
+                        source = record.path(f"db_{key}_source")
+                        assert source is not None
+                        try:
+                            actual = identity_at(source)
+                        except FilesystemError:
+                            _die(f"Staged CA signing output is unsafe: {key}")
+                        if not isinstance(actual, FileIdentity) or actual.kind != "regular":
+                            _die(f"Staged CA signing output is missing: {key}")
+                        control.values[f"db_{key}_source_identity"] = (
+                            serialize_file_identity(actual)
+                        )
+                        control.values[f"db_{key}_source_object"] = (
+                            serialize_file_object_state(actual.state)
+                        )
+                    try:
+                        with OpenedDirectory(
+                            f"{root}/state/csr/transactions",
+                            policy=_PRIVATE_DIRECTORY,
+                        ) as parent, parent.open_directory(
+                            transaction,
+                            policy=_PRIVATE_DIRECTORY,
+                            expected_identity=transaction_identity,
+                        ) as transaction_directory:
+                            fsync_tree(transaction_directory, parent, transaction)
+                    except (FilesystemError, PublicationError):
+                        _die("CSR signing transaction could not be synchronized safely")
+                    control.values["recovery_step"] = (
+                        SigningRecoveryStep.SIGNING_COMPLETE.value
+                    )
+                    record = control.write()
+                    _checkpoint("signing-complete", fault_hook, pause_hook)
+
+                    _remove_sensitive_signing_key(
+                        record, control, fault_hook, pause_hook
+                    )
+                    control.values["sensitive_key_removed"] = "true"
+                    control.values["recovery_step"] = (
+                        SigningRecoveryStep.SENSITIVE_KEY_REMOVED.value
+                    )
+                    record = control.write()
+                    _checkpoint("sensitive-key-removed", fault_hook, pause_hook)
+                    retain_uncommitted_journal = True
+                    _checkpoint("source-before-ca-publication", fault_hook, pause_hook)
+                    control.recheck()
+                    _recheck_directory_identity(
+                        root_dir,
+                        root_dir_identity,
+                        "Active root authority directory",
+                    )
+                    _recheck_directory_identity(
+                        intermediate_dir,
+                        intermediate_dir_identity,
+                        "Active intermediate authority directory",
+                    )
+                    for evidence, label in (
+                        (root_certificate, "Root CA certificate"),
+                        (ca_key, "Intermediate CA key"),
+                        (ca_certificate, "Intermediate CA certificate"),
+                        (ca_config, "Intermediate CA configuration"),
+                        (crlnumber, "Intermediate CA CRL number"),
+                        (serial_evidence, "Intermediate CA serial"),
+                    ):
+                        assert evidence is not None
+                        _recheck_evidence(evidence, label)
+                    for key, template in CSR_DB_PATHS:
+                        _recheck_optional_evidence(
+                            f"{intermediate_dir}/{template.format(serial=issued_serial)}",
+                            db_evidence[key],
+                            f"Intermediate CA database {key}",
+                        )
+                    _csr_recheck_trust(trust)
+                    _recheck_evidence(active_evidence, "Active issuer record")
+                    _recheck_evidence(inventory_evidence, "Service inventory")
+                    retain_uncommitted_journal = False
+                    for key in CSR_DB_KEYS:
+                        _recheck_evidence(active_evidence, "Active issuer record")
+                        _recheck_evidence(inventory_evidence, "Service inventory")
+                        record = _csr_publish_database_entry(
+                            record, control, key, fault_hook, pause_hook
+                        )
+                    control.values["committed"] = "true"
+                    control.values["phase"] = "ca-committed"
+                    control.values["recovery_step"] = SigningRecoveryStep.CA_COMMITTED.value
+                    record = control.write()
+                    _checkpoint(
+                        "ca-commit-after-journal-rewrite", fault_hook, pause_hook
+                    )
+                    _checkpoint("ca-committed", fault_hook, pause_hook)
+
+                    aliases = {
+                        "response-signature-after-journal-rewrite": "response-signed",
+                        "signing-journal-before-cleanup": "before-journal-cleanup",
+                    }
+
+                    def mapped_fault(point: str) -> None:
+                        fault_hook(point)
+                        alias = aliases.get(point)
+                        if alias is not None:
+                            fault_hook(alias)
+
+                    def mapped_pause(point: str) -> None:
+                        pause_hook(point)
+                        alias = aliases.get(point)
+                        if alias is not None:
+                            pause_hook(alias)
+
+                    _recheck_evidence(active_evidence, "Active issuer record")
+                    _recheck_evidence(inventory_evidence, "Service inventory")
+                    _csr_recheck_trust(trust)
+                    _recover_committed_signing(
+                        record,
+                        control,
+                        active_root,
+                        active_intermediate,
+                        response_key_path,
+                        process_environment,
+                        stream,
+                        cast(FaultHook, mapped_fault),
+                        cast(PauseHook, mapped_pause),
+                    )
+                    return 0
+    except BaseException as error:
+        if journal_started and intermediate_dir and not retain_uncommitted_journal:
+            try:
+                with acquire_operational_locks(root, "inventory"):
+                    control, record = _load_signing_journal(
+                        f"{root}/state/csr/recovery-journal",
+                        root,
+                        intermediate_dir,
+                    )
+                    if not record.committed:
+                        record = _ensure_signing_replay(
+                            record,
+                            control,
+                            DEFAULT_FAULT_HOOK,
+                            DEFAULT_PAUSE_HOOK,
+                        )
+                        _recover_uncommitted_signing(
+                            record,
+                            control,
+                            stream,
+                            DEFAULT_FAULT_HOOK,
+                            DEFAULT_PAUSE_HOOK,
+                        )
+            except BaseException as recovery_error:
+                raise recovery_error from error
+        raise
+    finally:
+        if passphrase is not None:
+            passphrase.close()
+    raise AssertionError("unreachable")
 
 
 def issue_managed_service(

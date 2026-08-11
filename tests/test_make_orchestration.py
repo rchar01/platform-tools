@@ -26,6 +26,8 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-pki-root-create",
     "test-pki-intermediate-create",
     "test-pki-service-issue",
+    "test-pki-service-issue-writer",
+    "test-pki-csr-issue-writer",
     "test-pki-service-renew",
     "test-pki-service-recover",
     "test-pki-service-writer",

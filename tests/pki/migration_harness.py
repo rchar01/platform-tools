@@ -17,7 +17,9 @@ PreparationCallback = Callable[[Path, Mapping[str, str]], None]
 PathNormalizer = Callable[[str], str]
 
 _MANAGED_OPENSSL_CONFIG = re.compile(
-    r"(?:(?:^|.*/)pki/|^)(?:authorities/(?:roots|intermediates)/[^/]+|root-ca|intermediate-ca)/openssl\.cnf$"
+    r"(?:(?:^|.*/)pki/|^)(?:(?:authorities/(?:roots|intermediates)/[^/]+|"
+    r"root-ca|intermediate-ca)/openssl\.cnf|state/csr/transactions/[^/]+/signing/"
+    r"openssl\.cnf)$"
 )
 _OPENSSL_DIR = re.compile(rb"(?m)^dir[ \t]*=[ \t]*(?P<path>[^\r\n]+)$")
 

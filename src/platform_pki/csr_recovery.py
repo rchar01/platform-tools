@@ -148,6 +148,7 @@ class SigningRecoveryStep(Enum):
     CA_SERIAL_OLD_PUBLISHED = "ca-serial_old-published"
     CA_NEWCERT_PUBLISHED = "ca-newcert-published"
     CA_COMMITTED = "ca-committed"
+    RESPONSE_SIGNING = "response-signing"
     RESPONSE_SIGNED = "response-signed"
     CANDIDATE_PUBLISHED = "candidate-published"
     RESPONSE_PUBLISHED = "response-published"
@@ -171,6 +172,7 @@ SIGNING_PLANNED_STEPS = (
 )
 SIGNING_COMMITTED_STEPS = (
     SigningRecoveryStep.CA_COMMITTED,
+    SigningRecoveryStep.RESPONSE_SIGNING,
     SigningRecoveryStep.RESPONSE_SIGNED,
     SigningRecoveryStep.CANDIDATE_PUBLISHED,
     SigningRecoveryStep.RESPONSE_PUBLISHED,
@@ -601,7 +603,10 @@ def _validate_signing_checkpoint_evidence(
         }
     elif phase is SigningPhase.CA_COMMITTED:
         base = (True, True, True, True, True, True, True)
-        if recovery_step is SigningRecoveryStep.CA_COMMITTED:
+        if recovery_step in {
+            SigningRecoveryStep.CA_COMMITTED,
+            SigningRecoveryStep.RESPONSE_SIGNING,
+        }:
             allowed = {state(*base, False)}
         elif recovery_step is SigningRecoveryStep.RESPONSE_SIGNED:
             allowed = {

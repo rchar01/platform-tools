@@ -1953,36 +1953,47 @@ def _preflight_response_signature(
         return data
     if actual is ABSENT:
         return None
-    if (
-        not isinstance(actual, FileIdentity)
-        or actual.kind != "regular"
-        or actual.permissions not in {0o600, 0o644}
-    ):
+    owned = record.recovery_step is SigningRecoveryStep.RESPONSE_SIGNING
+    allowed_modes = {0o600, 0o644} if owned else {0o600}
+    if not isinstance(actual, FileIdentity) or actual.kind != "regular":
         _die("Uncheckpointed CSR response signature is unsafe")
-    policy = FilePolicy(
-        owner=os.geteuid(),
-        forbidden_bits=0o133,
-        links=1,
-        max_size=1024 * 1024,
-    )
-    uncheckpointed = b""
-    identity: FileIdentity | None = None
+    if actual.uid != os.geteuid() or actual.links != 1 or actual.permissions not in allowed_modes:
+        _die("Uncheckpointed CSR response signature is unsafe")
     try:
-        with OpenedFile(path, policy=policy, expected_identity=actual) as opened:
-            uncheckpointed = opened.read(policy.max_size or 1024 * 1024)
-            identity = opened.identity
+        with OpenedFile(
+            path,
+            policy=FilePolicy(
+                owner=os.geteuid(),
+                mode=actual.permissions,
+                links=1,
+                max_size=1024 * 1024,
+            ),
+            expected_identity=actual,
+        ) as opened:
+            opened.read(1024 * 1024)
+            opened.recheck()
     except FilesystemError:
         _die("Uncheckpointed CSR response signature identity changed")
-    assert identity is not None
-    data, _identity = _verify_response_signature(
-        record,
-        environment,
-        manifest,
-        identity,
-        hashlib.sha256(uncheckpointed).hexdigest(),
-        signature_policy=policy,
-    )
-    return data
+    return None
+
+
+def _remove_unowned_response_signature(
+    record: SigningJournal,
+    control: _SigningControl,
+    expected: FileIdentity,
+) -> None:
+    path = record.path("response_signature_path")
+    assert path is not None
+    control.recheck()
+    _load_committed_sources(record)
+    parent, name = _parent(path)
+    try:
+        try:
+            unlink_exact(parent, name, expected)
+        except (FilesystemError, PublicationError):
+            _die("Cannot remove uncheckpointed CSR response signature")
+    finally:
+        parent.close()
 
 
 def _ensure_response_signature(
@@ -2008,6 +2019,19 @@ def _ensure_response_signature(
             record["response_signature_sha256"],
         )
         return record, data
+
+    owned_window = record.recovery_step is SigningRecoveryStep.RESPONSE_SIGNING
+    if actual is not ABSENT and not owned_window:
+        if (
+            not isinstance(actual, FileIdentity)
+            or actual.kind != "regular"
+            or actual.uid != os.geteuid()
+            or actual.permissions != 0o600
+            or actual.links != 1
+        ):
+            _die("Uncheckpointed CSR response signature is unsafe")
+        _remove_unowned_response_signature(record, control, actual)
+        actual = ABSENT
 
     if actual is ABSENT:
         if not response_key:
@@ -2036,6 +2060,11 @@ def _ensure_response_signature(
                 if len(fields) < 2 or fields[:2] != ["ssh-ed25519", expected_key]:
                     _die("Response signing key does not match the pinned response signer")
                 key.recheck()
+                if record.recovery_step is not SigningRecoveryStep.RESPONSE_SIGNING:
+                    control.values["recovery_step"] = (
+                        SigningRecoveryStep.RESPONSE_SIGNING.value
+                    )
+                    record = control.write()
                 _checkpoint("response-signature-before-mutation", fault, pause)
                 control.recheck()
                 result = _run_ssh_keygen(
@@ -2061,6 +2090,41 @@ def _ensure_response_signature(
         actual = _identity_or_absent(signature_path, "CSR response signature")
     if not isinstance(actual, FileIdentity):
         _die("Response signing did not create a regular detached signature")
+    if (
+        actual.kind != "regular"
+        or actual.uid != os.geteuid()
+        or actual.permissions not in {0o600, 0o644}
+        or actual.links != 1
+    ):
+        _die("Uncheckpointed CSR response signature is unsafe")
+    adoption_policy = FilePolicy(
+        owner=os.geteuid(),
+        mode=actual.permissions,
+        links=1,
+        max_size=1024 * 1024,
+    )
+    adoption_data = b""
+    adoption_identity: FileIdentity | None = None
+    try:
+        with OpenedFile(
+            signature_path,
+            policy=adoption_policy,
+            expected_identity=actual,
+        ) as opened:
+            adoption_data = opened.read(1024 * 1024)
+            adoption_identity = opened.identity
+    except FilesystemError:
+        _die("CSR response signature identity changed")
+    assert adoption_identity is not None
+    adoption_digest = hashlib.sha256(adoption_data).hexdigest()
+    _verify_response_signature(
+        record,
+        environment,
+        manifest,
+        adoption_identity,
+        adoption_digest,
+        signature_policy=adoption_policy,
+    )
     if actual.permissions != 0o600:
         descriptor = -1
         try:
@@ -2097,10 +2161,17 @@ def _ensure_response_signature(
         _die("CSR response signature identity changed")
     assert identity is not None
     digest = hashlib.sha256(data).hexdigest()
-    data, identity = _verify_response_signature(
-        record, environment, manifest, identity, digest
-    )
+    if data != adoption_data or digest != adoption_digest:
+        _die("CSR response signature changed after authentication")
     _checkpoint("response-signature-before-evidence", fault, pause)
+    control.recheck()
+    sources = _load_committed_sources(record)
+    if sources["response_manifest"] != manifest:
+        _die("Journaled CSR response manifest changed during signature adoption")
+    if not _matches(
+        _identity_or_absent(signature_path, "CSR response signature"), identity
+    ):
+        _die("CSR response signature identity changed before evidence")
     control.values["response_signature_identity"] = serialize_file_identity(identity)
     control.values["response_signature_sha256"] = digest
     control.values["recovery_step"] = SigningRecoveryStep.RESPONSE_SIGNED.value

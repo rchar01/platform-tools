@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from src.platform_pki.filesystem import identity_from_stat
+from src.platform_pki.operational import require_no_unresolved_state
+
 from ..harness import ProcessResult
+from .migration_harness import managed_openssl_dir_normalizer, snapshot_state
 from .support import (
     BIN,
     assert_result,
@@ -393,7 +397,23 @@ def test_csr_workspace_copies_are_isolated_and_configs_are_rebased(
     tmp_path: Path,
     csr_workspace: CsrWorkspace,
     csr_workspace_seed_copy: Callable[[Path], None],
+    _csr_workspace_seed: Path,
 ) -> None:
+    assert not (csr_workspace.pki / "state/rollover/journal").exists()
+    require_no_unresolved_state(os.fspath(csr_workspace.pki))
+    normalizer = managed_openssl_dir_normalizer(
+        _csr_workspace_seed, csr_workspace.namespace.parent
+    )
+    source = tuple(
+        entry
+        for entry in snapshot_state(
+            _csr_workspace_seed / "namespace/pki", (normalizer,)
+        )
+        if entry.path != "state/rollover/journal"
+    )
+    copied = snapshot_state(csr_workspace.pki, (normalizer,))
+    assert copied == source
+
     (csr_workspace.pki / "authorities/intermediates/g1-i1/serial").write_text(
         "DEAD\n", encoding="utf-8"
     )
@@ -419,6 +439,104 @@ def test_csr_workspace_copies_are_isolated_and_configs_are_rebased(
     assert (
         third / "namespace/pki/authorities/intermediates/g1-i1/serial"
     ).read_bytes() == seed_serial
+
+
+def test_csr_seed_copy_accepts_exact_intermediate_bootstrap_transaction(
+    tmp_path: Path,
+    csr_workspace_seed_copy: Callable[[Path], None],
+    _csr_workspace_seed_transaction: str,
+) -> None:
+    destination = tmp_path / "exact-transaction-copy"
+    csr_workspace_seed_copy(destination)
+
+    reservation = dict(
+        line.split("=", 1)
+        for line in (
+            destination
+            / "namespace/pki/state/generation-reservations/g1-i1"
+        ).read_text(encoding="ascii").splitlines()
+    )
+    assert reservation["transaction"] == _csr_workspace_seed_transaction
+    assert not (destination / "namespace/pki/state/rollover/journal").exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("malformed", "pending", "unknown-operation", "wrong-operation", "wrong-transaction"),
+)
+def test_csr_seed_copy_rejects_nonterminal_or_unexpected_rollover_journal(
+    tmp_path: Path,
+    _csr_workspace_seed: Path,
+    _csr_workspace_seed_transaction: str,
+    csr_workspace_private_seed_copy: Callable[[Path], None],
+    csr_workspace_seed_copy: Callable[..., None],
+    case: str,
+) -> None:
+    shared_journal = (
+        _csr_workspace_seed / "namespace/pki/state/rollover/journal"
+    )
+    shared_bytes = shared_journal.read_bytes()
+    shared_identity = identity_from_stat(shared_journal.lstat())
+    shared_state = snapshot_state(_csr_workspace_seed)
+    shared_object_identities = tuple(
+        (entry.path, entry.identity) for entry in shared_state
+    )
+    try:
+        private_seed = tmp_path / "private-seed"
+        csr_workspace_private_seed_copy(private_seed)
+        normalizer = managed_openssl_dir_normalizer(
+            _csr_workspace_seed, private_seed
+        )
+        assert tuple(
+            entry
+            for entry in snapshot_state(_csr_workspace_seed, (normalizer,))
+            if entry.path != "namespace/pki/state/rollover/journal"
+        ) == tuple(
+            entry
+            for entry in snapshot_state(private_seed, (normalizer,))
+            if entry.path != "namespace/pki/state/rollover/journal"
+        )
+
+        journal = private_seed / "namespace/pki/state/rollover/journal"
+        data = journal.read_bytes()
+        if case == "malformed":
+            data += b"malformed\n"
+        elif case == "pending":
+            data = data.replace(b"committed=true\n", b"committed=false\n", 1)
+        elif case == "unknown-operation":
+            data = data.replace(
+                b"operation=intermediate-bootstrap\n", b"operation=unknown\n", 1
+            )
+        elif case == "wrong-operation":
+            data = data.replace(
+                b"operation=intermediate-bootstrap\n",
+                b"operation=root-bootstrap\n",
+                1,
+            )
+        else:
+            replacement_transaction = "intermediate-bootstrap-20000101-000000-1"
+            if replacement_transaction == _csr_workspace_seed_transaction:
+                replacement_transaction = "intermediate-bootstrap-20000101-000000-2"
+            data = re.sub(
+                rb"(?m)^transaction=.*$",
+                f"transaction={replacement_transaction}".encode("ascii"),
+                data,
+                count=1,
+            )
+        journal.write_bytes(data)
+
+        destination = tmp_path / "rejected-copy"
+        with pytest.raises(ValueError):
+            csr_workspace_seed_copy(destination, source=private_seed)
+        assert not destination.exists()
+    finally:
+        current_state = snapshot_state(_csr_workspace_seed)
+        assert current_state == shared_state
+        assert tuple(
+            (entry.path, entry.identity) for entry in current_state
+        ) == shared_object_identities
+        assert shared_journal.read_bytes() == shared_bytes
+        assert identity_from_stat(shared_journal.lstat()) == shared_identity
 
 
 def test_authenticated_issue_publishes_certificate_only_candidate_and_response(csr_workspace: CsrWorkspace) -> None:
