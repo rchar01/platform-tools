@@ -31,8 +31,11 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_pki_directory,
+    require_pilot_common_library,
     require_terminal_rollover_history,
+    resolve_paths,
 )
+from .parser import ParseResult
 from .persisted_identity import (
     IdentitySentinel,
     parse_file_identity,
@@ -2578,7 +2581,7 @@ def recover_service_transaction(
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
 ) -> int:
-    """Recover one exact Python managed-service journal without public dispatch."""
+    """Recover one exact Python managed-service journal."""
 
     path = os.fspath(pki_dir)
     if not isinstance(path, str):
@@ -2618,4 +2621,41 @@ def service_recovery_hooks(
             marker=environment.get("PLATFORM_PKI_SERVICE_RECOVER_PAUSE_MARKER"),
             release=environment.get("PLATFORM_PKI_SERVICE_RECOVER_PAUSE_RELEASE"),
         ),
+    )
+
+
+def recover_service(
+    arguments: ParseResult,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Confirm and recover one exact Python managed-service transaction."""
+
+    if not isinstance(arguments, ParseResult):
+        raise TypeError("arguments must be a ParseResult")
+    process_environment = dict(os.environ if environment is None else environment)
+    require_pilot_common_library(process_environment)
+    transaction = arguments["--transaction"]
+    assert isinstance(transaction, str)
+    if _TRANSACTION.fullmatch(transaction) is None:
+        _die("Managed service recovery transaction ID is invalid")
+    paths = resolve_paths(arguments.values, process_environment)
+    require_pki_directory(paths.pki_dir)
+    if "--yes" not in arguments.provided:
+        if not sys.stdin.isatty():
+            _die("Managed service recovery requires a TTY or --yes")
+        print(
+            f"Type recover {transaction} to continue: ",
+            file=sys.stderr,
+            end="",
+            flush=True,
+        )
+        if sys.stdin.readline().rstrip("\n") != f"recover {transaction}":
+            _die("Managed service recovery confirmation did not match")
+    fault, pause = service_recovery_hooks(process_environment)
+    return recover_service_transaction(
+        paths.pki_dir,
+        transaction=transaction,
+        fault_hook=fault,
+        pause_hook=pause,
     )

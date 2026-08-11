@@ -2652,7 +2652,7 @@ def _recover_committed_signing(
     stream.flush()
 
 
-def _recover_signing_locked(
+def _recover_signing_locked_impl(
     path: str,
     *,
     transaction: str,
@@ -2728,6 +2728,31 @@ def _recover_signing_locked(
             record, control, stream, fault_hook, pause_hook
         )
     return 0
+
+
+def _recover_signing_locked(
+    path: str,
+    *,
+    transaction: str,
+    response_key: str | None,
+    environment: Mapping[str, str],
+    stream: TextIO,
+    fault_hook: FaultHook,
+    pause_hook: PauseHook,
+) -> int:
+    previous_umask = os.umask(0o077)
+    try:
+        return _recover_signing_locked_impl(
+            path,
+            transaction=transaction,
+            response_key=response_key,
+            environment=environment,
+            stream=stream,
+            fault_hook=fault_hook,
+            pause_hook=pause_hook,
+        )
+    finally:
+        os.umask(previous_umask)
 
 
 def recover_signing(

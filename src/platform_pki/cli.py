@@ -67,6 +67,14 @@ def _handler(route: tuple[str, ...]):
         from .service_verify import verify_service
 
         return verify_service
+    if route == ("service-issue",):
+        from .service_issue import issue_service
+
+        return issue_service
+    if route == ("service-recover",):
+        from .service_recover import recover_service
+
+        return recover_service
     return None
 
 
@@ -138,6 +146,67 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
             "The namespace defaults to platform-infrastructure under the XDG\n"
             "configuration home. The PKI directory defaults to <namespace>/pki.\n"
             "--force never overwrites active inventory, CA keys, certificates, or database state.\n\n",
+            end="",
+        )
+        return
+    if route == ("service-issue",) and not unified:
+        print(
+            f"{name} - Issue a service certificate from PKI inventory\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} SERVICE [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--days DAYS', '35')}\n"
+            "    Service certificate lifetime\n\n"
+            f"  {_color('--issuer-safety-days DAYS', '35')}\n"
+            "    Required validity margin before the intermediate expires\n"
+            "    Default: 1\n\n"
+            f"  {_color('--intermediate-pass-file PATH', '35')}\n"
+            "    Restricted file containing the encrypted intermediate-key passphrase\n\n"
+            f"  {_color('--rotate-key', '35')}\n"
+            "    Archive and replace an existing service private key\n\n"
+            f"  {_color('--csr-file PATH', '35')}\n"
+            "    Host-generated P-384 CSR\n\n"
+            f"  {_color('--request-file PATH', '35')}\n"
+            "    Canonical authenticated CSR request manifest\n\n"
+            f"  {_color('--request-signature PATH', '35')}\n"
+            "    Detached OpenSSH request signature\n\n"
+            f"  {_color('--approval-file PATH', '35')}\n"
+            "    Canonical offline approval manifest\n\n"
+            f"  {_color('--approval-signature PATH', '35')}\n"
+            "    Detached OpenSSH approval signature\n\n"
+            f"  {_color('--response-key PATH', '35')}\n"
+            "    Trusted Ed25519 response-signing private key\n\n"
+            f"  {_color('--current-cert-file PATH', '35')}\n"
+            "    Current host-local certificate (renewal only)\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICE', '34')}\n"
+            "    Inventory service name\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name} platform-example\n"
+            f"  {name} platform-example --intermediate-pass-file\n"
+            "  /run/secrets/platform-pki-intermediate-pass\n\n"
+            "The namespace defaults to platform-infrastructure under the XDG\n"
+            "configuration home. The PKI directory defaults to <namespace>/pki.\n"
+            "The lifetime uses the inventory value, PLATFORM_PKI_SERVICE_DAYS, or 397\n"
+            "days, in that order. Existing private keys are reused unless --rotate-key\n"
+            "is used. Existing certificates are never overwritten; use\n"
+            "platform-pki-service-renew after initial issuance. Passphrase files must be\n"
+            "mode 600 or stricter and have a first line of at least 16 characters\n"
+            "containing non-whitespace content.\n"
+            "Host-local issue and migration require the complete authenticated CSR,\n"
+            "request, approval, and response-signing inputs. They publish only a pending\n"
+            "certificate candidate and signed response; managed migration state remains.\n"
+            "Legacy singleton CA state must be migrated before this command can run.\n\n",
             end="",
         )
         return
@@ -573,6 +642,14 @@ def _dispatch(name: str, command: str, arguments: list[str], *, unified: bool) -
             _print_route_help(name, route, unified=unified)
             return 0
 
+    if (
+        route == ("service-issue",)
+        and len(arguments) >= 2
+        and not arguments[0].startswith("-")
+        and leading_action(arguments[1], version=False) == "help"
+    ):
+        _print_route_help(name, route, unified=unified)
+        return 0
     if not nested and arguments and leading_action(arguments[0], version=False) == "help":
         _print_route_help(name, route, unified=unified)
         return 0

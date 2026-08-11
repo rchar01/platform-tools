@@ -47,7 +47,7 @@ LOCK_ORDER = ("lifecycle", "root", "intermediate", "inventory", "export")
 
 @dataclass(frozen=True)
 class CommandContract:
-    compatibility_name: str
+    compatibility_name: str | None
     unified_route: str
     nested_commands: tuple[str, ...]
     lock_profiles: tuple[tuple[str, ...], ...]
@@ -76,7 +76,7 @@ class RecoveryContract:
 
 @dataclass(frozen=True)
 class ParserRouteContract:
-    compatibility_executable: str
+    compatibility_executable: str | None
     unified_route: tuple[str, ...]
     positionals: tuple[str, ...]
     long_flags: tuple[str, ...]
@@ -182,7 +182,7 @@ def _locks(*profiles: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
 
 
 def _route(
-    compatibility_executable: str,
+    compatibility_executable: str | None,
     unified_route: tuple[str, ...],
     *,
     positionals: tuple[str, ...] = (),
@@ -275,6 +275,13 @@ PKI_COMMAND_CONTRACTS = (
         (),
         _locks(LOCK_ORDER[:4]),
         ("test-pki-service-issue", "test-pki-csr-signing"),
+    ),
+    CommandContract(
+        None,
+        "service-recover",
+        (),
+        _locks(LOCK_ORDER[:4]),
+        ("test-pki-service-recover",),
     ),
     CommandContract(
         "platform-pki-service-renew",
@@ -435,6 +442,12 @@ PKI_PARSER_ROUTES = (
         validators=(*_NAMESPACE_VALIDATORS, ("--min-days", "days")),
     ),
     _route(
+        None, ("service-recover",),
+        long_flags=("--transaction", *_NAMESPACE_FLAGS, "--yes"),
+        required_names=("--transaction",),
+        validators=(("--transaction", "not_empty"), *_NAMESPACE_VALIDATORS),
+    ),
+    _route(
         "platform-pki-list-expiry", ("list-expiry",),
         long_flags=(*_NAMESPACE_FLAGS, "--warn-days", "--critical-days"),
         defaults=(("--warn-days", "90"), ("--critical-days", "30")),
@@ -528,6 +541,11 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
         ("--yes", "--transaction"), "src/platform_pki/csr_recover.py",
         'confirmation != f"recover {description}"',
     ),
+    RuntimeOptionRelationship(
+        ("service-recover",), "confirmation", "--yes is absent",
+        ("--yes", "--transaction"), "src/platform_pki/service_recover.py",
+        'sys.stdin.readline().rstrip("\\n") != f"recover {transaction}"',
+    ),
     *(
         RuntimeOptionRelationship(
             ("csr-candidate", action), "confirmation", "--yes is absent",
@@ -596,6 +614,7 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("csr-candidate", "abandon"), _CANDIDATE_DECISION_DUPLICATES, "bashly/platform-pki-csr-candidate/src/abandon_command.sh"),
     DuplicateOptionContract(("service-issue",), _CSR_INPUT_FLAGS, "bashly/platform-pki-service-issue/src/root_command.sh"),
     DuplicateOptionContract(("service-renew",), _CSR_INPUT_FLAGS, "bashly/platform-pki-service-renew/src/root_command.sh"),
+    DuplicateOptionContract(("service-recover",), ("--transaction", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("custody-report",), ("--namespace", "--pki-dir", "--format"), "bashly/platform-pki-custody-report/src/root_command.sh"),
     DuplicateOptionContract(("ca-passphrase-verify",), ("--namespace", "--pki-dir", "--root-pass-file", "--intermediate-pass-file"), "bashly/platform-pki-ca-passphrase-verify/src/root_command.sh"),
     DuplicateOptionContract(("ca-rollover", "migrate"), ("--namespace", "--pki-dir", "--backup-receipt", "--private-repo", "--yes", "--expected-root-sha256", "--expected-intermediate-sha256"), "bashly/platform-pki-ca-rollover/src/migrate_command.sh"),

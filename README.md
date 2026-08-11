@@ -45,7 +45,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki-csr-candidate` | Verify, finalize, or abandon one exact authenticated host-local candidate. |
 | `platform-pki-root-create` | Create the root CA key and certificate. |
 | `platform-pki-intermediate-create` | Create the intermediate CA and CA chain. |
-| `platform-pki-service-issue` | Issue a service certificate from PKI inventory. |
+| `platform-pki-service-issue` | Issue a service certificate from PKI inventory through the shared Python handler. |
 | `platform-pki-service-renew` | Renew a service certificate, reusing the private key by default. |
 | `platform-pki-service-verify` | Verify a generated service certificate. |
 | `platform-pki-list-expiry` | List service certificate expiry status. |
@@ -436,8 +436,17 @@ different private repository. `platform-pki-init --force` refreshes only the
 example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
-The equivalent unified routes are `platform-pki init` and
-`platform-pki inventory-install`.
+The equivalent unified routes are `platform-pki init`,
+`platform-pki inventory-install`, and `platform-pki service-issue`. Managed
+service transaction recovery is unified-only:
+
+```bash
+platform-pki service-recover \
+  --transaction service-0123456789abcdef0123456789abcdef
+```
+
+Recovery requires exact interactive confirmation or `--yes`. Host-local issue,
+migration, and renewal continue to recover through `platform-pki csr-recover`.
 
 Service inventory may set `key_custody: host-local`; such entries must also set
 canonical `target`, `validation_boundary_sha256`, and positive-decimal

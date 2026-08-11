@@ -44,6 +44,9 @@ pytestmark = pytest.mark.pki
 REPOSITORY = Path(__file__).resolve().parents[2]
 WRITER = REPOSITORY / "tests/pki/csr_issue_writer_driver.py"
 RECOVER = REPOSITORY / "tests/pki/csr_signing_recover_driver.py"
+ISSUE_ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-issue"
+ISSUE_ORACLE = ISSUE_ORACLE_ROOT / "platform-pki-service-issue"
+ISSUE_ORACLE_LIB = ISSUE_ORACLE_ROOT / "lib"
 REQUEST_ID = "0123456789abcdef0123456789abcdef"
 TRANSACTION = f"csr-{REQUEST_ID}"
 
@@ -292,7 +295,7 @@ def test_final_bash_and_python_writers_publish_equivalent_protocol(
     def bash_argv(root: Path) -> tuple[str | os.PathLike[str], ...]:
         value = workspace(root, {})
         return (
-            ISSUE,
+            ISSUE_ORACLE,
             "external",
             "--namespace",
             value.namespace,
@@ -353,7 +356,10 @@ def test_final_bash_and_python_writers_publish_equivalent_protocol(
         Path("namespace/pki"),
         bash_argv,
         python_argv,
-        isolated_environment,
+        dict(
+            isolated_environment,
+            PLATFORM_TOOLS_LIB_DIR=os.fspath(ISSUE_ORACLE_LIB),
+        ),
         output_normalizers=(normalize_output,),
         content_normalizers=(_csr_differential_content,),
         run_options={"timeout": 120},

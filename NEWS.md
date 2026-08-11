@@ -4,9 +4,14 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- `platform-pki-service-issue` and `platform-pki service-issue` now share one
+  Python handler for managed issuance and authenticated host-local issue or
+  migration. Managed schema-1 transactions can now be recovered through the
+  unified-only `platform-pki service-recover --transaction` route with exact
+  confirmation; host-local transactions continue to use `csr-recover`.
 - Added the deterministic, standard-library-only `platform-pki` Python 3.14
   zipapp as the unified migration interface. The foundation build provides the
-  frozen 24-route parser, strict ordered-record and inventory models, bounded
+  frozen 25-route parser, strict ordered-record and inventory models, bounded
   exact-argv process execution, descriptor-bound filesystem and path safety
   primitives, descriptor-bound lifecycle-through-export advisory lock context
   managers, bounded Linux no-clobber publication, exact exchange, and guarded

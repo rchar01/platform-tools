@@ -12,6 +12,7 @@ COMMANDS = {
     "intermediate-create": (),
     "service-issue": (),
     "service-renew": (),
+    "service-recover": (),
     "service-verify": (),
     "list-expiry": (),
     "print-cert": (),
@@ -25,6 +26,7 @@ COMMANDS = {
 COMPATIBILITY_COMMANDS = {
     f"platform-pki-{command}": command
     for command in COMMANDS
+    if command != "service-recover"
 }
 
 

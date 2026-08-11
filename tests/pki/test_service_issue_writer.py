@@ -17,6 +17,7 @@ from .create_test_support import (
     assert_passphrase_content_absent,
     digest,
     environment,
+    executable,
     mode,
     openssl,
     ready_ca,
@@ -34,6 +35,9 @@ from src.platform_pki.service_transaction import (
 pytestmark = pytest.mark.pki
 REPOSITORY = Path(__file__).resolve().parents[2]
 DRIVER = REPOSITORY / "tests/pki/service_issue_writer_driver.py"
+ISSUE_ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-issue"
+ISSUE_ORACLE = ISSUE_ORACLE_ROOT / "platform-pki-service-issue"
+ISSUE_ORACLE_LIB = ISSUE_ORACLE_ROOT / "lib"
 INVENTORY = """services:
   app:
     common_name: app.example.internal
@@ -249,8 +253,8 @@ def test_managed_issue_writer_publishes_and_cleans_exact_transaction(
     env = environment(tmp_path / "environment")
     ready_ca(process_runner, value, env, toolset, INVENTORY)
     evidence = tmp_path / "openssl-ca-argv"
-    wrapper = tmp_path / "openssl"
-    wrapper.write_text(
+    wrapper = executable(
+        tmp_path / "openssl",
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == ca ]]; then
@@ -259,7 +263,6 @@ fi
 exec "$REAL_OPENSSL" "$@"
 """
     )
-    wrapper.chmod(0o700)
 
     result = run(
         process_runner,
@@ -424,12 +427,13 @@ def test_bash_python_success_differential_has_narrow_dynamic_normalization(
     bash = _clone_workspace(seed, tmp_path / "bash")
     python = _clone_workspace(seed, tmp_path / "python")
     bash_env = environment(tmp_path / "bash-environment")
+    bash_env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ISSUE_ORACLE_LIB)
     python_env = environment(tmp_path / "python-environment")
 
     bash_result = run(
         process_runner,
         [
-            toolset.issue,
+            ISSUE_ORACLE,
             "app",
             "--namespace",
             bash.namespace,
@@ -497,6 +501,7 @@ def test_bash_python_invalid_differential_preserves_diagnostic_and_state(
         bash = _clone_workspace(seed, tmp_path / f"bash-{case}")
         python = _clone_workspace(seed, tmp_path / f"python-{case}")
         bash_env = environment(tmp_path / f"bash-environment-{case}")
+        bash_env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ISSUE_ORACLE_LIB)
         python_env = environment(tmp_path / f"python-environment-{case}")
         service = "external" if case == "host-local" else "app"
         for value in (bash, python):
@@ -517,7 +522,7 @@ def test_bash_python_invalid_differential_preserves_diagnostic_and_state(
         bash_result = run(
             process_runner,
             [
-                toolset.issue,
+                ISSUE_ORACLE,
                 service,
                 "--namespace",
                 bash.namespace,
@@ -1048,8 +1053,8 @@ def test_invalid_certificate_profile_output_rolls_back(
     env = environment(tmp_path / "environment")
     ready_ca(process_runner, value, env, toolset, INVENTORY)
     original_ca = _ca_state(value)
-    wrapper = tmp_path / "openssl"
-    wrapper.write_text(
+    wrapper = executable(
+        tmp_path / "openssl",
         """#!/usr/bin/env bash
 set -euo pipefail
 arguments=" $* "
@@ -1072,7 +1077,6 @@ fi
 exec "$REAL_OPENSSL" "$@"
 """
     )
-    wrapper.chmod(0o700)
 
     result = run(
         process_runner,
@@ -1100,8 +1104,8 @@ def test_published_verification_failure_rolls_back_all_publication(
     env = environment(tmp_path / "environment")
     ready_ca(process_runner, value, env, toolset, INVENTORY)
     original_ca = _ca_state(value)
-    wrapper = tmp_path / "openssl"
-    wrapper.write_text(
+    wrapper = executable(
+        tmp_path / "openssl",
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == verify ]] && printf '%s\n' "$@" | grep -Fxq -- -untrusted; then
@@ -1110,7 +1114,6 @@ fi
 exec "$REAL_OPENSSL" "$@"
 """
     )
-    wrapper.chmod(0o700)
 
     result = run(
         process_runner,

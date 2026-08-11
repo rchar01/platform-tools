@@ -291,8 +291,12 @@ def _expanded_shell_array(
 
 
 def test_command_contract_inventory_is_complete_and_unique() -> None:
-    assert len(PKI_COMMAND_CONTRACTS) == 18
-    compatibility_names = [contract.compatibility_name for contract in PKI_COMMAND_CONTRACTS]
+    assert len(PKI_COMMAND_CONTRACTS) == 19
+    compatibility_names = [
+        contract.compatibility_name
+        for contract in PKI_COMMAND_CONTRACTS
+        if contract.compatibility_name is not None
+    ]
     unified_routes = [contract.unified_route for contract in PKI_COMMAND_CONTRACTS]
     assert len(set(compatibility_names)) == len(compatibility_names)
     assert len(set(unified_routes)) == len(unified_routes)
@@ -300,7 +304,13 @@ def test_command_contract_inventory_is_complete_and_unique() -> None:
     assert all(
         contract.compatibility_name.removeprefix("platform-pki-") == contract.unified_route
         for contract in PKI_COMMAND_CONTRACTS
+        if contract.compatibility_name is not None
     )
+    assert [
+        contract.unified_route
+        for contract in PKI_COMMAND_CONTRACTS
+        if contract.compatibility_name is None
+    ] == ["service-recover"]
 
 
 def test_python_command_map_matches_frozen_command_inventory() -> None:
@@ -312,7 +322,11 @@ def test_python_command_map_matches_frozen_command_inventory() -> None:
 
 
 def test_command_inventory_matches_make_and_bashly_sources() -> None:
-    expected = {contract.compatibility_name for contract in PKI_COMMAND_CONTRACTS}
+    expected = {
+        contract.compatibility_name
+        for contract in PKI_COMMAND_CONTRACTS
+        if contract.compatibility_name is not None
+    }
     maintained = {
         name
         for variable in ("SHELL_TOOLS", "PYTHON_ZIPAPPS")
@@ -351,9 +365,12 @@ def test_parser_route_inventory_exactly_matches_resolved_bashly_yaml() -> None:
     definitions = sorted((ROOT / "bashly").glob("platform-pki-*/src/bashly.yml"))
     actual = tuple(route for definition in definitions for route in _normalize_yaml_routes(definition))
     assert len(definitions) == 18
-    assert len(actual) == len(PKI_PARSER_ROUTES) == 24
+    frozen = tuple(
+        route for route in PKI_PARSER_ROUTES if route.compatibility_executable is not None
+    )
+    assert len(actual) == len(frozen) == 24
     assert {route.unified_route: route for route in actual} == {
-        route.unified_route: route for route in PKI_PARSER_ROUTES
+        route.unified_route: route for route in frozen
     }
 
 

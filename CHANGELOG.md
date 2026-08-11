@@ -32,6 +32,11 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Changed `platform-pki-service-issue` and `platform-pki service-issue` to use
+  one Python handler for managed issuance and authenticated host-local issue or
+  migration. Added unified-only `platform-pki service-recover --transaction`
+  with exact interactive confirmation or `--yes`; host-local recovery remains
+  owned by `csr-recover`, and `platform-pki-service-renew` remains Bash-owned.
 - Changed `platform-pki-init` to use one Python 3.14 handler for its
   compatibility command and unified `platform-pki init` route, preserving its
   parser, help, path validation, private-tree creation, template publication,

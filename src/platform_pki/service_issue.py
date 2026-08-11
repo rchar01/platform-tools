@@ -1,4 +1,4 @@
-"""Non-public managed and host-local service issuance orchestration."""
+"""Managed and host-local service issuance orchestration."""
 
 from __future__ import annotations
 
@@ -68,8 +68,12 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_pki_directory,
+    require_pilot_common_library,
     require_program,
+    resolve_paths,
 )
+from .parser import ParseResult
+from .paths import expand_home
 from .persisted_identity import (
     IdentitySentinel,
     serialize_directory_identity,
@@ -122,6 +126,15 @@ _ARCHIVE_NAME = re.compile(r"[0-9]{8}-[0-9]{6}(?:-[0-9]{2})?", re.ASCII)
 _OPENSSL_PATH = re.compile(r"/[A-Za-z0-9._/-]+", re.ASCII)
 _CSR_PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9.-]*", re.ASCII)
 _CSR_MAX_PROTOCOL_BYTES = 1024 * 1024
+_PUBLIC_CSR_INPUT_OPTIONS = (
+    "--csr-file",
+    "--request-file",
+    "--request-signature",
+    "--approval-file",
+    "--approval-signature",
+    "--response-key",
+    "--current-cert-file",
+)
 
 CSR_SIGNING_WRITER_CHECKPOINTS = (
     "after-journal",
@@ -2598,7 +2611,7 @@ def issue_host_local_csr(
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
 ) -> int:
-    """Issue or migrate one authenticated host-local CSR without public dispatch."""
+    """Issue or migrate one authenticated host-local CSR."""
 
     root = os.fspath(pki_dir)
     if not isinstance(root, str) or not os.path.isabs(root) or os.path.normpath(root) != root:
@@ -2620,6 +2633,7 @@ def issue_host_local_csr(
     passphrase: OpenedFile | None = None
     if intermediate_pass_file is not None:
         passphrase = _open_passphrase(os.fspath(intermediate_pass_file))
+    previous_umask = os.umask(0o077)
     journal_started = False
     retain_uncommitted_journal = False
     transaction = ""
@@ -3273,6 +3287,7 @@ def issue_host_local_csr(
                 raise recovery_error from error
         raise
     finally:
+        os.umask(previous_umask)
         if passphrase is not None:
             passphrase.close()
     raise AssertionError("unreachable")
@@ -3319,6 +3334,7 @@ def issue_managed_service(
     passphrase: OpenedFile | None = None
     if intermediate_pass_file is not None:
         passphrase = _open_passphrase(os.fspath(intermediate_pass_file))
+    previous_umask = os.umask(0o077)
     try:
         with _handled_signals():
             with acquire_operational_locks(root, "inventory"):
@@ -3402,6 +3418,7 @@ def issue_managed_service(
                 raise primary from cleanup
         raise
     finally:
+        os.umask(previous_umask)
         if passphrase is not None:
             passphrase.close()
 
@@ -3425,3 +3442,70 @@ def issue_managed_service(
     )
     stream.flush()
     return 0
+
+
+def issue_service(
+    arguments: ParseResult,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Issue one managed or host-local service through public dispatch."""
+
+    if not isinstance(arguments, ParseResult):
+        raise TypeError("arguments must be a ParseResult")
+    process_environment = dict(os.environ if environment is None else environment)
+    require_pilot_common_library(process_environment)
+    paths = resolve_paths(arguments.values, process_environment)
+    service = arguments["service"]
+    assert isinstance(service, str)
+    home = process_environment.get("HOME")
+    if home is None:
+        _die("HOME is required")
+
+    def optional_path(option: str) -> str | None:
+        value = arguments.values.get(option)
+        if value is None:
+            return None
+        return expand_home(value, home=home)
+
+    fault = FaultHook(
+        crash_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_CRASH_AT"),
+        signal_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_SIGNAL_AT"),
+        failure_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_FAILURE_AT"),
+        signum=int(process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_SIGNAL", "15")),
+    )
+    pause = PauseHook(
+        pause_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_AT"),
+        marker=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_MARKER"),
+        release=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_RELEASE"),
+    )
+    passphrase = optional_path("--intermediate-pass-file")
+    safety_days = str(arguments["--issuer-safety-days"])
+    if any(option in arguments.provided for option in _PUBLIC_CSR_INPUT_OPTIONS):
+        return issue_host_local_csr(
+            service,
+            pki_dir=paths.pki_dir,
+            request_file=cast(str, optional_path("--request-file")),
+            request_signature=cast(str, optional_path("--request-signature")),
+            approval_file=cast(str, optional_path("--approval-file")),
+            approval_signature=cast(str, optional_path("--approval-signature")),
+            csr_file=cast(str, optional_path("--csr-file")),
+            response_key=cast(str, optional_path("--response-key")),
+            intermediate_pass_file=passphrase,
+            issuer_safety_days=safety_days,
+            environment=process_environment,
+            fault_hook=fault,
+            pause_hook=pause,
+        )
+    days_value = arguments.values.get("--days")
+    return issue_managed_service(
+        service,
+        pki_dir=paths.pki_dir,
+        days=None if days_value is None else str(days_value),
+        issuer_safety_days=safety_days,
+        intermediate_pass_file=passphrase,
+        rotate_key="--rotate-key" in arguments.provided,
+        environment=process_environment,
+        fault_hook=fault,
+        pause_hook=pause,
+    )

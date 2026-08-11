@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import stat
 import time
@@ -29,6 +30,15 @@ from .create_test_support import (
 
 
 pytestmark = pytest.mark.pki
+REPOSITORY = Path(__file__).resolve().parents[2]
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-issue"
+ORACLE = ORACLE_ROOT / "platform-pki-service-issue"
+ORACLE_LIB = ORACLE_ROOT / "lib"
+UNIFIED = REPOSITORY / "bin/platform-pki"
+ORACLE_COMMIT = "6a7f162240c9970cf9a17091d9b37c8dea071ad8"
+ORACLE_SHA256 = "c06bb8baba8d7a75f0a3a88f814b86740aab03f78eef2e8fcd05140534206fa5"
+COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
+CSR_SIGN_SHA256 = "8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001"
 
 INVENTORY = """services:
   app:
@@ -64,6 +74,18 @@ INVENTORY = """services:
 
 def _issue(value, toolset, service: str, *arguments: str | Path) -> list[str | Path]:
     return [toolset.issue, service, "--namespace", value.namespace, "--intermediate-pass-file", value.intermediate_pass, *arguments]
+
+
+def _oracle_issue(value, service: str, *arguments: str | Path) -> list[str | Path]:
+    return [ORACLE, service, "--namespace", value.namespace, "--intermediate-pass-file", value.intermediate_pass, *arguments]
+
+
+def _oracle_environment(env: dict[str, str], **values: str) -> dict[str, str]:
+    return dict(
+        env,
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB),
+        **values,
+    )
 
 
 def _ready(process_runner, value, env, toolset) -> None:
@@ -129,6 +151,71 @@ def _insert_after(path: Path, prefix: str, insertion: str) -> None:
             output.append(insertion); inserted = True
     assert inserted
     path.write_text("\n".join(output) + "\n"); path.chmod(0o600)
+
+
+def test_frozen_oracle_and_loaded_libraries_match_recorded_provenance() -> None:
+    plan = (REPOSITORY / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
+    assert hashlib.sha256(
+        (ORACLE_LIB / "platform-pki-common.sh").read_bytes()
+    ).hexdigest() == COMMON_SHA256
+    assert hashlib.sha256(
+        (ORACLE_LIB / "platform-pki-csr-sign.sh").read_bytes()
+    ).hexdigest() == CSR_SIGN_SHA256
+    assert ORACLE_COMMIT in plan
+    assert mode(ORACLE) == 0o755
+    assert mode(ORACLE_LIB / "platform-pki-common.sh") == 0o644
+    assert mode(ORACLE_LIB / "platform-pki-csr-sign.sh") == 0o644
+
+
+@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
+def test_compatibility_help_matches_frozen_oracle(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    tty: bool,
+) -> None:
+    env = environment(tmp_path / "environment")
+    env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ORACLE_LIB)
+    pty_mode = None
+    if tty:
+        env.pop("NO_COLOR")
+        pty_mode = "canonical"
+    expected = run(process_runner, [ORACLE, "--help"], env, pty_mode=pty_mode)
+    actual = run(
+        process_runner,
+        [tools().issue, "--help"],
+        env,
+        pty_mode=pty_mode,
+    )
+    assert (actual.status, actual.stdout, actual.stderr) == (
+        expected.status,
+        expected.stdout,
+        expected.stderr,
+    )
+
+
+def test_compatibility_and_unified_routes_share_public_handler(
+    tmp_path: Path, process_runner: Callable[..., ProcessResult]
+) -> None:
+    env = environment(tmp_path / "environment")
+    pki = tmp_path / "missing-pki"
+    compatibility = run(
+        process_runner,
+        [tools().issue, "app", "--pki-dir", pki],
+        env,
+    )
+    unified = run(
+        process_runner,
+        [UNIFIED, "service-issue", "app", "--pki-dir", pki],
+        env,
+    )
+    assert (compatibility.status, compatibility.stdout, compatibility.stderr) == (
+        unified.status,
+        unified.stdout,
+        unified.stderr,
+    )
 
 
 @pytest.mark.parametrize(
@@ -307,7 +394,7 @@ def test_inventory_parent_symlink_rejected_before_locks(tmp_path: Path, process_
     inventory = value.pki / "inventory"; real = value.root / "inventory-real"; inventory.rename(real); inventory.symlink_to(real, target_is_directory=True); before = _ca_state(value)
     result = run(process_runner, _issue(value, toolset, "failure"), env)
     assert result.status == 1
-    assert "Service inventory ancestor must be a non-symlink directory" in result.stderr
+    assert "Service inventory is unsafe" in result.stderr
     assert _ca_state(value) == before
     assert not (value.pki / "authorities/roots/g1/.platform-pki-root-operation.lock").exists()
 
@@ -339,7 +426,7 @@ def test_certificate_verification_failure_restores_rotated_key_and_ca(tmp_path: 
 source "$REAL_COMMON"
 pki_verify_service_certificate() { exit 43; }
 """)
-    result = run(process_runner, _issue(value, toolset, "failure", "--rotate-key"), dict(env, REAL_COMMON=os.fspath(toolset.common), PLATFORM_TOOLS_LIB_DIR=os.fspath(replacement.parent)))
+    result = run(process_runner, _oracle_issue(value, "failure", "--rotate-key"), dict(env, REAL_COMMON=os.fspath(ORACLE_LIB / "platform-pki-common.sh"), PLATFORM_TOOLS_LIB_DIR=os.fspath(replacement.parent)))
     assert result.status == 43
     assert digest(key) == key_before
     assert not (value.pki / "services/failure/certs/tls.crt").exists()
@@ -369,7 +456,7 @@ def test_publication_failure_or_signal_rolls_back_and_cleans_temp(tmp_path: Path
     wrapper = executable(tmp_path / "mv", PUBLICATION_WRAPPER); temporary = tmp_path / "inventory-temp"; temporary.mkdir(mode=0o700)
     counter = tmp_path / "counter"; evidence = tmp_path / "trigger-evidence"
     failure_env = dict(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_MV=command_path("mv", env), MV_COUNTER=os.fspath(counter), MV_TRIGGER_EVIDENCE=os.fspath(evidence), MV_TRIGGER_AT="3", MV_SIGNAL=signal_name, TMPDIR=os.fspath(temporary))
-    result = run(process_runner, _issue(value, toolset, "failure"), failure_env)
+    result = run(process_runner, _oracle_issue(value, "failure"), _oracle_environment(failure_env))
     assert result.status == status
     assert not (value.pki / "services/failure").exists()
     assert _ca_state(value) == before
@@ -405,7 +492,7 @@ def test_publication_validation_race_preserves_foreign_state(tmp_path: Path, pro
     else:
         target = service / "certs/tls.crt"
     sentinel = f"foreign-{race_case}-publication-race"; wrapper = executable(tmp_path / "mv", RACE_WRAPPER); race_identity = tmp_path / "race-identity"
-    result = run(process_runner, _issue(value, toolset, "failure"), dict(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_MV=command_path("mv", env), RACE_COUNTER=os.fspath(tmp_path / "counter"), RACE_TARGET=os.fspath(target), RACE_SENTINEL=sentinel, RACE_IDENTITY=os.fspath(race_identity)))
+    result = run(process_runner, _oracle_issue(value, "failure"), _oracle_environment(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_MV=command_path("mv", env), RACE_COUNTER=os.fspath(tmp_path / "counter"), RACE_TARGET=os.fspath(target), RACE_SENTINEL=sentinel, RACE_IDENTITY=os.fspath(race_identity)))
     assert result.status == 1
     assert diagnostic in result.stderr
     assert target.read_text().strip() == sentinel
@@ -428,7 +515,7 @@ count=0; [[ ! -f $RACE_COUNTER ]] || count=$(<"$RACE_COUNTER"); count=$((count +
 if [[ $count == 1 ]]; then destination=${!#}; foreign="${destination}.foreign"; printf '%s\n' "$RACE_SENTINEL" >"$foreign"; chmod 600 "$foreign"; "$REAL_MV" -f -- "$foreign" "$destination"; python3 -c 'import os,sys; s=os.lstat(sys.argv[1]); print(":".join(str(v) for v in (s.st_dev,s.st_ino,s.st_uid,s.st_gid,s.st_mode,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)))' "$destination" >"$RACE_IDENTITY"; fi
 """)
     temporary = tmp_path / "inventory-temp"; temporary.mkdir(mode=0o700); sentinel = "foreign-published-replacement"; race_identity = tmp_path / "race-identity"
-    result = run(process_runner, _issue(value, toolset, "failure"), dict(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_MV=command_path("mv", env), RACE_COUNTER=os.fspath(tmp_path / "counter"), RACE_SENTINEL=sentinel, RACE_IDENTITY=os.fspath(race_identity), TMPDIR=os.fspath(temporary)))
+    result = run(process_runner, _oracle_issue(value, "failure"), _oracle_environment(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_MV=command_path("mv", env), RACE_COUNTER=os.fspath(tmp_path / "counter"), RACE_SENTINEL=sentinel, RACE_IDENTITY=os.fspath(race_identity), TMPDIR=os.fspath(temporary)))
     assert result.status == 1
     assert "Published issuance destination identity changed" in result.stderr
     assert "preserved staging and locks for recovery" in result.stderr
@@ -462,7 +549,7 @@ fi
 exec "$REAL_LN" "$@"
 """)
     counter = tmp_path / "ln-counter"; evidence = tmp_path / "ln-trigger-evidence"
-    result = run(process_runner, _issue(value, toolset, "failure", "--rotate-key"), dict(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_LN=command_path("ln", env), LN_COUNTER=os.fspath(counter), LN_TRIGGER_EVIDENCE=os.fspath(evidence)))
+    result = run(process_runner, _oracle_issue(value, "failure", "--rotate-key"), _oracle_environment(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_LN=command_path("ln", env), LN_COUNTER=os.fspath(counter), LN_TRIGGER_EVIDENCE=os.fspath(evidence)))
     assert result.status == 1
     assert "Archived previous service private key" not in result.stderr
     assert (digest(key), mode(key), key.stat().st_mtime_ns) == before
@@ -478,8 +565,8 @@ exec "$REAL_LN" "$@"
 @pytest.mark.parametrize(
     ("unsafe_case", "diagnostic"),
     (
-        pytest.param("symlink", "Service private key must not be a symlink", id="key-symlink"),
-        pytest.param("hardlink", "Service private key must not be hard-linked", id="key-hardlink"),
+        pytest.param("symlink", "Service private key is unsafe", id="key-symlink"),
+        pytest.param("hardlink", "Service private key is unsafe", id="key-hardlink"),
         pytest.param("mode", "Intermediate CA new-certificates directory is group- or world-writable", id="newcerts-mode"),
         pytest.param("type", "Service certificate must be a regular file", id="certificate-type"),
         pytest.param("inventory", "must not contain OpenSSL variable expansion syntax", id="inventory-variable"),
@@ -518,7 +605,7 @@ def test_fake_foreign_owner_rejected_before_root_lock(tmp_path: Path, process_ru
 if [[ $# -eq 3 && $1 == -c && $2 == %u && $3 == "$STAT_OWNER_TARGET" ]]; then printf '%s\n' "$STAT_FAKE_OWNER"; exit 0; fi
 exec "$REAL_STAT" "$@"
 """)
-    result = run(process_runner, _issue(value, toolset, "failure"), dict(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_STAT=command_path("stat", env), STAT_OWNER_TARGET=os.fspath(value.pki / "authorities/intermediates/g1-i1/index.txt"), STAT_FAKE_OWNER=str(os.getuid() + 1)))
+    result = run(process_runner, _oracle_issue(value, "failure"), _oracle_environment(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_STAT=command_path("stat", env), STAT_OWNER_TARGET=os.fspath(value.pki / "authorities/intermediates/g1-i1/index.txt"), STAT_FAKE_OWNER=str(os.getuid() + 1)))
     assert result.status == 1
     assert "Intermediate CA index is not owned by the current user" in result.stderr
     assert _ca_state(value) == before
@@ -536,39 +623,37 @@ def test_intermediate_lock_contention_preserves_stable_lock(tmp_path: Path, proc
     assert _ca_state(value) == before
 
 
-def test_issuance_holds_lifecycle_locks_and_passed_gate_fd(
+def test_issuance_holds_lifecycle_locks_at_operation_pause(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
     process_starter: Callable[..., ManagedProcess],
 ) -> None:
     toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment"); _ready(process_runner, value, env, toolset)
-    marker = tmp_path / "paused"; wrapper = executable(tmp_path / "openssl", """#!/usr/bin/env bash
-set -euo pipefail
-if [[ ${1:-} == ca ]]; then : >"$OPENSSL_PAUSE_MARKER"; IFS= read -r -u "$OPENSSL_GATE_FD" _; fi
-exec "$REAL_OPENSSL" "$@"
-""")
-    gate_read, gate_write = os.pipe()
-    try:
-        issue_env = dict(env, PATH=f"{wrapper.parent}:{env['PATH']}", REAL_OPENSSL=command_path("openssl", env), OPENSSL_PAUSE_MARKER=os.fspath(marker), OPENSSL_GATE_FD=str(gate_read))
-        process = process_starter(_issue(value, toolset, "failure"), env=issue_env, timeout=120, pass_fds=(gate_read,))
+    marker = tmp_path / "paused"; release = tmp_path / "release"
+    process = process_starter(
+        _issue(value, toolset, "failure"),
+        env=dict(
+            env,
+            PLATFORM_PKI_SERVICE_ISSUE_PAUSE_AT="openssl-before-mutation",
+            PLATFORM_PKI_SERVICE_ISSUE_PAUSE_MARKER=os.fspath(marker),
+            PLATFORM_PKI_SERVICE_ISSUE_PAUSE_RELEASE=os.fspath(release),
+        ),
+        timeout=120,
+    )
+    with process:
         deadline = time.monotonic() + 10
         while not marker.exists() and process.observe().status is None and time.monotonic() < deadline:
             time.sleep(0.02)
         assert marker.exists()
         held_streams = []
         try:
-            for name in ("root", "intermediate"):
+            for name in ("lifecycle", "root", "intermediate", "inventory"):
                 stream = (value.pki / f"locks/{name}").open("r+"); held_streams.append(stream)
                 with pytest.raises(BlockingIOError): fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            replacement = run(process_runner, [toolset.intermediate, "--namespace", value.namespace, "--name", "Replacement", "--org", "Test", "--country", "PL", "--root-pass-file", value.root_pass, "--intermediate-pass-file", value.intermediate_pass, "--force"], env)
-            assert replacement.status == 1
-            assert "Another PKI lifecycle operation is in progress" in replacement.stderr
         finally:
             for stream in held_streams: stream.close()
-        os.write(gate_write, b"release\n")
+        release.touch(mode=0o600)
         issued = process.wait()
         assert issued.status == 0
         assert_passphrase_content_absent(issued, (value.intermediate_pass,))
-    finally:
-        os.close(gate_read); os.close(gate_write)
     _assert_no_residue(value)

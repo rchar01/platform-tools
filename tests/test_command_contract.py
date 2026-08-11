@@ -123,6 +123,8 @@ def test_csr_recover_compatibility_help_matches_frozen_bash_oracle(
 
 
 def pki_route_argv(route: ParserRouteContract) -> tuple[Path | str, ...]:
+    if route.compatibility_executable is None:
+        return (ROOT / "bin/platform-pki", *route.unified_route)
     return (
         ROOT / "bin" / route.compatibility_executable,
         *route.unified_route[1:],

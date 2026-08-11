@@ -23,6 +23,7 @@ from .support import (
     digest,
     environment,
     executable,
+    executable_directory,
     write_executable,
     write_private,
 )
@@ -36,6 +37,9 @@ DRIVER = REPOSITORY / "tests/pki/csr_signing_recover_driver.py"
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-recover"
 BASH_RECOVER = ORACLE_ROOT / "platform-pki-csr-recover"
 ORACLE_LIB = ORACLE_ROOT / "lib"
+ISSUE_ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-issue"
+ISSUE_ORACLE = ISSUE_ORACLE_ROOT / "platform-pki-service-issue"
+ISSUE_ORACLE_LIB = ISSUE_ORACLE_ROOT / "lib"
 REQUEST_ID = "0123456789abcdef0123456789abcdef"
 TRANSACTION = f"csr-{REQUEST_ID}"
 WRITER_CHECKPOINTS = (
@@ -95,8 +99,13 @@ def _workspace(
 
 
 def _crash_writer(workspace: CsrWorkspace, checkpoint: str) -> None:
-    result = workspace.issue(
-        env=environment(workspace.env, PLATFORM_PKI_CSR_CRASH_AT=checkpoint)
+    result = workspace.sign(
+        tool=ISSUE_ORACLE,
+        env=environment(
+            workspace.env,
+            PLATFORM_PKI_CSR_CRASH_AT=checkpoint,
+            PLATFORM_TOOLS_LIB_DIR=os.fspath(ISSUE_ORACLE_LIB),
+        ),
     )
     assert result.status == 128 + signal.SIGKILL, (checkpoint, result)
 
@@ -502,10 +511,10 @@ def test_publication_rechecks_database_and_sources_in_authorization_window(
 
 def test_response_signing_subprocess_uses_only_inherited_descriptors_and_suppresses_output(
     csr_workspace: CsrWorkspace,
-    tmp_path: Path,
+    executable_directory: Path,
 ) -> None:
     _crash_writer(csr_workspace, "ca-committed")
-    fake_bin = tmp_path / "ssh-keygen-audit"
+    fake_bin = executable_directory / "ssh-keygen-audit"
     argv_log = csr_workspace.artifacts / "ssh-keygen.argv"
     descriptor_log = csr_workspace.artifacts / "ssh-keygen.descriptors"
     environment_log = csr_workspace.artifacts / "ssh-keygen.environment"

@@ -38,6 +38,7 @@ pytestmark = pytest.mark.pki
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 DRIVER = REPOSITORY / "tests/pki/service_recover_driver.py"
+UNIFIED = REPOSITORY / "bin/platform-pki"
 
 CHECKPOINT_SCENARIOS = {
     "issue-precommit-created-containers": (
@@ -83,6 +84,94 @@ def _run(
         env=os.environ if env is None else env,
         timeout=120,
     )
+
+
+def _run_public(
+    process_runner: Callable[..., ProcessResult],
+    case: ServiceRecoveryCase,
+    env: Mapping[str, str],
+    *arguments: str,
+    input: str | None = None,
+    pty_mode: str | None = None,
+    controlling_terminal: bool = False,
+) -> ProcessResult:
+    return process_runner(
+        [
+            UNIFIED,
+            "service-recover",
+            "--pki-dir",
+            case.pki,
+            "--transaction",
+            case.transaction,
+            *arguments,
+        ],
+        env=env,
+        input=input,
+        pty_mode=pty_mode,
+        controlling_terminal=controlling_terminal,
+        timeout=120,
+    )
+
+
+def test_public_unified_recovery_dispatches_exact_transaction(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    isolated_environment: Mapping[str, str],
+) -> None:
+    case = build_service_recovery_case(tmp_path, published=0)
+    result = _run_public(
+        process_runner,
+        case,
+        isolated_environment,
+        "--yes",
+    )
+    assert_result(
+        result,
+        0,
+        stdout="[OK] Recovered managed service transaction: app (failed-pre-commit)\n",
+    )
+
+
+def test_public_recovery_requires_tty_or_yes(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    isolated_environment: Mapping[str, str],
+) -> None:
+    case = build_service_recovery_case(tmp_path, published=0)
+    result = _run_public(
+        process_runner,
+        case,
+        isolated_environment,
+    )
+    assert_result(
+        result,
+        1,
+        stderr="[ERROR] Managed service recovery requires a TTY or --yes\n",
+    )
+    assert (case.pki / "state/service/recovery-journal").is_file()
+
+
+def test_public_recovery_confirmation_is_exact(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    isolated_environment: Mapping[str, str],
+) -> None:
+    case = build_service_recovery_case(tmp_path, published=0)
+    result = _run_public(
+        process_runner,
+        case,
+        isolated_environment,
+        input=f"recover {case.transaction}-wrong\n",
+        pty_mode="canonical",
+        controlling_terminal=True,
+    )
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        f"Type recover {case.transaction} to continue: "
+        "[ERROR] Managed service recovery confirmation did not match\n"
+    )
+    assert (case.pki / "state/service/recovery-journal").is_file()
 
 
 def _start_paused(

@@ -69,6 +69,7 @@ MINIMAL_ARGUMENTS = {
     ("service-issue",): ("api",),
     ("service-renew",): ("api",),
     ("service-verify",): ("api",),
+    ("service-recover",): ("--transaction", "service-0123456789abcdef0123456789abcdef"),
     ("list-expiry",): (),
     ("print-cert",): ("api",),
     ("export-ansible",): (),
@@ -107,9 +108,11 @@ def test_production_routes_exactly_match_source_backed_parser_inventory() -> Non
     assert tuple(spec.route for spec in ROUTES) == tuple(
         contract.unified_route for contract in PKI_PARSER_ROUTES
     )
-    assert len(ROUTES) == len(ROUTE_SPECS) == 24
+    assert len(ROUTES) == len(ROUTE_SPECS) == 25
     for spec, contract in zip(ROUTES, PKI_PARSER_ROUTES, strict=True):
-        assert spec.compatibility_name == contract.compatibility_executable
+        assert spec.compatibility_name == (
+            contract.compatibility_executable or "platform-pki"
+        )
         assert tuple(positional.name for positional in spec.positionals) == contract.positionals
         assert tuple(option.name for option in spec.options) == contract.long_flags
         assert (

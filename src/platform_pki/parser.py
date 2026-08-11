@@ -405,6 +405,14 @@ ROUTES = (
         validators=(*_NS_VALIDATORS, ("--min-days", "days")),
     ),
     _route(
+        "platform-pki",
+        ("service-recover",),
+        ("--transaction", *_NS, "--yes"),
+        required=("--transaction",),
+        validators=(("--transaction", "not_empty"), *_NS_VALIDATORS),
+        reject_duplicates=("--transaction", *_NS, "--yes"),
+    ),
+    _route(
         "platform-pki-list-expiry",
         ("list-expiry",),
         (*_NS, "--warn-days", "--critical-days"),
@@ -581,12 +589,16 @@ def _runtime_relationships(
                         f"Authenticated host-local {operation} requires {option}",
                         application=True,
                     )
-            for option in ("--days", "--rotate-key"):
-                if option in provided:
-                    raise ParserError(
-                        f"{option} is unavailable for host-local CSR signing",
-                        application=True,
-                    )
+            if "--days" in provided:
+                message = "--days is unavailable for host-local CSR signing"
+                if route == ("service-issue",):
+                    message += "; inventory is authoritative"
+                raise ParserError(message, application=True)
+            if "--rotate-key" in provided:
+                message = "--rotate-key is unavailable for host-local CSR signing"
+                if route == ("service-issue",):
+                    message = "--rotate-key conflicts with --csr-file"
+                raise ParserError(message, application=True)
             if route == ("service-issue",) and "--current-cert-file" in provided:
                 raise ParserError(
                     "--current-cert-file is available only for host-local renewal",
@@ -712,6 +724,8 @@ def parse_route(
     for positional in spec.positionals:
         if positional.required and positional.name not in provided:
             usage = render_usage(spec.compatibility_name, spec, compatibility=True)
+            if route == ("service-issue",):
+                usage = usage.replace("Usage:", "usage:", 1)
             raise ParserError(
                 f"missing required argument: {positional.metavar}\n{usage.rstrip()}"
             )

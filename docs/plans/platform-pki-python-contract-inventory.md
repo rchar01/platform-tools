@@ -9,14 +9,12 @@ The three Phase 3 read-oriented commands, all Phase 4 bounded-publication
 commands (`platform-pki-init`, `platform-pki-inventory-install`, and
 `platform-pki-export-ansible`), and the Phase 5 utility commands are
 Python-backed. Phase 6 has Python-backed compatibility and unified
-`root-create`, `intermediate-create`, and `csr-recover` routes plus unified
+`root-create`, `intermediate-create`, `csr-recover`, and `service-issue` routes plus unified
 `platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
-compatibility executable and other rollover leaves remain Bash. Phase 6 also
-has non-public forward journal transitions, exact planned publication, and
-operational recovery for future Python managed service issue/renew transactions,
-plus a non-public host-local issue/migrate writer. No Python service operation is
-publicly dispatched, both public service commands remain Bash, and no managed
-service recovery route is exposed.
+compatibility executable and other rollover leaves remain Bash. Managed and
+host-local service issue now share one public Python handler, and exact managed
+transaction recovery is exposed only through unified `service-recover`.
+`platform-pki-service-renew` remains Bash-owned.
 
 ## Runtime and Interfaces
 
@@ -47,6 +45,7 @@ service recovery route is exposed.
 | `platform-pki-intermediate-create` | `platform-pki intermediate-create` | none |
 | `platform-pki-service-issue` | `platform-pki service-issue` | none |
 | `platform-pki-service-renew` | `platform-pki service-renew` | none |
+| none | `platform-pki service-recover` | none |
 | `platform-pki-service-verify` | `platform-pki service-verify` | none |
 | `platform-pki-list-expiry` | `platform-pki list-expiry` | none |
 | `platform-pki-print-cert` | `platform-pki print-cert` | none |
@@ -56,12 +55,10 @@ service recovery route is exposed.
 | `platform-pki-ca-passphrase-verify` | `platform-pki ca-passphrase-verify` | none |
 | `platform-pki-ca-rollover` | `platform-pki ca-rollover` | `migrate`, `status`, `prepare`, `recover` |
 
-Managed service transaction recovery will eventually be exposed only as
+Managed service transaction recovery is exposed only as
 `platform-pki service-recover --transaction`. It has no compatibility
-executable and is intentionally absent from the current parser and command
-mapping because no route is exposed in this non-public checkpoint. Host-local
-issue, migrate, and renew continue to recover through the existing public
-`platform-pki csr-recover` route.
+executable. Host-local issue, migrate, and renew continue to recover through the
+existing public `platform-pki csr-recover` route.
 
 ## Shared Parser Contract
 
@@ -133,6 +130,7 @@ also require that path to remain absent.
 | `intermediate-create` | name, organization, country | 1825 days; one-day issuer margin | `test_intermediate_create.py` and shared pass/legacy tests |
 | `service-issue` | service | inventory days, environment days, then 397 | `test_service_issue.py`, `test_csr_signing.py` |
 | `service-renew` | service | inventory days, environment days, then 397 | `test_service_renew.py`, `test_csr_signing.py` |
+| `service-recover` | transaction | exact confirmation or `--yes` | `test_service_recover.py` |
 | `service-verify` | service | minimum 30 days | `test_service_verify.py` |
 | `list-expiry` | none | warning 90, critical 30; statuses 0/1/2/3 | `test_list_expiry.py` |
 | `print-cert` | service | certificate text on stdout | `test_print_cert.py` |
@@ -145,8 +143,8 @@ also require that path to remain absent.
 | `ca-rollover prepare` | type, backup receipt, intermediate name, organization, country | root/intermediate defaults 3650/1825 | rollover prepare, fault, lifecycle, recovery modules |
 | `ca-rollover recover` | transaction and resume/rollback action | optional `--yes` | rollover recovery modules |
 
-The public `service-issue` route remains final-Bash-owned. A non-public Python
-`issue_host_local_csr` interface now writes authenticated host-local `issue` and
+The compatibility and unified `service-issue` routes share one Python handler.
+Its `issue_host_local_csr` path writes authenticated host-local `issue` and
 `migrate` transactions using the same 114-field journal consumed by public
 Python CSR recovery. It pins and repeatedly rechecks the exact installed trust
 tree and authenticated sources, enforces exact inventory lifetime and SAN
@@ -643,12 +641,13 @@ For initial migration, the following remain byte-identical:
 - Journal schema 1, operations `service-issue` and `service-renew`.
 - The unresolved journal is `state/service/recovery-journal`; retained private
   evidence is under `state/service/transactions/`.
-- The eventual recovery interface is unified-only
-  `platform-pki service-recover --transaction`; it is not exposed yet.
+- The recovery interface is unified-only
+  `platform-pki service-recover --transaction` and requires exact confirmation
+  or `--yes`.
 - Recovery holds lifecycle, root, intermediate, and inventory locks.
 - Uncommitted recovery rolls back only the exact published prefix in reverse.
 - The durable commit boundary permanently changes recovery to cleanup-only.
-- Non-public operational recovery authenticates the exact journal, retained
+- Operational recovery authenticates the exact journal, retained
   transaction, authority and inventory inputs, destination prefix, private
   stage/backup prefixes, archive sources, and retained outcomes before mutation.
 - Self-sized journal rewrites authenticate resumable publication, rollback, and
