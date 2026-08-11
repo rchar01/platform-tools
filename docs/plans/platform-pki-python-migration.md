@@ -228,6 +228,7 @@ Recorded cutovers:
 | `platform-pki-inventory-install` | `8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1` | `tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install` |
 | `platform-pki-export-ansible` | `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b` | `tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible` |
 | `platform-pki-root-create` | `ba9dd57214cae18f82c83dfb54b6ddce13882280` | `tests/pki/oracles/platform-pki-ca-rollover/platform-pki-root-create` |
+| `platform-pki-csr-trust-install` | `678daa6de2ea24ada1fd36199013347f79f303bf` | `tests/pki/oracles/platform-pki-csr-trust-install/platform-pki-csr-trust-install` |
 
 The CA recovery foundation also freezes the final Bash recovery and authority
 writer assets from `ba9dd57214cae18f82c83dfb54b6ddce13882280` under

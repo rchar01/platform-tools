@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import shutil
+import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 
 from ..harness import ProcessResult
-from .support import BIN, assert_result, digest, environment, executable, executable_directory, mode, write_executable, write_private
+from .support import BIN, REPOSITORY, assert_result, digest, environment, executable, executable_directory, mode, write_executable, write_private
 from .test_csr_candidate import POLICY2, REQUEST_ID, configure_deployer_trust, decide, prepare, publish_request
 from .test_csr_signing import (
     EXPORT as ANSIBLE_EXPORT,
@@ -25,6 +27,14 @@ from .test_csr_signing import (
 pytestmark = pytest.mark.pki
 INIT = BIN / "platform-pki-init"
 TOOL = BIN / "platform-pki-csr-trust-install"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-trust-install"
+ORACLE_COMMIT = "678daa6de2ea24ada1fd36199013347f79f303bf"
+ORACLE_HASHES = {
+    "platform-pki-csr-trust-install": "280333e79c824ea6d1d4f159c36d6cf8573d6a13fd985144f7ba0b0b4fbefa40",
+    "lib/platform-pki-common.sh": "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f",
+    "lib/platform-pki-csr-sign.sh": "8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001",
+    "lib/platform-pki-csr-candidate.sh": "ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f",
+}
 POLICY = """schema=1
 request_namespace=platform-pki-csr-request-v1
 approval_namespace=platform-pki-csr-approval-v1
@@ -36,6 +46,25 @@ clock_skew_seconds=300
 approver_principal=offline-approver
 response_principal=offline-response
 """
+
+
+def test_frozen_trust_install_oracle_matches_provenance_and_modes() -> None:
+    plan = (REPOSITORY / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert ORACLE_COMMIT in plan
+    assert {
+        path.relative_to(ORACLE_ROOT).as_posix()
+        for path in ORACLE_ROOT.rglob("*")
+    } == {"lib", *ORACLE_HASHES}
+    for relative, expected in ORACLE_HASHES.items():
+        path = ORACLE_ROOT / relative
+        assert path.is_file() and not path.is_symlink()
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+        expected_mode = 0o644 if relative.startswith("lib/") else 0o755
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
+        if expected_mode == 0o755:
+            assert os.access(path, os.X_OK)
 
 
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], namespace: Path, private: Path, *arguments: object) -> ProcessResult:
