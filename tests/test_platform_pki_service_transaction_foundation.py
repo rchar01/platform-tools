@@ -45,6 +45,7 @@ from src.platform_pki.service_transaction import (
     MANAGED_RENEW_ARCHIVE_MEMBER_ORDER,
     MANAGED_RENEW_PUBLICATION_ORDER,
     SERVICE_CA_PUBLICATION_ORDER,
+    SERVICE_CLEANUP_OWNED_KEYS,
     SERVICE_CONTINUITY_KEYS,
     SERVICE_CONTAINER_ORDER,
     SERVICE_RETAINED_TERMINAL_FIELDS,
@@ -59,6 +60,7 @@ from src.platform_pki.service_transaction import (
     ServiceArchiveState,
     ServiceKeyAction,
     ServiceOperation,
+    ServiceOutcome,
     ServicePhase,
     ServiceRecoveryMode,
     ServiceTransactionError,
@@ -72,6 +74,7 @@ from src.platform_pki.service_transaction import (
     serialize_service_retained_rollback,
     serialize_service_retained_transaction,
     serialize_service_transaction,
+    service_cleanup_owned_keys,
 )
 
 
@@ -1236,7 +1239,10 @@ def _set_terminal(values: dict[str, str]) -> None:
         "service": values["service"],
         "outcome": values["outcome"],
         "committed": values["committed"],
+        "transaction_identity": values["transaction_record_identity"],
         "transaction_sha256": values["transaction_record_sha256"],
+        "rollback_completion_identity": values["rollback_completion_identity"],
+        "rollback_completion_sha256": values["rollback_completion_sha256"],
     }
     terminal_bytes = serialize_service_retained_terminal(terminal)
     values["terminal_identity"] = _file_identity(900, size=len(terminal_bytes))
@@ -1373,6 +1379,28 @@ def test_managed_orders_and_lock_profile_are_backed_by_retained_sources() -> Non
     assert '_locks(LOCK_ORDER[:4])' in contract
 
 
+@pytest.mark.parametrize(
+    ("operation", "outcome", "expected"),
+    (
+        (ServiceOperation.ISSUE, ServiceOutcome.FAILED_PRE_COMMIT, ("stage", "backup")),
+        (ServiceOperation.RENEW, ServiceOutcome.FAILED_PRE_COMMIT, ("stage", "backup")),
+        (ServiceOperation.ISSUE, ServiceOutcome.SUCCEEDED, ("stage", "backup")),
+        (
+            ServiceOperation.RENEW,
+            ServiceOutcome.SUCCEEDED,
+            ("archive-marker", "stage", "backup"),
+        ),
+    ),
+)
+def test_service_cleanup_owned_set_is_complete_and_outcome_specific(
+    operation: ServiceOperation,
+    outcome: ServiceOutcome,
+    expected: tuple[str, ...],
+) -> None:
+    assert SERVICE_CLEANUP_OWNED_KEYS == ("archive-marker", "stage", "backup")
+    assert service_cleanup_owned_keys(operation, outcome) == expected
+
+
 def test_service_journal_has_fixed_unique_fields_and_canonical_round_trip() -> None:
     values = _service_values()
     payload = _payload(SERVICE_TRANSACTION_FIELDS, values)
@@ -1475,7 +1503,12 @@ def test_retained_transaction_and_terminal_records_have_canonical_bytes(
         "service": "app",
         "outcome": "succeeded",
         "committed": "true",
+        "transaction_identity": _file_identity(
+            11, size=len(transaction_bytes)
+        ),
         "transaction_sha256": sha256(transaction_bytes).hexdigest(),
+        "rollback_completion_identity": "none",
+        "rollback_completion_sha256": "none",
     }
     terminal_bytes = _payload(SERVICE_RETAINED_TERMINAL_FIELDS, terminal)
     parsed_terminal = parse_service_retained_terminal(terminal_bytes)
@@ -1497,8 +1530,58 @@ def test_retained_transaction_and_terminal_records_have_canonical_bytes(
     assert parsed_rollback.to_bytes() == rollback_bytes
     assert serialize_service_retained_rollback(parsed_rollback) == rollback_bytes
     assert len(SERVICE_RETAINED_TRANSACTION_FIELDS) == 13
-    assert len(SERVICE_RETAINED_TERMINAL_FIELDS) == 7
+    assert len(SERVICE_RETAINED_TERMINAL_FIELDS) == 10
     assert len(SERVICE_RETAINED_ROLLBACK_FIELDS) == 9
+
+
+def test_retained_terminal_requires_outcome_specific_rollback_binding() -> None:
+    transaction_identity = _file_identity(11, size=100)
+    terminal = {
+        "schema": "1",
+        "transaction": f"service-{REQUEST_ID}",
+        "operation": "service-issue",
+        "service": "app",
+        "outcome": "succeeded",
+        "committed": "true",
+        "transaction_identity": transaction_identity,
+        "transaction_sha256": DIGEST,
+        "rollback_completion_identity": "none",
+        "rollback_completion_sha256": "none",
+    }
+    terminal["rollback_completion_identity"] = _file_identity(12, size=100)
+    terminal["rollback_completion_sha256"] = DIGEST
+    with pytest.raises(ServiceTransactionError, match="unexpected rollback"):
+        serialize_service_retained_terminal(terminal)
+
+    terminal.update(
+        outcome="failed-pre-commit",
+        committed="false",
+        rollback_completion_identity="none",
+        rollback_completion_sha256="none",
+    )
+    with pytest.raises(ServiceTransactionError, match="rollback evidence is incomplete"):
+        serialize_service_retained_terminal(terminal)
+
+
+@pytest.mark.parametrize(
+    "field", ("transaction_identity", "rollback_completion_identity")
+)
+def test_retained_terminal_requires_safe_bound_file_identities(field: str) -> None:
+    terminal = {
+        "schema": "1",
+        "transaction": f"service-{REQUEST_ID}",
+        "operation": "service-issue",
+        "service": "app",
+        "outcome": "failed-pre-commit",
+        "committed": "false",
+        "transaction_identity": _file_identity(11, size=100),
+        "transaction_sha256": DIGEST,
+        "rollback_completion_identity": _file_identity(12, size=100),
+        "rollback_completion_sha256": DIGEST,
+    }
+    terminal[field] = _file_identity(99, mode=0o644, size=100)
+    with pytest.raises(ServiceTransactionError, match="identity is unsafe"):
+        serialize_service_retained_terminal(terminal)
 
 
 @pytest.mark.parametrize(
@@ -2894,7 +2977,10 @@ def test_every_post_boundary_phase_rejects_all_rollback_evidence(
         "service",
         "outcome",
         "committed",
+        "transaction_identity",
         "transaction_sha256",
+        "rollback_completion_identity",
+        "rollback_completion_sha256",
     ),
 )
 def test_terminal_digest_rejects_canonical_field_substitution(field: str) -> None:
@@ -2908,7 +2994,10 @@ def test_terminal_digest_rejects_canonical_field_substitution(field: str) -> Non
         "service": values["service"],
         "outcome": values["outcome"],
         "committed": values["committed"],
+        "transaction_identity": values["transaction_record_identity"],
         "transaction_sha256": values["transaction_record_sha256"],
+        "rollback_completion_identity": values["rollback_completion_identity"],
+        "rollback_completion_sha256": values["rollback_completion_sha256"],
     }
     terminal[field] = {
         "transaction": "service-ffffffffffffffffffffffffffffffff",
@@ -2916,7 +3005,10 @@ def test_terminal_digest_rejects_canonical_field_substitution(field: str) -> Non
         "service": "other",
         "outcome": "failed-pre-commit",
         "committed": "false",
+        "transaction_identity": _file_identity(999, size=1),
         "transaction_sha256": "f" * 64,
+        "rollback_completion_identity": _file_identity(998, size=1),
+        "rollback_completion_sha256": "e" * 64,
     }[field]
     values["terminal_sha256"] = sha256(
         _payload(SERVICE_RETAINED_TERMINAL_FIELDS, terminal)

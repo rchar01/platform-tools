@@ -37,6 +37,7 @@ SERVICE_TRANSACTION_TREE_RELATIVE_PATH = "state/service/transactions"
 SERVICE_TRANSACTION_DIRECTORY_MODE = 0o700
 SERVICE_TRANSACTION_FILE_MODE = 0o600
 SERVICE_TRANSACTION_LINKS = 1
+SERVICE_CLEANUP_OWNED_KEYS = ("archive-marker", "stage", "backup")
 
 SERVICE_CONTAINER_ORDER = (
     "service_root",
@@ -276,7 +277,10 @@ SERVICE_RETAINED_TERMINAL_FIELDS = (
     "service",
     "outcome",
     "committed",
+    "transaction_identity",
     "transaction_sha256",
+    "rollback_completion_identity",
+    "rollback_completion_sha256",
 )
 SERVICE_RETAINED_ROLLBACK_FIELDS = (
     "schema",
@@ -359,6 +363,21 @@ class ServiceArchiveState(Enum):
     NONE = "none"
     ISSUE_KEY = "issue-key"
     RENEW = "renew"
+
+
+def service_cleanup_owned_keys(
+    operation: ServiceOperation,
+    outcome: ServiceOutcome,
+) -> tuple[str, ...]:
+    """Return every cleanup-owned name applicable to one terminal outcome."""
+
+    if not isinstance(operation, ServiceOperation):
+        raise TypeError("operation must be a ServiceOperation")
+    if not isinstance(outcome, ServiceOutcome):
+        raise TypeError("outcome must be a ServiceOutcome")
+    if operation is ServiceOperation.RENEW and outcome is ServiceOutcome.SUCCEEDED:
+        return SERVICE_CLEANUP_OWNED_KEYS
+    return tuple(key for key in SERVICE_CLEANUP_OWNED_KEYS if key != "archive-marker")
 
 
 ParsedIdentity: TypeAlias = DirectoryIdentity | FileIdentity | FileObjectState | IdentitySentinel
@@ -721,7 +740,46 @@ def _parse_retained(
             outcome is ServiceOutcome.SUCCEEDED
         ):
             raise ServiceTransactionError("retained service terminal outcome is invalid")
+        try:
+            transaction_identity = parse_file_identity(record["transaction_identity"])
+            rollback_identity = parse_file_identity(
+                record["rollback_completion_identity"],
+                allowed_sentinels=frozenset((IdentitySentinel.NONE,)),
+            )
+        except PersistedIdentityError as error:
+            raise ServiceTransactionError(str(error)) from None
+        assert isinstance(transaction_identity, FileIdentity)
+        if (
+            transaction_identity.permissions != SERVICE_TRANSACTION_FILE_MODE
+            or transaction_identity.links != SERVICE_TRANSACTION_LINKS
+            or transaction_identity.kind != "regular"
+        ):
+            raise ServiceTransactionError(
+                "retained service terminal transaction identity is unsafe"
+            )
         _digest(record["transaction_sha256"], "transaction_sha256")
+        rollback_digest = _digest(
+            record["rollback_completion_sha256"],
+            "rollback_completion_sha256",
+            allow_none=True,
+        )
+        if outcome is ServiceOutcome.FAILED_PRE_COMMIT:
+            if not isinstance(rollback_identity, FileIdentity) or rollback_digest is None:
+                raise ServiceTransactionError(
+                    "retained service terminal rollback evidence is incomplete"
+                )
+            if (
+                rollback_identity.permissions != SERVICE_TRANSACTION_FILE_MODE
+                or rollback_identity.links != SERVICE_TRANSACTION_LINKS
+                or rollback_identity.kind != "regular"
+            ):
+                raise ServiceTransactionError(
+                    "retained service terminal rollback identity is unsafe"
+                )
+        elif rollback_identity is not IdentitySentinel.NONE or rollback_digest is not None:
+            raise ServiceTransactionError(
+                "retained service terminal has unexpected rollback evidence"
+            )
     else:
         root = _pattern(record["issuer_root"], _ROOT_GENERATION, "issuer_root")
         intermediate = _pattern(
@@ -993,9 +1051,8 @@ def _cleanup_matrix(record: OrderedRecord, operation: ServiceOperation, outcome:
     backup = _boolean(record["backup_removed"], "backup_removed")
     terminal = record["terminal_identity"] != "none"
     checkpoint = record["checkpoint"]
-    steps = ["stage", "backup", "terminal", "journal"]
-    if operation is ServiceOperation.RENEW and outcome is ServiceOutcome.SUCCEEDED:
-        steps.insert(0, "archive-marker")
+    cleanup_owned = service_cleanup_owned_keys(operation, outcome)
+    steps = [*cleanup_owned, "terminal", "journal"]
     if operation is not ServiceOperation.RENEW or outcome is not ServiceOutcome.SUCCEEDED:
         if archive_marker is True:
             raise ServiceTransactionError("archive marker cleanup evidence is not applicable")
@@ -1013,7 +1070,7 @@ def _cleanup_matrix(record: OrderedRecord, operation: ServiceOperation, outcome:
             continue
         legal.add((f"cleanup-{step}-pending", before))
         legal.add((f"cleanup-{step}-done", tuple(position <= index for position in range(len(steps) - 1))))
-    evidence = tuple(states[step] for step in steps[:-1])
+    evidence = tuple(states[step] for step in (*cleanup_owned, "terminal"))
     if (checkpoint, evidence) not in legal:
         raise ServiceTransactionError("service transaction cleanup evidence conflicts with checkpoint")
 
@@ -1216,7 +1273,14 @@ def parse_service_transaction(
                 "service": service,
                 "outcome": record["outcome"],
                 "committed": record["committed"],
+                "transaction_identity": record["transaction_record_identity"],
                 "transaction_sha256": expected_transaction_sha256,
+                "rollback_completion_identity": record[
+                    "rollback_completion_identity"
+                ],
+                "rollback_completion_sha256": record[
+                    "rollback_completion_sha256"
+                ],
             }
         )
         if record["terminal_sha256"] != sha256(retained_terminal).hexdigest():

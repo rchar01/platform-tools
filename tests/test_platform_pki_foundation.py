@@ -53,6 +53,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/publication.py",
     "platform_pki/records.py",
     "platform_pki/root_create.py",
+    "platform_pki/service_recover.py",
     "platform_pki/service_transaction.py",
     "platform_pki/service_verify.py",
     "platform_pki/subprocesses.py",

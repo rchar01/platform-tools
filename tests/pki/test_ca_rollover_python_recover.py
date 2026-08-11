@@ -69,7 +69,7 @@ _INTERMEDIATE_BOOTSTRAP_TOKENS = (
         "<INTERMEDIATE-BOOTSTRAP>",
     ),
     (
-        re.compile(r"\.platform-pki-intermediate-create\.[A-Za-z0-9]{6}"),
+        re.compile(r"\.platform-pki-intermediate-create\.[A-Za-z0-9_-]{6}"),
         "<INTERMEDIATE-CREATE-STAGE>",
     ),
 )
@@ -233,6 +233,10 @@ _ROOT_BOOTSTRAP_NORMALIZATION = _RecoveryNormalization(
     generated_paths=(
         re.compile(r"authorities/roots/g1/certs/root-ca\.crt"),
         re.compile(r"authorities/roots/g1/private/root-ca\.key"),
+    ),
+    # These identities can outlive unlinked objects whose inode is reused.
+    field_scoped_identity_fields=frozenset(
+        {"bootstrap_identity", "reservation_reserved_identity"}
     ),
 )
 _INTERMEDIATE_BOOTSTRAP_NORMALIZATION = _RecoveryNormalization(
@@ -1401,6 +1405,28 @@ def test_recovery_normalization_preserves_authenticated_evidence() -> None:
     )
     assert "trust_bundle_sha256=none\n" in record
     assert normalize("authorities/roots/g1/index.txt.old", b"stable\n") == b"stable\n"
+
+    root_normalize = _recovery_content_normalizer(_ROOT_BOOTSTRAP_NORMALIZATION)
+    root_record = root_normalize(
+        "state/rollover/journal",
+        (
+            "reservation_reserved_identity=9:10:1000:600:1:65:regular file\n"
+            "bootstrap_identity=9:10:1000:600:1:65:regular file\n"
+        ).encode("ascii"),
+    ).decode("ascii")
+    assert (
+        "reservation_reserved_identity="
+        "<FIELD-OBJECT:reservation_reserved_identity>:1000:600:1:"
+        "<DYNAMIC-SIZE>:regular file\n" in root_record
+    )
+    assert (
+        "bootstrap_identity=<FIELD-OBJECT:bootstrap_identity>:"
+        "1000:600:1:65:regular file\n" in root_record
+    )
+    assert _replace_dynamic_tokens(
+        "authorities/intermediates/.platform-pki-intermediate-create.s-_D9Q",
+        _INTERMEDIATE_BOOTSTRAP_NORMALIZATION,
+    ) == "authorities/intermediates/<INTERMEDIATE-CREATE-STAGE>"
 
     intermediate_normalize = _recovery_content_normalizer(
         _INTERMEDIATE_BOOTSTRAP_NORMALIZATION

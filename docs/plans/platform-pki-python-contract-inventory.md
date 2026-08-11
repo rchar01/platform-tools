@@ -11,9 +11,10 @@ commands (`platform-pki-init`, `platform-pki-inventory-install`, and
 Python-backed. Phase 6 has Python-backed compatibility and unified
 `root-create`, `intermediate-create`, and `csr-recover` routes plus unified
 `platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
-compatibility executable and other rollover leaves remain Bash. The next
-behavior-neutral Phase 6 foundation models managed service issue/renew and the
-retained host-local records, but both public service commands remain Bash.
+compatibility executable and other rollover leaves remain Bash. Phase 6 also
+has a non-public operational recovery engine for future Python managed service
+issue/renew transactions and retained host-local record models, but both public
+service commands remain Bash and no managed service recovery route is exposed.
 
 ## Runtime and Interfaces
 
@@ -56,7 +57,7 @@ retained host-local records, but both public service commands remain Bash.
 Managed service transaction recovery will eventually be exposed only as
 `platform-pki service-recover --transaction`. It has no compatibility
 executable and is intentionally absent from the current parser and command
-mapping because no route is exposed in this foundation checkpoint. Host-local
+mapping because no route is exposed in this non-public checkpoint. Host-local
 issue, migrate, and renew continue to recover through the existing public
 `platform-pki csr-recover` route.
 
@@ -309,9 +310,9 @@ or regenerated during migration.
 | Active candidate pointer | 1 | `PKI_CANDIDATE_ACTIVE_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Candidate outcome | 1 | `PKI_CANDIDATE_DECISION_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py` and non-public `src/platform_pki/csr_recover.py`, checked against `PKI_CANDIDATE_JOURNAL_FIELDS` |
-| Managed service transaction journal | 1 | 485 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
+| Managed service transaction journal | 1 | 485 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` and operational `src/platform_pki/service_recover.py` |
 | Managed service retained transaction | 1 | 13 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
-| Managed service retained terminal | 1 | 7 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
+| Managed service retained terminal | 1 | 10 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
 | Managed service retained rollback completion | 1 | 9 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
 | Legacy migration journal | 2 | initial writer order; recovery may use sorted order | rollover migrate/recover sources |
 | Rollover preparation journal | 5 | C-locale key order | rollover prepare/recover sources |
@@ -416,7 +417,8 @@ external signature or artifact bytes, or apply current-time freshness; callers
 must authenticate those live inputs, so the codecs do not claim complete
 authenticated protocol validation.
 
-The behavior-neutral managed service foundation is Python-only. It defines one
+The managed service transaction and non-public recovery foundation is
+Python-only. It defines one
 mode-600, current-user-owned, singly linked unresolved journal at
 `state/service/recovery-journal` and one mode-700 retained transaction under
 `state/service/transactions/service-<32-lower-hex-id>/`. The transaction binds
@@ -429,7 +431,7 @@ well as their mode, owner, type, link count, and separately recorded digest.
 
 The journal embeds its own stable file object state and exact canonical byte
 length, not a timestamped full identity that writing the journal would
-invalidate. The future live loader must compare this state with the opened
+invalidate. The non-public live loader compares this state with the opened
 journal descriptor before acting; atomic rewrites create and authenticate the
 next self-sized object before publication.
 
@@ -544,8 +546,23 @@ the detailed rollback evidence and entering failed cleanup.
 `committed`, `cleaning-up`, and `terminal` are cleanup-only: they cannot encode
 rollback, and renewal marker removal, stage cleanup, backup cleanup, terminal
 publication, and unresolved-journal cleanup have an exact pending/done matrix.
-The model performs no live reads, publication, signing, rollback, cleanup, or
-dispatch.
+The pure transaction model performs no live reads, publication, signing,
+rollback, cleanup, or dispatch. The separate non-public recovery engine performs
+bounded live preflight, reverse-only rollback, rollback-completion and terminal
+publication, cleanup, and exact journal removal. Immediately before removal it
+reauthenticates the journal-bound retained transaction, terminal, and applicable
+rollback completion. The terminal preserves the exact transaction identity and
+digest and, for failed pre-commit recovery, the exact rollback-completion
+identity and digest so journal-absent retries authenticate the same evidence;
+successful terminals explicitly exclude rollback-completion evidence. It does
+Final unlink authorization also rechecks the complete model-owned cleanup
+absence set after retained-evidence authentication: exact transaction `stage`
+and `backup` names for every outcome, and the exact archive marker derived from
+the retained service/archive binding only for successful renewal. Journal-absent
+retries derive and enforce the same applicable set without current/latest or
+live deployment inference. Reappearance of any object type fails closed and is
+left untouched. It does not sign, perform
+forward service publication, or provide parser/CLI dispatch.
 
 For initial migration, the following remain byte-identical:
 
@@ -612,6 +629,19 @@ For initial migration, the following remain byte-identical:
 - Recovery holds lifecycle, root, intermediate, and inventory locks.
 - Uncommitted recovery rolls back only the exact published prefix in reverse.
 - The durable commit boundary permanently changes recovery to cleanup-only.
+- Non-public operational recovery authenticates the exact journal, retained
+  transaction, authority and inventory inputs, destination prefix, private
+  stage/backup prefixes, archive sources, and retained outcomes before mutation.
+- Self-sized journal rewrites authenticate resumable publication, rollback, and
+  archive-root relocation windows. Destructive cleanup or retained-record
+  publication observed without journal-authenticated resulting identity fails
+  closed and retains the journal rather than adopting same-name bytes or
+  absence.
+- Isolated subprocess tests cover every incomplete stage and backup prefix,
+  every publication mutation window, issue/renew key and archive variants,
+  pre/post-commit interruption, all declared recovery checkpoint applicability,
+  mutation-boundary hostile replacement, secret-safe diagnostics, and the
+  complete lifecycle-through-inventory lock profile.
 - Host-local service operations do not use this journal or recovery route.
 
 ### Legacy migration
