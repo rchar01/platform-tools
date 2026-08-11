@@ -820,6 +820,37 @@ def test_recovery_rejects_incompatible_state_without_mutation(
     assert (case.pki / "state/service/recovery-journal").read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "content",
+    (
+        "operation=rollover-prepare\ncommitted=true\n",
+        "operation=intermediate-bootstrap\ncommitted=false\n",
+        "operation=intermediate-bootstrap\ncommitted=true\n",
+    ),
+)
+def test_recovery_rejects_unresolved_rollover_state_without_mutation(
+    tmp_path: Path,
+    process_runner: Callable[..., ProcessResult],
+    content: str,
+) -> None:
+    case = build_service_recovery_case(tmp_path, published=3)
+    before = (case.pki / "state/service/recovery-journal").read_bytes()
+    rollover = case.pki / "state/rollover/journal"
+    rollover.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    rollover.write_text(content)
+    rollover.chmod(0o600)
+
+    result = _run(process_runner, case)
+
+    assert_result(
+        result,
+        1,
+        stdout="",
+        stderr="[ERROR] PKI migration or rollover state blocks managed service recovery\n",
+    )
+    assert (case.pki / "state/service/recovery-journal").read_bytes() == before
+
+
 def test_recovery_rejects_backup_loss_before_its_cleanup_window(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],

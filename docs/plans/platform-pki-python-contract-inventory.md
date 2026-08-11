@@ -655,9 +655,30 @@ For initial migration, the following remain byte-identical:
   unbound same-mode destination. Writer and recovery carry that authenticated
   directory identity, or the authenticated full file identity, through a final
   destination recheck at the journal replacement boundary and serialize only
-  the carried identity. The writer does not invoke or hand off to recovery. It
-  does not yet perform managed transaction planning, file staging, backups,
-  OpenSSL orchestration, or host-local CSR signing.
+  the carried identity. The writer does not invoke or hand off to recovery.
+- Non-public managed issue orchestration snapshots one authenticated inventory
+  and active issuer, validates managed custody and generation paths, plans the
+  complete issue transaction, copies fixed private signing inputs, invokes real
+  OpenSSL with passphrases available only through inherited descriptors, stages
+  generated output and exact CA database state, publishes through the writer,
+  verifies the live certificate, and crosses the durable cleanup-only commit
+  boundary before handing the exact transaction to shared recovery. Handled
+  pre-commit failures roll back through that same recovery implementation.
+  Hard crashes after an unrecorded stage or backup mutation deliberately retain
+  the journal because recovery cannot authenticate the resulting object.
+- Before creating the transaction tree, issue publishes one canonical mode-600
+  bootstrap reservation under `state/service/`. Bootstrap-only recovery removes
+  only its exact constrained partial tree and atomically moves the reservation
+  to immutable `bootstrap-history/<transaction>` evidence; journal handoff uses
+  the same history transition. Recovery retries authenticate that exact record.
+- Operational rollover history is accepted only through the authoritative CA
+  recovery semantic parser in an exact terminal bootstrap or migration state.
+  Issue rechecks the active-issuer identity before signing, publication, and
+  verification, and verifies the published certificate's exact subject,
+  issuer, serial, P-384 key, SHA-384 signature, extension set and criticality,
+  SAN set, key identifiers, and planned validity duration.
+- Managed renew planning and orchestration are not implemented. No managed
+  service operation or recovery route is public yet.
 - Host-local service operations do not use this journal or recovery route.
 
 ### Legacy migration

@@ -31,6 +31,7 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_pki_directory,
+    require_terminal_rollover_history,
 )
 from .persisted_identity import (
     IdentitySentinel,
@@ -41,6 +42,7 @@ from .persisted_identity import (
 )
 from .publication import (
     PublicationError,
+    TreeReadiness,
     atomic_write_bytes,
     fsync_tree,
     replace_exact,
@@ -138,6 +140,19 @@ SERVICE_RECOVERY_CHECKPOINTS = (
     "cleanup-terminal-after-mutation",
     "journal-before-mutation",
     "journal-after-mutation",
+)
+SERVICE_BOOTSTRAP_RELATIVE_PATH = "state/service/bootstrap"
+SERVICE_BOOTSTRAP_FIELDS = (
+    "schema",
+    "operation",
+    "transaction",
+    "transaction_dir",
+    "owner",
+    "created_epoch",
+)
+_SERVICE_BOOTSTRAP_OPERATION = "service-issue-bootstrap"
+_SERVICE_BOOTSTRAP_STAGE = re.compile(
+    r"\.(service-[0-9a-f]{32})\.bootstrap\.publish", re.ASCII
 )
 
 
@@ -410,30 +425,412 @@ def _load_journal(
     return _Control(path, pki_dir, dict(record.items()), identity, fault, pause), record
 
 
-def _read_state_map(path: str, label: str) -> dict[str, str]:
-    data = b""
-    try:
-        with OpenedFile(path, policy=_JOURNAL_FILE) as opened:
-            data = opened.read(MAX_SERVICE_JOURNAL_BYTES)
-    except FilesystemError:
-        _die(f"{label} is unsafe")
+def service_bootstrap_bytes(
+    pki_dir: str,
+    transaction: str,
+    *,
+    created_epoch: int,
+) -> bytes:
+    """Return one canonical managed-issue bootstrap reservation."""
+
+    if _TRANSACTION.fullmatch(transaction) is None:
+        raise ValueError("transaction must be a canonical managed service ID")
+    if isinstance(created_epoch, bool) or not isinstance(created_epoch, int) or created_epoch < 0:
+        raise ValueError("created_epoch must be a nonnegative integer")
+    values = {
+        "schema": "1",
+        "operation": _SERVICE_BOOTSTRAP_OPERATION,
+        "transaction": transaction,
+        "transaction_dir": (
+            f"{pki_dir}/{SERVICE_TRANSACTION_TREE_RELATIVE_PATH}/{transaction}"
+        ),
+        "owner": str(_OWNER),
+        "created_epoch": str(created_epoch),
+    }
+    return "".join(f"{field}={values[field]}\n" for field in SERVICE_BOOTSTRAP_FIELDS).encode(
+        "ascii"
+    )
+
+
+def _parse_service_bootstrap(data: bytes, pki_dir: str, transaction: str) -> dict[str, str]:
     try:
         lines = data.decode("ascii").splitlines()
     except UnicodeDecodeError:
-        _die(f"{label} has invalid content")
+        _die("Managed service bootstrap record has invalid content")
+    if len(lines) != len(SERVICE_BOOTSTRAP_FIELDS) or not data.endswith(b"\n"):
+        _die("Managed service bootstrap record has invalid content")
     values: dict[str, str] = {}
-    for line in lines:
+    for expected, line in zip(SERVICE_BOOTSTRAP_FIELDS, lines, strict=True):
         if "=" not in line:
-            _die(f"{label} has invalid content")
+            _die("Managed service bootstrap record has invalid content")
         key, value = line.split("=", 1)
-        if (
-            re.fullmatch(r"[a-z0-9_]+", key, re.ASCII) is None
-            or key in values
-            or any(ord(character) < 32 or ord(character) == 127 for character in value)
-        ):
-            _die(f"{label} has invalid content")
+        if key != expected or not value:
+            _die("Managed service bootstrap record has invalid content")
         values[key] = value
+    expected_dir = f"{pki_dir}/{SERVICE_TRANSACTION_TREE_RELATIVE_PATH}/{transaction}"
+    if (
+        values["schema"] != "1"
+        or values["operation"] != _SERVICE_BOOTSTRAP_OPERATION
+        or values["transaction"] != transaction
+        or values["transaction_dir"] != expected_dir
+        or values["owner"] != str(_OWNER)
+        or re.fullmatch(r"0|[1-9][0-9]*", values["created_epoch"], re.ASCII) is None
+    ):
+        _die("Managed service bootstrap record is outside its contract")
     return values
+
+
+def publish_service_bootstrap(
+    pki_dir: str,
+    transaction: str,
+    *,
+    created_epoch: int,
+    fault_hook: FaultHook,
+    pause_hook: PauseHook,
+) -> FileIdentity:
+    """Durably reserve a transaction before its private tree exists."""
+
+    data = service_bootstrap_bytes(pki_dir, transaction, created_epoch=created_epoch)
+    stage_name = f".{transaction}.bootstrap.publish"
+    bootstrap_name = "bootstrap"
+    descriptor = -1
+    try:
+        with OpenedDirectory(f"{pki_dir}/state/service", policy=_PRIVATE_DIRECTORY) as parent:
+            with parent.open_directory(
+                "bootstrap-history", policy=_PRIVATE_DIRECTORY
+            ) as history:
+                if history.identity_at(transaction) is not ABSENT:
+                    _die("Managed service transaction ID was already consumed")
+            if parent.identity_at(bootstrap_name) is not ABSENT:
+                _die("Managed service bootstrap recovery is already required")
+            if parent.identity_at(stage_name) is not ABSENT:
+                _die("Managed service bootstrap stage already exists")
+            _checkpoint("bootstrap-stage-before-mutation", fault_hook, pause_hook)
+            descriptor = os.open(
+                stage_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent.fileno(),
+            )
+            _checkpoint("bootstrap-stage-after-mutation", fault_hook, pause_hook)
+            view = memoryview(data)
+            try:
+                _checkpoint("bootstrap-write-before-mutation", fault_hook, pause_hook)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError
+                    view = view[written:]
+                _checkpoint("bootstrap-write-after-mutation", fault_hook, pause_hook)
+            finally:
+                view.release()
+            os.fchmod(descriptor, 0o600)
+            _checkpoint("bootstrap-file-fsync-before-mutation", fault_hook, pause_hook)
+            os.fsync(descriptor)
+            _checkpoint("bootstrap-file-fsync-after-mutation", fault_hook, pause_hook)
+            staged = identity_from_stat(os.fstat(descriptor))
+            os.close(descriptor)
+            descriptor = -1
+            _checkpoint("bootstrap-publication-before-mutation", fault_hook, pause_hook)
+            os.link(
+                stage_name,
+                bootstrap_name,
+                src_dir_fd=parent.fileno(),
+                dst_dir_fd=parent.fileno(),
+                follow_symlinks=False,
+            )
+            _checkpoint("bootstrap-publication-after-mutation", fault_hook, pause_hook)
+            published = parent.identity_at(bootstrap_name)
+            active_stage = parent.identity_at(stage_name)
+            if published != active_stage or not isinstance(published, FileIdentity):
+                _die("Managed service bootstrap publication is ambiguous")
+            os.unlink(stage_name, dir_fd=parent.fileno())
+            _checkpoint("bootstrap-stage-unlink-after-mutation", fault_hook, pause_hook)
+            os.fsync(parent.fileno())
+            actual = parent.identity_at(bootstrap_name)
+            if not isinstance(actual, FileIdentity) or actual.state != staged.state:
+                _die("Managed service bootstrap publication changed")
+            with parent.open_file(
+                bootstrap_name,
+                policy=_JOURNAL_FILE,
+                expected_identity=actual,
+            ) as opened:
+                if opened.read(MAX_SERVICE_JOURNAL_BYTES) != data:
+                    _die("Managed service bootstrap publication changed")
+            return actual
+    except (OSError, FilesystemError):
+        _die("Managed service bootstrap record could not be published safely")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    raise AssertionError("unreachable")
+
+
+def _validate_bootstrap_tree(
+    parent: OpenedDirectory,
+    transaction: str,
+    expected: FileIdentity,
+) -> tuple[OpenedDirectory, TreeReadiness]:
+    try:
+        transaction_dir = parent.open_directory(
+            transaction,
+            policy=_PRIVATE_DIRECTORY,
+            expected_identity=expected,
+        )
+        allowed = {
+            "stage": "directory",
+            "backup": "directory",
+            "transaction": "regular",
+            "archive-root-reference": "regular",
+        }
+        entries = set(os.listdir(transaction_dir.fileno()))
+        if entries - set(allowed):
+            _die("Managed service bootstrap transaction contains an unexpected entry")
+        for name in entries:
+            actual = transaction_dir.identity_at(name)
+            if not isinstance(actual, FileIdentity) or actual.kind != allowed[name]:
+                _die("Managed service bootstrap transaction contains an unsafe entry")
+            if actual.kind == "regular":
+                with transaction_dir.open_file(
+                    name,
+                    policy=FilePolicy(owner=_OWNER, mode=0o600, links=1),
+                    expected_identity=actual,
+                ):
+                    pass
+                continue
+            with transaction_dir.open_directory(
+                name,
+                policy=_PRIVATE_DIRECTORY,
+                expected_identity=actual,
+            ) as directory:
+                children = set(os.listdir(directory.fileno()))
+                if name == "backup" and children:
+                    _die("Managed service bootstrap backup directory is not empty")
+                if name == "stage":
+                    if children - {"inputs"}:
+                        _die("Managed service bootstrap stage contains an unexpected entry")
+                    if "inputs" in children:
+                        with directory.open_directory(
+                            "inputs", policy=_PRIVATE_DIRECTORY
+                        ) as inputs:
+                            if os.listdir(inputs.fileno()):
+                                _die("Managed service bootstrap inputs directory is not empty")
+        readiness = fsync_tree(transaction_dir, parent, transaction)
+        return transaction_dir, readiness
+    except FilesystemError:
+        _die("Managed service bootstrap transaction tree is unsafe")
+    raise AssertionError("unreachable")
+
+
+def clear_service_bootstrap(
+    pki_dir: str,
+    transaction: str,
+    *,
+    remove_tree: bool,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> bool:
+    """Reconcile and remove one exact bootstrap reservation and optional partial tree."""
+
+    stage_name = f".{transaction}.bootstrap.publish"
+    bootstrap_name = "bootstrap"
+    data = b""
+    try:
+        with OpenedDirectory(f"{pki_dir}/state/service", policy=_PRIVATE_DIRECTORY) as parent:
+            stage = parent.identity_at(stage_name)
+            bootstrap = parent.identity_at(bootstrap_name)
+            if stage is not ABSENT:
+                if not isinstance(stage, FileIdentity) or stage.kind != "regular":
+                    _die("Managed service bootstrap stage is unsafe")
+                if bootstrap is not ABSENT and bootstrap != stage:
+                    _die("Managed service bootstrap publication is ambiguous")
+                try:
+                    with parent.open_file(
+                        stage_name,
+                        policy=FilePolicy(
+                            owner=_OWNER,
+                            mode=SERVICE_TRANSACTION_FILE_MODE,
+                            links=2 if bootstrap is not ABSENT else 1,
+                            max_size=MAX_SERVICE_JOURNAL_BYTES,
+                        ),
+                        expected_identity=stage,
+                    ) as staged:
+                        staged.recheck()
+                except FilesystemError:
+                    _die("Managed service bootstrap stage is unsafe")
+                _checkpoint("bootstrap-stage-cleanup-before-mutation", fault_hook, pause_hook)
+                if bootstrap is ABSENT:
+                    transaction_path = (
+                        f"{pki_dir}/{SERVICE_TRANSACTION_TREE_RELATIVE_PATH}/{transaction}"
+                    )
+                    if remove_tree and os.path.lexists(transaction_path):
+                        _die("Managed service transaction tree lacks a bootstrap reservation")
+                    data = service_bootstrap_bytes(
+                        pki_dir, transaction, created_epoch=0
+                    )
+                    descriptor = os.open(
+                        stage_name,
+                        os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        dir_fd=parent.fileno(),
+                    )
+                    try:
+                        if identity_from_stat(os.fstat(descriptor)) != stage:
+                            _die("Managed service bootstrap stage changed")
+                        _checkpoint(
+                            "bootstrap-stage-abandon-before-mutation",
+                            fault_hook,
+                            pause_hook,
+                        )
+                        os.ftruncate(descriptor, 0)
+                        view = memoryview(data)
+                        try:
+                            while view:
+                                written = os.write(descriptor, view)
+                                if written <= 0:
+                                    raise OSError
+                                view = view[written:]
+                        finally:
+                            view.release()
+                        os.fchmod(descriptor, SERVICE_TRANSACTION_FILE_MODE)
+                        os.fsync(descriptor)
+                        rewritten = identity_from_stat(os.fstat(descriptor))
+                        _checkpoint(
+                            "bootstrap-stage-abandon-after-mutation",
+                            fault_hook,
+                            pause_hook,
+                        )
+                    finally:
+                        os.close(descriptor)
+                    with parent.open_directory(
+                        "bootstrap-history", policy=_PRIVATE_DIRECTORY
+                    ) as history:
+                        if history.identity_at(transaction) is not ABSENT:
+                            _die("Managed service bootstrap history already exists")
+                        if parent.identity_at(stage_name) != rewritten:
+                            _die("Managed service bootstrap stage changed")
+                        os.rename(
+                            stage_name,
+                            transaction,
+                            src_dir_fd=parent.fileno(),
+                            dst_dir_fd=history.fileno(),
+                        )
+                        os.fsync(history.fileno())
+                        os.fsync(parent.fileno())
+                        historical = history.identity_at(transaction)
+                        if (
+                            not isinstance(historical, FileIdentity)
+                            or historical.dev != rewritten.dev
+                            or historical.ino != rewritten.ino
+                            or historical.uid != rewritten.uid
+                            or historical.permissions != rewritten.permissions
+                            or historical.links != 1
+                            or historical.size != rewritten.size
+                            or historical.kind != rewritten.kind
+                            or parent.identity_at(stage_name) is not ABSENT
+                        ):
+                            _die("Managed service bootstrap history publication changed")
+                    _checkpoint(
+                        "bootstrap-stage-cleanup-after-mutation", fault_hook, pause_hook
+                    )
+                    return True
+                else:
+                    if (
+                        parent.identity_at(stage_name) != stage
+                        or parent.identity_at(bootstrap_name) != bootstrap
+                    ):
+                        _die("Managed service bootstrap publication changed")
+                    os.unlink(stage_name, dir_fd=parent.fileno())
+                    os.fsync(parent.fileno())
+                    current = parent.identity_at(bootstrap_name)
+                    if (
+                        not isinstance(current, FileIdentity)
+                        or current.dev != stage.dev
+                        or current.ino != stage.ino
+                        or current.uid != stage.uid
+                        or current.permissions != stage.permissions
+                        or current.links != 1
+                        or current.size != stage.size
+                        or current.kind != stage.kind
+                        or parent.identity_at(stage_name) is not ABSENT
+                    ):
+                        _die("Managed service bootstrap publication changed")
+                    bootstrap = current
+                _checkpoint("bootstrap-stage-cleanup-after-mutation", fault_hook, pause_hook)
+                bootstrap = parent.identity_at(bootstrap_name)
+            if bootstrap is ABSENT:
+                return False
+            if not isinstance(bootstrap, FileIdentity) or bootstrap.kind != "regular":
+                _die("Managed service bootstrap record is unsafe")
+            with parent.open_file(
+                bootstrap_name,
+                policy=_JOURNAL_FILE,
+                expected_identity=bootstrap,
+            ) as opened:
+                data = opened.read(MAX_SERVICE_JOURNAL_BYTES)
+                bootstrap = opened.recheck()
+            _parse_service_bootstrap(data, pki_dir, transaction)
+
+            transactions_path = f"{pki_dir}/{SERVICE_TRANSACTION_TREE_RELATIVE_PATH}"
+            with OpenedDirectory(transactions_path, policy=_PRIVATE_DIRECTORY) as transactions:
+                tree = transactions.identity_at(transaction)
+                if remove_tree and tree is not ABSENT:
+                    if not isinstance(tree, FileIdentity) or tree.kind != "directory":
+                        _die("Managed service bootstrap transaction tree is unsafe")
+                    opened, readiness = _validate_bootstrap_tree(
+                        transactions, transaction, tree
+                    )
+                    opened.close()
+                    _checkpoint("bootstrap-tree-cleanup-before-mutation", fault_hook, pause_hook)
+                    remove_exact_tree(transactions, transaction, tree, readiness)
+                    _checkpoint("bootstrap-tree-cleanup-after-mutation", fault_hook, pause_hook)
+                elif not remove_tree and tree is ABSENT:
+                    _die("Managed service journal lacks its bootstrapped transaction tree")
+            with parent.open_directory(
+                "bootstrap-history", policy=_PRIVATE_DIRECTORY
+            ) as history:
+                if history.identity_at(transaction) is not ABSENT:
+                    _die("Managed service bootstrap history already exists")
+                current = parent.identity_at(bootstrap_name)
+                if current != bootstrap:
+                    _die("Managed service bootstrap record changed before cleanup")
+                _checkpoint(
+                    "bootstrap-record-cleanup-before-mutation", fault_hook, pause_hook
+                )
+                os.rename(
+                    bootstrap_name,
+                    transaction,
+                    src_dir_fd=parent.fileno(),
+                    dst_dir_fd=history.fileno(),
+                )
+                os.fsync(history.fileno())
+                os.fsync(parent.fileno())
+                historical = history.identity_at(transaction)
+                if (
+                    parent.identity_at(bootstrap_name) is not ABSENT
+                    or not isinstance(historical, FileIdentity)
+                    or historical.dev != bootstrap.dev
+                    or historical.ino != bootstrap.ino
+                    or historical.uid != bootstrap.uid
+                    or historical.permissions != bootstrap.permissions
+                    or historical.links != 1
+                    or historical.size != bootstrap.size
+                    or historical.kind != bootstrap.kind
+                ):
+                    _die("Managed service bootstrap history publication changed")
+                with history.open_file(
+                    transaction,
+                    policy=_JOURNAL_FILE,
+                    expected_identity=historical,
+                ) as opened:
+                    if opened.read(MAX_SERVICE_JOURNAL_BYTES) != data:
+                        _die("Managed service bootstrap history publication changed")
+                _checkpoint(
+                    "bootstrap-record-cleanup-after-mutation", fault_hook, pause_hook
+                )
+            return True
+    except (OSError, FilesystemError, PublicationError):
+        _die("Managed service bootstrap cleanup requires inspection")
+    raise AssertionError("unreachable")
 
 
 def _require_compatible_state(pki_dir: str) -> None:
@@ -449,8 +846,13 @@ def _require_compatible_state(pki_dir: str) -> None:
             _die(f"{label} must be completed before managed service recovery")
     rollover = f"{pki_dir}/state/rollover/journal"
     if os.path.lexists(rollover):
-        _read_state_map(rollover, "PKI rollover journal")
-        _die("PKI migration or rollover state blocks managed service recovery")
+        require_terminal_rollover_history(
+            pki_dir,
+            rollover,
+            error_message=(
+                "PKI migration or rollover state blocks managed service recovery"
+            ),
+        )
 
 
 def _validate_active_authority(record: ServiceTransaction) -> None:
@@ -2085,7 +2487,45 @@ def _recover_service_locked(
 ) -> int:
     _require_compatible_state(pki_dir)
     journal_path = f"{pki_dir}/{SERVICE_TRANSACTION_JOURNAL_RELATIVE_PATH}"
-    if not os.path.lexists(journal_path):
+    has_journal = os.path.lexists(journal_path)
+    bootstrap_path = f"{pki_dir}/{SERVICE_BOOTSTRAP_RELATIVE_PATH}"
+    bootstrap_stage = f"{pki_dir}/state/service/.{transaction}.bootstrap.publish"
+    reconciled_bootstrap = False
+    if os.path.lexists(bootstrap_path) or os.path.lexists(bootstrap_stage):
+        reconciled_bootstrap = clear_service_bootstrap(
+            pki_dir,
+            transaction,
+            remove_tree=not has_journal,
+            fault_hook=fault_hook,
+            pause_hook=pause_hook,
+        )
+    history_path = f"{pki_dir}/state/service/bootstrap-history/{transaction}"
+    if os.path.lexists(history_path):
+        history_data = b""
+        try:
+            with OpenedFile(history_path, policy=_JOURNAL_FILE) as historical:
+                history_data = historical.read(MAX_SERVICE_JOURNAL_BYTES)
+                historical.recheck()
+        except FilesystemError:
+            _die("Managed service bootstrap history is unsafe")
+        _parse_service_bootstrap(history_data, pki_dir, transaction)
+        if not has_journal:
+            transaction_path = (
+                f"{pki_dir}/{SERVICE_TRANSACTION_TREE_RELATIVE_PATH}/{transaction}"
+            )
+            if os.path.lexists(transaction_path):
+                _die("Managed service bootstrap history has unresolved transaction state")
+            print(
+                (
+                    f"[OK] Recovered managed service bootstrap transaction: {transaction}"
+                    if reconciled_bootstrap
+                    else f"[OK] Managed service bootstrap transaction already recovered: {transaction}"
+                ),
+                file=output,
+            )
+            output.flush()
+            return 0
+    if not has_journal:
         service, outcome = _validate_terminal_transaction(pki_dir, transaction)
         print(
             f"[OK] Managed service transaction already recovered: "

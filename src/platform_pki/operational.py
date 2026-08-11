@@ -12,6 +12,13 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
+from .ca_rollover_recovery import (
+    LegacyMigrationRecoveryRecord,
+    MAX_RECOVERY_RECORD_BYTES,
+    RecoveryOperation,
+    RecoveryRecordError,
+    parse_recovery_semantics,
+)
 from .errors import ApplicationError
 from .filesystem import (
     ABSENT,
@@ -353,16 +360,25 @@ def require_generation_layout(pki_dir: str) -> None:
     )
 
 
-def _read_state_map(path: str, label: str) -> dict[str, str]:
+def _read_state_bytes(
+    path: str, label: str, *, max_size: int = 1024 * 1024
+) -> bytes:
     data = b""
     try:
         with OpenedFile(
             path,
-            policy=FilePolicy(owner=os.geteuid(), mode=0o600, links=1, max_size=1024 * 1024),
+            policy=FilePolicy(
+                owner=os.geteuid(), mode=0o600, links=1, max_size=max_size
+            ),
         ) as opened:
             data = opened.read(opened.identity.size)
     except FilesystemError:
         raise ApplicationError(f"{label} is unsafe: {path}") from None
+    return data
+
+
+def _read_state_map(path: str, label: str) -> dict[str, str]:
+    data = _read_state_bytes(path, label)
     values: dict[str, str] = {}
     lines = data.split(b"\n")
     if lines[-1] == b"":
@@ -384,6 +400,51 @@ def _read_state_map(path: str, label: str) -> dict[str, str]:
             raise ApplicationError(f"{label} contains duplicate field: {key}")
         values[key] = value
     return values
+
+
+def require_terminal_rollover_history(
+    pki_dir: str,
+    journal: str,
+    *,
+    error_message: str | None = None,
+) -> None:
+    """Require one authenticated terminal authority or migration record."""
+
+    message = error_message or (
+        f"PKI recovery is required before this command can continue: {journal}"
+    )
+    try:
+        record = parse_recovery_semantics(
+            _read_state_bytes(
+                journal,
+                "PKI recovery journal",
+                max_size=MAX_RECOVERY_RECORD_BYTES,
+            ),
+            pki_dir=pki_dir,
+        )
+    except (ApplicationError, RecoveryRecordError):
+        raise ApplicationError(message) from None
+    if not record.committed:
+        terminal = False
+    elif record.operation in {
+        RecoveryOperation.ROOT_BOOTSTRAP,
+        RecoveryOperation.INTERMEDIATE_BOOTSTRAP,
+    }:
+        terminal = record.phase == "complete" and record.recovery_step is None
+    elif isinstance(record, LegacyMigrationRecoveryRecord):
+        terminal = (
+            record.phase == "complete"
+            and record.recovery_action is not None
+            and record.recovery_action.value == "resume"
+        ) or (
+            record.phase == "rolled-back"
+            and record.recovery_action is not None
+            and record.recovery_action.value == "rollback"
+        )
+    else:
+        terminal = False
+    if not terminal:
+        raise ApplicationError(message)
 
 
 def require_no_unresolved_state(pki_dir: str) -> None:
@@ -427,14 +488,7 @@ def require_no_unresolved_state(pki_dir: str) -> None:
             f"PKI recovery is required before this command can continue: {marker}"
         )
     if os.path.lexists(journal):
-        state = _read_state_map(journal, "PKI recovery journal")
-        if (
-            state.get("operation") == "rollover-prepare"
-            or state.get("committed") != "true"
-        ):
-            raise ApplicationError(
-                f"PKI recovery is required before this command can continue: {journal}"
-            )
+        require_terminal_rollover_history(pki_dir, journal)
 
 
 def run_external(
