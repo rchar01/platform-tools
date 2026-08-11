@@ -867,6 +867,10 @@ def parse_signing_journal(
         newcert = record["db_newcert_path"]
         issued_serial = os.path.basename(newcert).removesuffix(".pem")
         _expect_pattern(issued_serial, _SERIAL, "db_newcert_path serial")
+        if len(issued_serial) > 2 and issued_serial.startswith("00"):
+            raise CsrRecoveryError(
+                "CSR signing journal db_newcert_path serial is not canonical"
+            )
         index_path = record["db_index_path"]
         if (
             expected_intermediate is not None

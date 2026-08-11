@@ -131,6 +131,10 @@ def path_record(path: Path) -> tuple[object, ...]:
     return (os.fspath(path), "other", stat.S_IFMT(metadata.st_mode), *common)
 
 
+def file_mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
 def state_snapshot(service: Path, pki: Path, newcert: Path) -> tuple[tuple[object, ...], ...]:
     authority = pki / "authorities/intermediates/g1-i1"
     archive = service / "archive"
@@ -188,6 +192,22 @@ def test_service_renew_reuses_key_archives_material_and_honors_inventory_days(re
     certificate = service / "certs/tls.crt"
     old_key = digest(key)
     old_certificate = digest(certificate)
+    certificate.chmod(0o640)
+    archive_sources = {
+        "tls.crt": service / "certs/tls.crt",
+        "tls.csr": service / "csr/tls.csr",
+        "ca-chain.crt": service / "chain/ca-chain.crt",
+        "fullchain.crt": service / "chain/fullchain.crt",
+        "openssl.cnf": service / "openssl.cnf",
+        "issuer": service / "issuer",
+    }
+    source_modes = {name: file_mode(path) for name, path in archive_sources.items()}
+    authority = workspace.pki / "authorities/intermediates/g1-i1"
+    ca_pre = {
+        name: ((authority / name).read_bytes(), file_mode(authority / name))
+        for name in ("index.txt", "index.txt.attr", "serial")
+    }
+    issued_serial = canonical_serial((authority / "serial").read_text())
     old_serial = openssl(workspace, "x509", "-in", certificate, "-noout", "-serial")
     assert_result(old_serial, 0)
 
@@ -205,6 +225,8 @@ def test_service_renew_reuses_key_archives_material_and_honors_inventory_days(re
     archive = archives[0]
     for name in ("tls.crt", "tls.csr", "ca-chain.crt", "fullchain.crt", "openssl.cnf", "issuer"):
         assert (archive / name).is_file()
+        assert file_mode(archive / name) == source_modes[name]
+    assert file_mode(archive) == file_mode(archive.parent) == 0o700
     assert digest(archive / "tls.crt") == old_certificate
     verify = openssl(workspace, "verify", "-CAfile", workspace.pki / "authorities/roots/g1/certs/root-ca.crt", "-untrusted", workspace.pki / "authorities/intermediates/g1-i1/certs/intermediate-ca.crt", certificate)
     assert_result(verify, 0)
@@ -212,6 +234,16 @@ def test_service_renew_reuses_key_archives_material_and_honors_inventory_days(re
     assert openssl(workspace, "x509", "-in", certificate, "-checkend", str(36 * 86400), "-noout").status != 0
     assert (service / "issuer").read_text() == "root=g1\nintermediate=g1-i1\n"
     assert (archive / "issuer").read_text() == "root=g1\nintermediate=g1-i1\n"
+    for current, old in (
+        ("index.txt", "index.txt.old"),
+        ("index.txt.attr", "index.txt.attr.old"),
+        ("serial", "serial.old"),
+    ):
+        assert (authority / old).read_bytes() == ca_pre[current][0]
+        assert file_mode(authority / old) == ca_pre[current][1]
+        assert file_mode(authority / current) == 0o600
+    assert (authority / f"newcerts/{issued_serial}.pem").read_bytes() == certificate.read_bytes()
+    assert file_mode(authority / f"newcerts/{issued_serial}.pem") == 0o600
     no_residue(workspace.pki)
 
 
@@ -240,12 +272,15 @@ def test_service_renew_rotate_key_archives_old_key(renew_workspace: Workspace) -
     workspace.issue("rotate")
     key = workspace.pki / "services/rotate/private/tls.key"
     old_key = digest(key)
+    key.chmod(0o400)
     result = workspace.renew("rotate", "--days", "31", "--rotate-key")
     assert_result(result, 0)
     assert digest(key) != old_key
     archive_keys = list((workspace.pki / "services/rotate/archive").glob("*/tls.key"))
     assert len(archive_keys) == 1
     assert digest(archive_keys[0]) == old_key
+    assert file_mode(archive_keys[0]) == 0o400
+    assert file_mode(key) == 0o600
 
 
 def prepare_failure_state(workspace: Workspace) -> tuple[Path, Path, tuple[tuple[object, ...], ...]]:

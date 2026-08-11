@@ -24,7 +24,22 @@ from src.platform_pki.csr_recovery import (
     CSR_DB_KEYS,
     CSR_SIGNING_JOURNAL_FIELDS as CSR_JOURNAL_FIELDS,
 )
+from src.platform_pki.csr_protocol import (
+    CSR_APPROVAL_FIELDS,
+    CSR_CANDIDATE_FIELDS as CANDIDATE_RECORD_FIELDS,
+    CSR_REPLAY_NONCE_FIELDS,
+    CSR_REPLAY_REQUEST_FIELDS,
+    CSR_REQUEST_FIELDS,
+    CSR_RESPONSE_FIELDS as CANDIDATE_RESPONSE_FIELDS,
+    CSR_TERMINAL_FIELDS,
+)
 from src.platform_pki.root_create import ROOT_FAULT_CHECKPOINTS, ROOT_FAULT_VARIABLES
+from src.platform_pki.service_transaction import (
+    SERVICE_RETAINED_ROLLBACK_FIELDS,
+    SERVICE_RETAINED_TERMINAL_FIELDS,
+    SERVICE_RETAINED_TRANSACTION_FIELDS,
+    SERVICE_TRANSACTION_FIELDS,
+)
 
 
 LOCK_ORDER = ("lifecycle", "root", "intermediate", "inventory", "export")
@@ -747,27 +762,6 @@ def _fields(value: str) -> tuple[str, ...]:
     return tuple(value.split())
 
 
-CSR_REQUEST_FIELDS = _fields("""
-schema request_id nonce created_epoch expires_epoch operation service target
-requester_principal inventory_sha256 csr_sha256 csr_spki_sha256
-current_cert_sha256 profile response_principal
-""")
-CSR_APPROVAL_FIELDS = _fields("""
-schema request_id nonce created_epoch expires_epoch approver_principal
-request_sha256 csr_sha256 inventory_sha256 operation service target profile
-""")
-CANDIDATE_RESPONSE_FIELDS = _fields("""
-schema request_id nonce operation service target request_sha256 approval_sha256
-inventory_sha256 csr_sha256 csr_spki_sha256 certificate_sha256
-certificate_spki_sha256 chain_sha256 issuer_root issuer_intermediate serial
-not_before_epoch not_after_epoch candidate_state response_principal created_epoch
-""")
-CANDIDATE_RECORD_FIELDS = _fields("""
-schema request_id nonce operation service target state request_sha256
-approval_sha256 inventory_sha256 csr_sha256 csr_spki_sha256 certificate_sha256
-chain_sha256 issuer_root issuer_intermediate serial response_sha256
-response_signature_sha256 created_epoch
-""")
 CANDIDATE_ARTIFACT_FIELDS = _fields("""
 schema kind service request_id operation target source_kind
 source_response_sha256 source_response_signature_sha256 certificate_sha256
@@ -874,6 +868,9 @@ PERSISTED_RECORD_CONTRACTS = (
     RecordContract("CSR signing journal", 1, "PKI_CSR_JOURNAL_FIELDS", "lib/platform-pki-csr-sign.sh", CSR_JOURNAL_FIELDS),
     RecordContract("CSR response", 1, "PKI_CANDIDATE_RESPONSE_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_RESPONSE_FIELDS),
     RecordContract("CSR candidate", 1, "PKI_CANDIDATE_RECORD_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_RECORD_FIELDS),
+    RecordContract("CSR replay request", 1, "literal CSR replay request", "lib/platform-pki-csr-sign.sh", CSR_REPLAY_REQUEST_FIELDS),
+    RecordContract("CSR replay nonce", 1, "literal CSR replay nonce", "lib/platform-pki-csr-sign.sh", CSR_REPLAY_NONCE_FIELDS),
+    RecordContract("CSR signing terminal", 1, "literal CSR signing terminal", "lib/platform-pki-csr-sign.sh", CSR_TERMINAL_FIELDS),
     RecordContract(
         "certificate export manifest",
         1,
@@ -890,6 +887,34 @@ PERSISTED_RECORD_CONTRACTS = (
         "PKI_CANDIDATE_JOURNAL_FIELDS",
         "lib/platform-pki-csr-candidate.sh",
         CANDIDATE_JOURNAL_FIELDS,
+    ),
+    RecordContract(
+        "managed service transaction journal",
+        1,
+        "literal Python service transaction",
+        "src/platform_pki/service_transaction.py",
+        SERVICE_TRANSACTION_FIELDS,
+    ),
+    RecordContract(
+        "managed service retained transaction",
+        1,
+        "literal Python retained service transaction",
+        "src/platform_pki/service_transaction.py",
+        SERVICE_RETAINED_TRANSACTION_FIELDS,
+    ),
+    RecordContract(
+        "managed service retained terminal",
+        1,
+        "literal Python retained service terminal",
+        "src/platform_pki/service_transaction.py",
+        SERVICE_RETAINED_TERMINAL_FIELDS,
+    ),
+    RecordContract(
+        "managed service retained rollback completion",
+        1,
+        "literal Python retained service rollback completion",
+        "src/platform_pki/service_transaction.py",
+        SERVICE_RETAINED_ROLLBACK_FIELDS,
     ),
     RecordContract("legacy migration journal", 2, "literal migration journal", "bashly/platform-pki-ca-rollover/src/migrate_command.sh", LEGACY_MIGRATION_JOURNAL_FIELDS),
     RecordContract("legacy migration recovery journal", 2, "C-locale recovery journal", "bashly/platform-pki-ca-rollover/src/recover_command.sh", LEGACY_MIGRATION_RECOVERY_FIELDS),

@@ -182,8 +182,13 @@ def test_validity_margin_rejection_does_not_publish(tmp_path: Path, process_runn
 
 def test_real_openssl_issuance_artifacts_lifetime_and_ca_database(tmp_path: Path, process_runner: Callable[..., ProcessResult]) -> None:
     toolset = tools(); value = workspace(tmp_path / "case"); env = environment(tmp_path / "environment"); _ready(process_runner, value, env, toolset)
+    authority = value.pki / "authorities/intermediates/g1-i1"
+    ca_pre = {
+        name: ((authority / name).read_bytes(), mode(authority / name))
+        for name in ("index.txt", "index.txt.attr", "serial")
+    }
     result = run(process_runner, _issue(value, toolset, "app"), env); require_success(result, "service issuance")
-    service = value.pki / "services/app"; authority = value.pki / "authorities/intermediates/g1-i1"
+    service = value.pki / "services/app"
     assert "[OK] Verified service certificate: app" in result.stdout
     assert f"[OK] Issued service certificate: {service / 'certs/tls.crt'}" in result.stdout
     paths = (service / "private/tls.key", service / "certs/tls.crt", service / "csr/tls.csr", service / "chain/ca-chain.crt", service / "chain/fullchain.crt", service / "openssl.cnf")
@@ -196,6 +201,22 @@ def test_real_openssl_issuance_artifacts_lifetime_and_ca_database(tmp_path: Path
     assert (authority / "serial").read_text().strip() == "1001"
     assert len((authority / "index.txt").read_text().splitlines()) == 1
     assert (authority / "newcerts/1000.pem").is_file()
+    for current, old in (
+        ("index.txt", "index.txt.old"),
+        ("index.txt.attr", "index.txt.attr.old"),
+        ("serial", "serial.old"),
+    ):
+        assert (authority / old).read_bytes() == ca_pre[current][0]
+        assert mode(authority / old) == ca_pre[current][1]
+        assert mode(authority / current) == 0o600
+    assert (authority / "newcerts/1000.pem").read_bytes() == (
+        service / "certs/tls.crt"
+    ).read_bytes()
+    assert mode(authority / "newcerts/1000.pem") == 0o600
+    assert all(
+        mode(service / relative) == 0o700
+        for relative in (".", "private", "csr", "certs", "chain")
+    )
     _assert_no_residue(value)
 
 
@@ -231,11 +252,15 @@ def test_existing_key_reuse_and_explicit_rotation_archive(tmp_path: Path, proces
     assert digest(key) == old
     for relative in ("certs/tls.crt", "csr/tls.csr", "chain/ca-chain.crt", "chain/fullchain.crt", "openssl.cnf", "issuer"):
         (service / relative).unlink()
+    key.chmod(0o400)
     require_success(run(process_runner, _issue(value, toolset, "rotate", "--days", "31", "--rotate-key"), env), "key rotation")
     assert digest(key) != old
     archived = tuple((service / "archive").glob("*/tls.key"))
     assert len(archived) == 1
     assert digest(archived[0]) == old
+    assert mode(archived[0]) == 0o400
+    assert mode(key) == 0o600
+    assert mode(archived[0].parent) == mode(archived[0].parent.parent) == 0o700
 
 
 def test_openssl_signing_failure_restores_ca_and_service(tmp_path: Path, process_runner: Callable[..., ProcessResult]) -> None:

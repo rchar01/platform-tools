@@ -675,7 +675,7 @@ def test_signing_journal_authority_is_journal_derived_and_optionally_context_bou
         )
 
 
-@pytest.mark.parametrize("serial", ("A", "abc0", "0G", "ABC"))
+@pytest.mark.parametrize("serial", ("A", "abc0", "0G", "ABC", "00AF"))
 def test_signing_rejects_nonuppercase_or_odd_issued_serial(serial: str) -> None:
     values = _signing_values(full_db=True)
     original = "10AF"
@@ -685,6 +685,20 @@ def test_signing_rejects_nonuppercase_or_odd_issued_serial(serial: str) -> None:
         parse_signing_journal(
             _payload(CSR_SIGNING_JOURNAL_FIELDS, values), pki_dir=PKI_DIR
         )
+
+
+@pytest.mark.parametrize("serial", ("00", "01", "FF", "0100"))
+def test_signing_accepts_canonical_issued_serial_boundaries(serial: str) -> None:
+    values = _signing_values(full_db=True)
+    for field in tuple(values):
+        values[field] = values[field].replace("10AF", serial)
+    journal = parse_signing_journal(
+        _payload(CSR_SIGNING_JOURNAL_FIELDS, values), pki_dir=PKI_DIR
+    )
+    assert journal.issued_serial == serial
+    assert journal.record["db_newcert_path"].endswith(
+        f"/newcerts/{serial}.pem"
+    )
 
 
 def test_signing_rejects_partial_db_contract_wrong_identity_kind_and_sentinel() -> None:

@@ -11,7 +11,9 @@ commands (`platform-pki-init`, `platform-pki-inventory-install`, and
 Python-backed. Phase 6 has Python-backed compatibility and unified
 `root-create`, `intermediate-create`, and `csr-recover` routes plus unified
 `platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
-compatibility executable and other rollover leaves remain Bash.
+compatibility executable and other rollover leaves remain Bash. The next
+behavior-neutral Phase 6 foundation models managed service issue/renew and the
+retained host-local records, but both public service commands remain Bash.
 
 ## Runtime and Interfaces
 
@@ -50,6 +52,13 @@ compatibility executable and other rollover leaves remain Bash.
 | `platform-pki-custody-report` | `platform-pki custody-report` | none |
 | `platform-pki-ca-passphrase-verify` | `platform-pki ca-passphrase-verify` | none |
 | `platform-pki-ca-rollover` | `platform-pki ca-rollover` | `migrate`, `status`, `prepare`, `recover` |
+
+Managed service transaction recovery will eventually be exposed only as
+`platform-pki service-recover --transaction`. It has no compatibility
+executable and is intentionally absent from the current parser and command
+mapping because no route is exposed in this foundation checkpoint. Host-local
+issue, migrate, and renew continue to recover through the existing public
+`platform-pki csr-recover` route.
 
 ## Shared Parser Contract
 
@@ -264,6 +273,7 @@ state/active-issuer
 state/bootstrap-root
 state/generation-reservations/
 state/csr/
+state/service/
 state/rollover/
 state/rollovers/
 locks/
@@ -291,11 +301,18 @@ or regenerated during migration.
 | CSR signing journal | 1 | 114 fixed writer-order fields | `src/platform_pki/csr_recovery.py`, checked against `PKI_CSR_JOURNAL_FIELDS` |
 | CSR response | 1 | `PKI_CANDIDATE_RESPONSE_FIELDS` | `platform-pki-csr-candidate.sh` |
 | CSR candidate | 1 | `PKI_CANDIDATE_RECORD_FIELDS` | `platform-pki-csr-candidate.sh` |
+| CSR replay request | 1 | 9 fixed fields | literal writer in `platform-pki-csr-sign.sh` |
+| CSR replay nonce | 1 | 5 fixed fields | literal writer in `platform-pki-csr-sign.sh` |
+| CSR signing terminal | 1 | 7 fixed fields | literal writer in `platform-pki-csr-sign.sh` |
 | Export manifest | 1 | `PKI_CERTIFICATE_EXPORT_ARTIFACT_FIELDS` | certificate-export initializer |
 | Deployment evidence | 1 | `PKI_CANDIDATE_DEPLOYMENT_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Active candidate pointer | 1 | `PKI_CANDIDATE_ACTIVE_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Candidate outcome | 1 | `PKI_CANDIDATE_DECISION_FIELDS` | `platform-pki-csr-candidate.sh` |
 | Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py` and non-public `src/platform_pki/csr_recover.py`, checked against `PKI_CANDIDATE_JOURNAL_FIELDS` |
+| Managed service transaction journal | 1 | 485 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
+| Managed service retained transaction | 1 | 13 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
+| Managed service retained terminal | 1 | 7 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
+| Managed service retained rollback completion | 1 | 9 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
 | Legacy migration journal | 2 | initial writer order; recovery may use sorted order | rollover migrate/recover sources |
 | Rollover preparation journal | 5 | C-locale key order | rollover prepare/recover sources |
 | Rollover prepared-state manifest | 1 | canonical key order | rollover prepare source |
@@ -384,6 +401,152 @@ derives every source path, but only the candidate, artifact, response, and
 response signature fields have corresponding top-level evidence that can be
 cross-checked for equality.
 
+The pure host-local CSR protocol codecs validate canonical record structure,
+record-only request/approval bindings, and canonical OpenSSL serials in response
+and candidate records. Request and approval parsing and serialization each
+independently enforce validity intervals of at most 604,800 and 86,400 seconds,
+respectively; cross-record binding additionally requires approval creation no
+earlier than request creation. A caller that has independently resolved the two
+trusted signer keys can supply their equality to enforce the retained 86,400-
+second sole-operator delay. The binding validators hash the canonical
+newline-terminated request and response record bytes and require the approval's
+`request_sha256` and candidate's `response_sha256` to match, respectively. The
+codecs do not perform signature verification, resolve allowed signers, hash
+external signature or artifact bytes, or apply current-time freshness; callers
+must authenticate those live inputs, so the codecs do not claim complete
+authenticated protocol validation.
+
+The behavior-neutral managed service foundation is Python-only. It defines one
+mode-600, current-user-owned, singly linked unresolved journal at
+`state/service/recovery-journal` and one mode-700 retained transaction under
+`state/service/transactions/service-<32-lower-hex-id>/`. The transaction binds
+an immutable mode-600 transaction record by exact path, identity, and digest;
+private `stage/`, `stage/inputs/`, and `backup/` trees are identity-bound and
+removed exactly, while the retained transaction, rollback-completion when
+applicable, and terminal evidence remain after journal cleanup. Canonical
+retained-record file identities bind their exact serialized byte lengths as
+well as their mode, owner, type, link count, and separately recorded digest.
+
+The journal embeds its own stable file object state and exact canonical byte
+length, not a timestamped full identity that writing the journal would
+invalidate. The future live loader must compare this state with the opened
+journal descriptor before acting; atomic rewrites create and authenticate the
+next self-sized object before publication.
+
+The schema has a fixed 54-field transaction prefix, four fields for each of
+seven directory mutations, 15 fields for each of 22 file mutations, three
+displaced-source fields for each of eight possible archive files, and seven
+source/stage fields for each of seven possible transaction inputs, for 485
+fields total. Every enabled file mutation records its exact destination;
+pre-identity and, when existing, pre-state digest; staged path, full identity,
+object state, and digest; private backup path, full identity, object state, and
+digest when replacement displaces an existing file; and publication and
+rollback full identities with paired digests when those transitions have
+completed. Directory mutations separately bind their destination and exact
+pre, post, and rollback identities. Disabled mutations and inputs must be
+entirely `none`. Typed GNU-stat identities enforce the journal owner, mode-700
+private directories, mode-600 retained control files, regular files, and
+single-link evidence without reading live state.
+
+Each staged full identity equals its recorded object state. Each private backup
+has a distinct filesystem object identity from the displaced file, preserves
+its owner, mode, size, and modification time, equals its own recorded object
+state, and has the same digest as the pre-state. Preauthorized-absent and
+no-clobber destinations cannot claim pre-state digests or backup evidence. A
+completed publication equals the staged object state and digest. A completed
+rollback either restores exact absence or, for an existing destination, equals
+the backup object state and the pre-state/backup digest while preserving the
+displaced metadata.
+
+Every enabled displaced-state archive file additionally records its canonical
+service source path, exact source identity, and source digest. That source
+identity and digest equal the corresponding service mutation's displaced
+pre-state, and the source digest equals the generic staged digest. The staged
+copy must use a distinct object identity while preserving source owner, mode,
+size, and modification time. The renewal marker has no displaced source and
+instead binds the canonical empty-file staged digest. An existing archive root
+binds its full original identity and metadata to a private mode-600 empty
+timestamp reference; if archive-directory publication changed that container,
+failed pre-commit recovery must record an exact same-directory and
+restored-modification-time identity after reverse publication rollback and
+before cleanup-only state.
+
+The transaction privately stages up to seven writer-derived inputs: the exact
+inventory bytes, root certificate, intermediate key, intermediate certificate,
+processed intermediate configuration, CRL number, and, only for key reuse, the
+current service key. Source and staged identities are distinct and every pair
+has exact digests. Exact copies preserve source bytes and applicable metadata;
+the inventory and reused key are normalized to mode 600, and the processed CA
+configuration is mode 600. The current CA index, index attributes, and serial
+are already bound as mutable pre-state rather than duplicated as input fields.
+The journal and retained transaction accept only uppercase, even-length
+OpenSSL serials with no removable leading `00` pair, and bind the same serial to
+the exact `newcerts/<serial>.pem` destination. Retained CSR signing recovery
+applies the same canonicality rule to its journal-derived new-certificate path.
+The deterministic service issuer file additionally binds exact
+`root=<generation>\nintermediate=<generation>\n` bytes to the claimed issuer
+IDs. Operational code must still regenerate and validate the processed
+configuration and cryptographically validate CSR, certificate, chain, and full
+chain bytes; this pure parser does not claim those live checks.
+
+The writer-derived mutation audit is complete for the retained managed paths:
+
+| Retained writer action | Future transaction evidence |
+| --- | --- |
+| Create or remove the service root, private, CSR, certificate, and chain directories | Five ordered directory mutations with exact absence/existing, post, and reverse-rollback identities |
+| Replace or no-clobber-publish six service files and seven CA database files | The fixed 13-file service/CA prefix with complete pre/stage/backup/post/rollback chains |
+| Create or replace the managed service key | Conditional `service_key` mutation bound to the current key identity and digest |
+| Create/remove archive root and timestamp directory; publish/remove marker and up to seven archived files | Two directory mutations, eight file mutations, displaced-source bindings, and exact archive-root timestamp restoration |
+| Copy inventory, authority, and reused-key inputs into private staging | Seven conditional transaction-input groups under the exact mode-700 `stage/inputs/` container |
+| Create private backups and restore or remove destinations | One backup chain per existing destination and exact reverse-only rollback evidence |
+| Remove the renewal marker, stage tree, and backup tree; publish the terminal and remove the unresolved journal | Exact ordered cleanup pending/done matrix; retained transaction and terminal remain |
+
+The retained Bash `/tmp` inventory directory, its derived DNS/IP/canonical
+scratch files, and its intermediate OpenSSL work directories are not persisted
+operational destinations and are never recovery evidence. The forward-only
+Python contract instead retains one authenticated raw inventory input under its
+private transaction tree and uses the fixed private stage hierarchy above.
+Shared lock/control files and passphrase inputs are likewise outside the
+transaction mutation inventory: locks are persistent shared infrastructure,
+while passphrases are descriptor-bound read-only inputs that must never be
+persisted.
+
+The planned managed order is the retained 13-file service/CA prefix, optional
+key publication, then any absent archive root, archive directory, marker, and
+ordered archive members. Issue permits key reuse, creation, or rotation and
+archives only the displaced key when rotating. Renewal permits reuse or
+rotation, always has an archive marker, and records exactly the ordered subset
+whose certificate, CSR, chain, full chain, configuration, and issuer sources
+were present, plus the displaced key only for rotation. Each archive source
+identity equals the corresponding service mutation pre-state. The model also
+derives the retained issue/renew replace-versus-no-clobber policy for every
+destination. Rollback restores ordinary published files in reverse order,
+followed by archive containers and then created service containers in reverse
+order. When an existing archive root requires timestamp restoration, recovery
+does so immediately after rolling back `archive_dir` and before any created
+service container.
+
+`staging`, `backing-up`, `planned`, `publishing`, and `verifying` phases are
+rollback-authorized and uncommitted. Staging and backup counts admit only their
+exact completed evidence prefixes, and backup or publication progress cannot
+precede complete earlier preparation. Each publication has durable
+`publication-pending` authorization before mutation and `publication-done`
+full-identity and digest evidence afterward. Before the commit record, recovery
+may only restore the exact reverse prefix with paired rollback identity/digest
+evidence for restored files and absence evidence for newly created
+destinations. Every successful committed, cleanup, and terminal state retains
+the complete staging, private-backup, and publication prefixes. After full
+rollback and required archive-container restoration, recovery publishes a
+canonical retained `rollback-complete` record that binds the transaction, full
+reverse sequence, count, exact restoration inputs, and archive-root restoration
+state and identity. Only its identity and canonical digest authorize clearing
+the detailed rollback evidence and entering failed cleanup.
+`committed`, `cleaning-up`, and `terminal` are cleanup-only: they cannot encode
+rollback, and renewal marker removal, stage cleanup, backup cleanup, terminal
+publication, and unresolved-journal cleanup have an exact pending/done matrix.
+The model performs no live reads, publication, signing, rollback, cleanup, or
+dispatch.
+
 For initial migration, the following remain byte-identical:
 
 - Inventory canonical output.
@@ -437,7 +600,19 @@ For initial migration, the following remain byte-identical:
 - Public dispatch rechecks the selected journal kind after operator confirmation
   and while holding the required locks. If signing/finalization journal presence
   differs from the confirmed kind, recovery fails closed without switching
-  protocols or mutating state.
+   protocols or mutating state.
+
+### Managed service issue and renew
+
+- Journal schema 1, operations `service-issue` and `service-renew`.
+- The unresolved journal is `state/service/recovery-journal`; retained private
+  evidence is under `state/service/transactions/`.
+- The eventual recovery interface is unified-only
+  `platform-pki service-recover --transaction`; it is not exposed yet.
+- Recovery holds lifecycle, root, intermediate, and inventory locks.
+- Uncommitted recovery rolls back only the exact published prefix in reverse.
+- The durable commit boundary permanently changes recovery to cleanup-only.
+- Host-local service operations do not use this journal or recovery route.
 
 ### Legacy migration
 
@@ -516,6 +691,9 @@ Cross-version recovery and package rollback are deliberately asymmetric:
 - Installing or running an older Bash implementation after cutover is
   unsupported; it is not guaranteed to recover or interpret Python-written
   transaction state.
+- In particular, retained Bash service issue/renew and `csr-recover` do not
+  recognize the managed schema-1 service journal. A package downgrade after a
+  managed Python writer starts a transaction is unsupported.
 - After the first operational compatibility command cuts over to Python,
   replacing the installed release with an older Bash implementation is outside
   the supported operating model, even when no journal appears unresolved.

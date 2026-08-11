@@ -532,7 +532,7 @@ def test_declared_record_fields_exactly_match_authoritative_sources() -> None:
 
 
 def test_all_record_contracts_declare_unique_fields_and_valid_schema() -> None:
-    assert len(PERSISTED_RECORD_CONTRACTS) == 24
+    assert len(PERSISTED_RECORD_CONTRACTS) == 31
     for contract in PERSISTED_RECORD_CONTRACTS:
         assert contract.fields
         assert len(contract.fields) == len(set(contract.fields))

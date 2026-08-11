@@ -7,6 +7,8 @@ implemented. Phase 6 has Python-backed compatibility and unified `root-create`
 and `intermediate-create` routes plus unified
 `platform-pki ca-rollover recover`; `csr-recover` compatibility and unified
 dispatch are also Python-backed. Direct rollover compatibility remains Bash.
+Managed service issue/renew now have a behavior-neutral typed Python foundation;
+both public service commands and their compatibility ownership remain Bash.
 
 ## Goal
 
@@ -65,6 +67,11 @@ major release.
   `platform-pki-*` executable suffixes.
 - Migrate commands incrementally, with rollover and other recovery-critical
   state machines last.
+- Managed service issue/renew use a new forward-only Python schema-1 journal and
+  eventually recover only through `platform-pki service-recover --transaction`.
+  Host-local issue/migrate/renew continue to use the CSR signing journal and
+  public `csr-recover`; the new service recovery route remains unexposed until
+  operational recovery is complete.
 
 ## Compatibility Contract
 
@@ -451,6 +458,12 @@ Tasks:
   no-protocol-switch recheck.
 - [x] Preserve lifecycle-through-operation locking and final source/state
   rechecks.
+- [x] Add exact typed codecs for the retained host-local request, approval,
+  response, candidate, replay, and terminal records without changing their
+  writers or public recovery.
+- [x] Add a non-public managed issue/renew schema-1 transaction model with exact
+  paths, ordered pre/post/stage/backup evidence, reverse pre-commit rollback,
+  cleanup-only post-commit recovery, archive/key variants, and terminal cleanup.
 - [ ] Migrate each public command as a whole; do not dispatch custody modes to
   different implementation languages.
 
@@ -490,6 +503,50 @@ CSR-recover checkpoint:
 - [x] Signing holds lifecycle through inventory; finalization holds lifecycle
   through export. Selection is rechecked under lock and never switches after
   confirmation.
+
+Managed service foundation checkpoint:
+
+- [x] `src/platform_pki/csr_protocol.py` owns canonical schema-1 codecs for the
+  retained host-local request, approval, response, candidate, replay-request,
+  replay-nonce, and terminal records; source extraction keeps every shell
+  declaration and literal writer aligned.
+- [x] `src/platform_pki/service_transaction.py` owns a fixed 485-field managed
+  journal with 29 directory/file destination mutations, generic
+  pre/stage/backup/publication/rollback identity and digest chains,
+  per-archive-file displaced-source bindings, seven conditional transaction
+  inputs, typed persisted identities, exact destination/replacement policy,
+  complete phase/evidence matrices, and no live state access.
+- [x] The writer-derived mutation audit covers every retained service, CA, key,
+  archive, rollback, and cleanup destination. The forward-only private stage
+  binds exact inventory and issuer inputs and does not persist the retained
+  Bash writer's `/tmp` inventory scratch paths.
+- [x] The managed lock profile is lifecycle, root, intermediate, inventory.
+  Publication follows the retained service/CA order. Rollback reverses ordinary
+  files, then archive containers, restores existing archive-root metadata at
+  the exact boundary, and finally reverses created service containers.
+- [x] The durable commit record changes recovery from rollback to cleanup-only;
+  no post-commit state can encode rollback.
+- [x] Staging, private backup, publication, rollback, and cleanup progress use
+  exact evidence prefixes. Failed pre-commit cleanup requires a retained
+  canonical full-prefix rollback-completion record before detailed rollback
+  evidence can be cleared; its digest also binds archive-root restoration state
+  and identity.
+- [x] Every successful committed and cleanup state retains complete staging,
+  private-backup, and publication prefixes.
+- [x] Retained host-local request and approval codecs independently enforce
+  their timing bounds; cross-record validation enforces creation order and the
+  conditional sole-operator delay without claiming live signer trust,
+  signature, artifact-digest, or current-time validation.
+- [x] CSR response/candidate, managed service, retained transaction, and CSR
+  signing recovery paths enforce the retained canonical OpenSSL serial form.
+- [x] Both public service commands remain Bash. No `service-recover` parser,
+  dispatch, compatibility executable, live mutation, or persisted state was
+  added.
+- [ ] Implement descriptor-bound journal selection, exact confirmation, live
+  preflight, publication, verification, rollback, cleanup, and restart fault
+  checkpoints behind the future unified-only recovery route.
+- [ ] Freeze final Bash service issue/renew oracles and add Bash/Python writer
+  differentials immediately before each whole-command cutover.
 
 Root-create checkpoint:
 
@@ -718,6 +775,8 @@ implementation.
 | 2026-08-10 | Non-public Python candidate-finalization recovery implemented. | `src/platform_pki/csr_recover.py` loads the typed 82-field final-Bash journal through bounded private descriptor access, holds the lifecycle-through-export lock profile, authenticates every source and publication state before mutation, and resumes only durable outcome, active-pointer, superseded-pointer, and journal transitions. The isolated subprocess suite covers all final-Bash phases in create and exchange modes, every Python recovery checkpoint, mutation-before-journal windows, replacement/digest/ambiguity failures, strict journal policy, and six independently created Bash/Python terminal-state differentials. Public `csr-recover` remains Bash. The pinned candidate target passed 77 tests, the pinned foundation passed 1,464 tests, and static plus deterministic Python generation verification passed. |
 | 2026-08-10 | Non-public Python CSR signing recovery implemented. | `src/platform_pki/csr_recover.py` consumes exact replay evidence, restores all seven uncommitted CA database entries in reverse order, terminalizes failed requests without identity reuse, and resumes committed candidate-before-response publication without CA re-signing. Response signatures use pinned no-options Ed25519 trust and inherited key descriptors. The isolated suite covers all 18 final-Bash phases, restart checkpoints, fresh rollback and publication authorization races, complete branch preflight, descriptor and output secrecy, and field-aware Bash/Python terminal-state differentials. Public `csr-recover` remains Bash-owned. The pinned signing target passed 233 tests, the foundation passed 1,464 tests, and the candidate/finalization target passed 77 tests. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, all 3,824 maintained tests, and the 10-test archive smoke. |
 | 2026-08-10 | CSR recovery compatibility and unified dispatch migrated to Python. | Final Bash executable and libraries from `0843c1c11b952aab39f5c95b5eced82989656eb3` are frozen with exact hash and mode provenance. One public handler selects without parsing, confirms exactly, acquires only the selected inventory or export lock profile, and fails closed if journal presence changes under lock. Frozen-oracle differentials retain final-Bash writer evidence; public subprocess tests cover compatibility/unified dispatch, help/color, diagnostics, confirmation, ambiguous state, lock selection, and no-switch races. Focused signing passed 243 tests, candidate/finalization passed 77, foundation passed 1,465, command contract passed 478, and installed tools passed 175. Final `make container-check` passed generated Bash and Python verification, ShellCheck, static checks, all 3,834 maintained tests, the 252-test rollover suite, and the 10-test archive smoke. |
+| 2026-08-11 | Behavior-neutral managed service transaction foundation added and writer-derived authenticity findings resolved. | Typed host-local record codecs remain source-backed by retained CSR libraries and enforce retained cross-record timing plus canonical request/response digest bindings without claiming live trust or signature validation. The fixed 485-field schema-1 managed journal models all 29 retained operational destinations; complete pre/stage/private-backup/publication/rollback identity-object-digest chains; exact preparation and mutation progress prefixes; seven inventory/issuer/signing inputs under an exact private hierarchy; displaced archive-source bindings; deterministic issuer bytes; self-sized journal state; canonical retained transaction, rollback-completion, and terminal record sizes; optional-member presence; archive-container restoration; and phase evidence without dispatch or mutation. A durable full-prefix rollback witness now precedes detailed rollback-evidence clearing. Independent substitutions and restart matrices exercise every generic authenticity relationship and progress counter across issue reuse/create/rotate, renewal sparse/full archives, key rotation, publication, completed rollback, and cleanup. Pinned Python 3.14.7 verification passed the 209-test focused model, 1,674-test foundation, 40 issue tests, 8 renewal tests, 478 command-contract tests, 175 installed-tool tests, and 154 infrastructure tests. Static, deterministic Python generation, and containerized generated-Bash checks also passed. The preceding full `make container-check` passed generated Bash and Python verification, ShellCheck, all 3,899 then-maintained tests including the separately run 252-test rollover suite, and the 10-test archive smoke; this behavior-neutral follow-up did not repeat full acceptance. |
+| 2026-08-11 | Independent managed-service boundary findings fixed. | Standalone request and approval codecs now enforce their retained maximum intervals; affected managed-service and CSR issued-serial paths reject removable leading `00` pairs; successful committed states retain complete staging, private-backup, and publication prefixes; and rollback separates ordinary files, archive containers, exact-boundary archive-root metadata restoration, and service containers. The adjacent audit also bound archive-root restoration state and identity into the durable rollback-completion digest so pre-restoration evidence cannot be reused. Exact boundary and negative regressions increased the focused model to 235 tests and the complete foundation to 1,705. Final `make container-check` passed deterministic Bash and Python generation, ShellCheck, static checks, all 4,072 maintained tests including the 252-test rollover suite, and the 10-test archive smoke. Public service issue/renew and recovery dispatch remain unchanged. |
 
 ## Decision Log
 
@@ -729,6 +788,7 @@ implementation.
 | 2026-08-07 | Build and install a deterministic standard-library zipapp. | Keep maintained source modular while avoiding Python package/import skew and unnecessary PEX dependencies. |
 | 2026-08-07 | Require Python 3.12 or newer. | Use a modern standard-library baseline while retaining a clear target-host provisioning contract. |
 | 2026-08-07 | Use shallow unified command names. | Mirror existing executable suffixes and minimize parser and documentation divergence. |
+| 2026-08-11 | Recover managed issue/renew through a future unified-only `service-recover` route. | Managed Python transactions need a new forward-only journal; host-local operations retain the existing CSR journal and public recovery ownership. |
 | 2026-08-07 | Retain the final Bash source through migration acceptance and record each command's pre-cutover commit. | Keep differential evidence reproducible without shipping a production runtime language switch or duplicate oracle installation. |
 | 2026-08-07 | Raise the minimum from Python 3.12 to 3.14. | Align the application contract with the pinned Python 3.14.7 test environment instead of maintaining an unverified older-runtime claim. |
 | 2026-08-07 | Design and review the `doctor` contract before exposing a public route. | The review exposed missing positive-eligibility and package-handoff contracts before runtime code was added; this decision was superseded on 2026-08-08. |
