@@ -232,7 +232,9 @@ def parse_csr_request(data: bytes) -> CsrRequest:
     _pattern(record, "requester_principal", _PRINCIPAL)
     _pattern(record, "response_principal", _PRINCIPAL)
     if record["requester_principal"] != record["target"]:
-        raise CsrProtocolError("CSR requester principal does not match target")
+        raise CsrProtocolError(
+            "CSR requester principal must exactly match the target identity"
+        )
     operation = _operation(record)
     for field in ("inventory_sha256", "csr_sha256", "csr_spki_sha256"):
         _digest(record, field)
@@ -250,8 +252,12 @@ def parse_csr_request(data: bytes) -> CsrRequest:
     return CsrRequest(record, operation, created, expires)
 
 
+def parse_csr_approval_record(data: bytes) -> OrderedRecord:
+    return _parse(data, CSR_APPROVAL_SPEC)
+
+
 def parse_csr_approval(data: bytes) -> CsrApproval:
-    record = _parse(data, CSR_APPROVAL_SPEC)
+    record = parse_csr_approval_record(data)
     _identity_fields(record)
     _service_target(record)
     _pattern(record, "approver_principal", _PRINCIPAL)
@@ -297,7 +303,7 @@ def validate_request_approval_binding(
         "profile",
     ):
         if request.record[field] != approval.record[field]:
-            raise CsrProtocolError(f"CSR approval does not bind request field {field}")
+            raise CsrProtocolError(f"CSR approval does not bind request field: {field}")
     if approval.record["request_sha256"] != sha256(request.to_bytes()).hexdigest():
         raise CsrProtocolError("CSR approval does not bind canonical request bytes")
     if approval.created_epoch < request.created_epoch:

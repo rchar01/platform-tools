@@ -2359,6 +2359,10 @@ def remove_exact_tree(
             descriptor,
         )
         _checkpoint("tree-cleanup-before-mutation", fault_hook, pause_hook)
+        current = _stat_at(parent_pin, component)
+        if current != expected_identity or _fstat(descriptor) != expected_identity:
+            raise PublicationTreeCleanupError()
+        _recheck_parent(parent_pin)
         _remove_tree_entries(
             descriptor,
             readiness.snapshot,

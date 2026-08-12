@@ -15,7 +15,7 @@ import pytest
 from src.platform_pki.filesystem import identity_from_stat
 from src.platform_pki.operational import require_no_unresolved_state
 
-from ..harness import ProcessResult
+from ..harness import ManagedProcess, ProcessResult
 from .migration_harness import managed_openssl_dir_normalizer, snapshot_state
 from .support import (
     BIN,
@@ -114,6 +114,17 @@ class CsrWorkspace:
 
 def run(runner, command: Sequence[object], env: Mapping[str, str], *, input: str | bytes | None = None) -> ProcessResult:
     return runner(command, env=env, input=input, timeout=120)
+
+
+def wait_for_path(path: Path, process: ManagedProcess, timeout: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        observation = process.observe()
+        if observation.status is not None:
+            pytest.fail(f"process exited before pause marker: {observation}")
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out waiting for pause marker: {path}")
+        time.sleep(0.01)
 
 
 def ssh_key(runner, env: Mapping[str, str], path: Path) -> str:
@@ -913,7 +924,7 @@ def test_after_journal_recovery_rejects_foreign_transaction_tree(csr_workspace: 
 
 
 def test_csr_input_cleanup_preserves_foreign_replacement(
-    csr_workspace: CsrWorkspace, executable_directory: Path
+    csr_workspace: CsrWorkspace, process_starter
 ) -> None:
     workspace = csr_workspace
     temporary = workspace.artifacts / "csr-input-tmp"
@@ -934,43 +945,47 @@ def test_csr_input_cleanup_preserves_foreign_replacement(
         digest(sentinel),
     )
     displaced = workspace.artifacts / "displaced-csr-input"
-    counter = workspace.artifacts / "csr-input-stat.count"
     marker = workspace.artifacts / "csr-input-race.marker"
-    fake_bin = executable_directory / "csr-input-cleanup-race"
-    write_executable(
-        fake_bin / "stat",
-        """#!/usr/bin/env bash
-set -euo pipefail
-target=${!#}
-if [[ ${target%/*} == "$RACE_TMPDIR" && ${target##*/} == platform-pki-csr-sign.* ]]; then
-  count=0
-  [[ ! -f $RACE_COUNTER ]] || read -r count <"$RACE_COUNTER"
-  count=$((count + 1))
-  printf '%s\n' "$count" >"$RACE_COUNTER"
-  if (( count == 2 )); then
-    "$REAL_MV" -T -- "$target" "$RACE_DISPLACED"
-    "$REAL_MV" -T -- "$RACE_FOREIGN" "$target"
-    : >"$RACE_MARKER"
-  fi
-fi
-exec "$REAL_STAT" "$@"
-""",
-    )
-
-    result = workspace.issue(
+    release = workspace.artifacts / "csr-input-race.release"
+    arguments: list[object] = [
+        ISSUE,
+        "external",
+        "--namespace",
+        workspace.namespace,
+        "--intermediate-pass-file",
+        workspace.intermediate_pass,
+        "--csr-file",
+        workspace.artifacts / "tls.csr",
+        "--request-file",
+        workspace.artifacts / "request",
+        "--request-signature",
+        workspace.artifacts / "request.sig",
+        "--approval-file",
+        workspace.artifacts / "approval",
+        "--approval-signature",
+        workspace.artifacts / "approval.sig",
+        "--response-key",
+        workspace.response_key,
+    ]
+    process = process_starter(
+        arguments,
         env=environment(
             workspace.env,
-            PATH=f"{fake_bin}:{workspace.env['PATH']}",
             TMPDIR=os.fspath(temporary),
-            REAL_STAT=executable("stat"),
-            REAL_MV=executable("mv"),
-            RACE_TMPDIR=os.fspath(temporary),
-            RACE_COUNTER=os.fspath(counter),
-            RACE_FOREIGN=os.fspath(foreign),
-            RACE_DISPLACED=os.fspath(displaced),
-            RACE_MARKER=os.fspath(marker),
-        )
+            PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_AT="tree-cleanup-before-mutation",
+            PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_MARKER=os.fspath(marker),
+            PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_RELEASE=os.fspath(release),
+        ),
+        timeout=120,
     )
+    wait_for_path(marker, process)
+    retained = tuple(temporary.glob("platform-pki-csr-sign.*"))
+    assert len(retained) == 1
+    original_tree = tree_snapshot(retained[0])
+    retained[0].rename(displaced)
+    foreign.rename(retained[0])
+    release.touch()
+    result = process.wait()
 
     retained = tuple(temporary.glob("platform-pki-csr-sign.*"))
     assert len(retained) == 1
@@ -988,6 +1003,7 @@ exec "$REAL_STAT" "$@"
     assert result.status == 1
     assert marker.is_file()
     assert displaced.is_dir()
+    assert tree_snapshot(displaced) == original_tree
     assert after == before
     assert (workspace.pki / "state/csr/responses/external/0123456789abcdef0123456789abcdef").is_dir()
     assert not (workspace.pki / "state/csr/recovery-journal").exists()
@@ -1024,36 +1040,19 @@ def test_recovery_rejects_same_content_replacement_after_publication_checkpoint(
 
 
 def test_recovery_binds_exact_stage_identity_after_precheckpoint_rename(
-    csr_workspace: CsrWorkspace, executable_directory: Path
+    csr_workspace: CsrWorkspace,
 ) -> None:
     workspace = csr_workspace
     destination = workspace.pki / "state/csr/candidates/external/0123456789abcdef0123456789abcdef"
-    fake_bin = executable_directory / "candidate-precheckpoint-crash"
-    marker = workspace.artifacts / "candidate-precheckpoint-crash.marker"
-    write_executable(
-        fake_bin / "mv",
-        """#!/usr/bin/env bash
-set -euo pipefail
-"$REAL_MV" "$@"
-if [[ ${!#} == "$RACE_DESTINATION" && ! -e $RACE_MARKER ]]; then
-  : >"$RACE_MARKER"
-  kill -KILL "$PPID"
-fi
-""",
-    )
 
     result = workspace.issue(
         env=environment(
             workspace.env,
-            PATH=f"{fake_bin}:{workspace.env['PATH']}",
-            REAL_MV=executable("mv"),
-            RACE_DESTINATION=os.fspath(destination),
-            RACE_MARKER=os.fspath(marker),
+            PLATFORM_PKI_CSR_PYTHON_WRITER_CRASH_AT="candidate-publish-after-mutation",
         )
     )
 
     assert result.status == 128 + signal.SIGKILL
-    assert marker.is_file()
     assert destination.is_dir()
     identity = destination.stat().st_ino
     recovered = run(
@@ -1487,12 +1486,15 @@ def test_protocol_records_require_exact_ordered_canonical_fields_before_replay(
         pytest.param("request", "profile", "other", "profile or response signer is invalid", id="request-profile"),
         pytest.param("request", "response_principal", "other", "profile or response signer is invalid", id="request-response-principal"),
         pytest.param("approval", "schema", "2", "schema is unsupported", id="approval-schema"),
+        pytest.param("approval", "request_id", "invalid", "does not bind request field: request_id", id="approval-invalid-request-id"),
         pytest.param("approval", "request_id", "1" * 32, "does not bind request field: request_id", id="approval-request-id"),
         pytest.param("approval", "nonce", "cd" * 32, "does not bind request field: nonce", id="approval-nonce"),
         pytest.param("approval", "operation", "renew", "does not bind request field: operation", id="approval-operation"),
         pytest.param("approval", "service", "other", "does not bind request field: service", id="approval-service"),
         pytest.param("approval", "target", "other", "does not bind request field: target", id="approval-target"),
         pytest.param("approval", "profile", "other", "does not bind request field: profile", id="approval-profile"),
+        pytest.param("approval", "csr_sha256", "invalid", "does not bind request field: csr_sha256", id="approval-invalid-csr-digest"),
+        pytest.param("approval", "request_sha256", "invalid", "digest binding failed", id="approval-invalid-request-digest"),
         pytest.param("approval", "approver_principal", "other", "principal does not match policy", id="approval-principal"),
     ),
 )

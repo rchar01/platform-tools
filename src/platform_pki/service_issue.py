@@ -32,6 +32,7 @@ from .csr_protocol import (
     CsrProtocolError,
     CsrRequest,
     parse_csr_approval,
+    parse_csr_approval_record,
     parse_csr_candidate,
     parse_csr_request,
     parse_csr_response,
@@ -96,6 +97,7 @@ from .publication import (
     atomic_write_bytes,
     fsync_tree,
     publish_no_clobber,
+    remove_exact_tree,
     replace_exact,
 )
 from .service_recover import (
@@ -3205,23 +3207,56 @@ def _run_host_local_csr(
                     ),
                     "tls.csr": _csr_input(csr_file, "Host-local CSR"),
                 }
+                def parse_error(error: CsrProtocolError, label: str) -> NoReturn:
+                    message = str(error)
+                    structural = {
+                        "record contains an unexpected field": "contains extra fields",
+                        "record is missing a required field": "is missing required fields",
+                        "record fields are not in canonical order": "field order is invalid",
+                        "record contains a non-canonical value": "contains invalid text",
+                    }
+                    if message in structural:
+                        _die(f"{label} {structural[message]}")
+                    if message == "record schema does not match specification":
+                        _die("CSR request or approval schema is unsupported")
+                    if message in {
+                        "CSR protocol field request_id is invalid",
+                        "CSR protocol field nonce is invalid",
+                    }:
+                        _die("CSR request ID or nonce is invalid")
+                    if message in {
+                        "CSR protocol field service is invalid",
+                        "CSR protocol field target is invalid",
+                        "CSR protocol field requester_principal is invalid",
+                    }:
+                        _die("CSR request service, target, or requester is invalid")
+                    if message == "CSR request profile is invalid":
+                        _die("CSR request profile or response signer is invalid")
+                    _die(message)
+
                 try:
                     request = parse_csr_request(protocol["request"].data)
-                    approval = parse_csr_approval(protocol["approval"].data)
                 except CsrProtocolError as error:
-                    _die(str(error))
+                    parse_error(error, "CSR request manifest")
+                try:
+                    approval_record = parse_csr_approval_record(
+                        protocol["approval"].data
+                    )
+                except CsrProtocolError as error:
+                    parse_error(error, "CSR approval manifest")
                 request_record = request.record
-                approval_record = approval.record
                 if request.operation not in accepted_operations:
                     if accepted_operations == frozenset((CsrOperation.RENEW,)):
                         _die("Renew accepts only renew CSR requests")
                     _die("Issue accepts only issue or migrate CSR requests")
-                if (
-                    request_record["service"] != service
-                    or request_record["target"] != selected.target
-                    or request_record["response_principal"] != trust.response_principal
-                ):
-                    _die("CSR request service, target, or response signer is invalid")
+                if request_record["service"] != service:
+                    _die("CSR request service, target, or requester is invalid")
+                if request_record["target"] != selected.target:
+                    _die(
+                        "CSR request target and requester principal must exactly match inventory target"
+                    )
+                if request_record["response_principal"] != trust.response_principal:
+                    _die("CSR request profile or response signer is invalid")
                 requester_key = trust.requester_keys.get(
                     request_record["requester_principal"]
                 )
@@ -3230,16 +3265,20 @@ def _run_host_local_csr(
                         "CSR signer principal is not trusted: "
                         f"{request_record['requester_principal']}"
                     )
+                for field in (
+                    "request_id",
+                    "nonce",
+                    "operation",
+                    "service",
+                    "target",
+                    "csr_sha256",
+                    "inventory_sha256",
+                    "profile",
+                ):
+                    if request_record[field] != approval_record[field]:
+                        _die(f"CSR approval does not bind request field: {field}")
                 if approval_record["approver_principal"] != trust.approver_principal:
                     _die("CSR approval principal does not match policy")
-                try:
-                    validate_request_approval_binding(
-                        request,
-                        approval,
-                        signer_keys_match=requester_key == trust.approver_key,
-                    )
-                except CsrProtocolError as error:
-                    _die(str(error))
                 request_sha256 = _sha256(protocol["request"].data)
                 approval_sha256 = _sha256(protocol["approval"].data)
                 inventory_sha256 = _sha256(inventory_evidence.data)
@@ -3270,11 +3309,20 @@ def _run_host_local_csr(
                     process_environment,
                     "CSR approval",
                 )
+                try:
+                    approval = parse_csr_approval(protocol["approval"].data)
+                    validate_request_approval_binding(
+                        request,
+                        approval,
+                        signer_keys_match=requester_key == trust.approver_key,
+                    )
+                except CsrProtocolError as error:
+                    _die(str(error))
                 _csr_validate_times(request, approval)
 
-                with tempfile.TemporaryDirectory(
-                    prefix="platform-pki-csr-sign."
-                ) as work:
+                work = tempfile.mkdtemp(prefix="platform-pki-csr-sign.")
+                work_identity = identity_from_stat(os.stat(work, follow_symlinks=False))
+                try:
                     os.chmod(work, 0o700)
                     for name, item in protocol.items():
                         _write_new_file(f"{work}/{name}", item.data, 0o600)
@@ -3833,6 +3881,34 @@ def _run_host_local_csr(
                         cast(PauseHook, mapped_pause),
                     )
                     return 0
+                finally:
+                    work_parent_path, work_name = os.path.split(work)
+                    try:
+                        with OpenedDirectory(work_parent_path) as work_parent:
+                            cleanup_identity = work_identity
+                            readiness = None
+                            with work_parent.open_directory(
+                                work_name,
+                                policy=_PRIVATE_DIRECTORY,
+                                expected_identity=work_identity.directory,
+                            ) as work_directory:
+                                cleanup_identity = identity_from_stat(
+                                    os.fstat(work_directory.fileno())
+                                )
+                                readiness = fsync_tree(
+                                    work_directory, work_parent, work_name
+                                )
+                            assert readiness is not None
+                            remove_exact_tree(
+                                work_parent,
+                                work_name,
+                                cleanup_identity,
+                                readiness,
+                                fault_hook=fault_hook,
+                                pause_hook=pause_hook,
+                            )
+                    except (FilesystemError, PublicationError):
+                        _die("CSR input temporary directory changed before cleanup")
     except BaseException as error:
         if journal_started and intermediate_dir and not retain_uncommitted_journal:
             try:
@@ -4198,20 +4274,38 @@ def issue_service(
             return None
         return expand_home(value, home=home)
 
-    fault = FaultHook(
-        crash_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_CRASH_AT"),
-        signal_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_SIGNAL_AT"),
-        failure_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_FAILURE_AT"),
-        signum=int(process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_SIGNAL", "15")),
-    )
-    pause = PauseHook(
-        pause_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_AT"),
-        marker=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_MARKER"),
-        release=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_RELEASE"),
-    )
     passphrase = optional_path("--intermediate-pass-file")
     safety_days = str(arguments["--issuer-safety-days"])
     if any(option in arguments.provided for option in _PUBLIC_CSR_INPUT_OPTIONS):
+        fault = FaultHook(
+            crash_at=(
+                process_environment.get("PLATFORM_PKI_CSR_PYTHON_WRITER_CRASH_AT")
+                or process_environment.get("PLATFORM_PKI_CSR_CRASH_AT")
+            ),
+            signal_at=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_SIGNAL_AT"
+            ),
+            failure_at=(
+                process_environment.get("PLATFORM_PKI_CSR_PYTHON_WRITER_FAILURE_AT")
+                or process_environment.get("PLATFORM_PKI_CSR_FAIL_AT")
+            ),
+            signum=int(
+                process_environment.get(
+                    "PLATFORM_PKI_CSR_PYTHON_WRITER_SIGNAL", "15"
+                )
+            ),
+        )
+        pause = PauseHook(
+            pause_at=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_AT"
+            ),
+            marker=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_MARKER"
+            ),
+            release=process_environment.get(
+                "PLATFORM_PKI_CSR_PYTHON_WRITER_PAUSE_RELEASE"
+            ),
+        )
         return issue_host_local_csr(
             service,
             pki_dir=paths.pki_dir,
@@ -4227,6 +4321,17 @@ def issue_service(
             fault_hook=fault,
             pause_hook=pause,
         )
+    fault = FaultHook(
+        crash_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_CRASH_AT"),
+        signal_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_SIGNAL_AT"),
+        failure_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_FAILURE_AT"),
+        signum=int(process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_SIGNAL", "15")),
+    )
+    pause = PauseHook(
+        pause_at=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_AT"),
+        marker=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_MARKER"),
+        release=process_environment.get("PLATFORM_PKI_SERVICE_ISSUE_PAUSE_RELEASE"),
+    )
     days_value = arguments.values.get("--days")
     return issue_managed_service(
         service,
@@ -4278,7 +4383,8 @@ def renew_service(
             ),
             failure_at=process_environment.get(
                 "PLATFORM_PKI_CSR_PYTHON_WRITER_FAILURE_AT"
-            ),
+            )
+            or process_environment.get("PLATFORM_PKI_CSR_FAIL_AT"),
             signum=int(
                 process_environment.get(
                     "PLATFORM_PKI_CSR_PYTHON_WRITER_SIGNAL", "15"

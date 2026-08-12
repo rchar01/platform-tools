@@ -1386,6 +1386,38 @@ def test_displaced_tree_cleanup_unlinks_symlinks_without_touching_targets(tmp_pa
     assert (victim / "sentinel").read_bytes() == b"victim"
 
 
+def test_tree_cleanup_preserves_root_replacement_before_mutation(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    replacement = tmp_path / "replacement"
+    displaced = tmp_path / "displaced"
+    tree.mkdir(mode=0o700)
+    replacement.mkdir(mode=0o700)
+    _write(tree / "original", b"original")
+    _write(replacement / "foreign", b"foreign")
+    with OpenedDirectory(tmp_path) as parent, OpenedDirectory(tree) as root:
+        readiness = fsync_tree(root, parent, "tree")
+        identity = root.identity
+
+    def replace(point: str) -> None:
+        if point != "tree-cleanup-before-mutation":
+            return
+        tree.rename(displaced)
+        replacement.rename(tree)
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationReplacementCleanupError):
+            remove_exact_tree(
+                parent,
+                "tree",
+                identity,
+                readiness,
+                pause_hook=replace,
+            )
+
+    assert (tree / "foreign").read_bytes() == b"foreign"
+    assert (displaced / "original").read_bytes() == b"original"
+
+
 def test_displaced_tree_cleanup_preserves_regular_replacement_before_unlink(
     tmp_path: Path,
 ) -> None:

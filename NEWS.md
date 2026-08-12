@@ -9,6 +9,9 @@ This file gives a short, release-oriented view of what changed between versions.
   migration. Managed schema-1 transactions can now be recovered through the
   unified-only `platform-pki service-recover --transaction` route with exact
   confirmation; host-local transactions continue to use `csr-recover`.
+  Host-local issue and migration preserve the final Bash fault-injection and
+  validation diagnostics, and exact-identity cleanup now retains both a
+  displaced temporary input tree and any foreign same-name replacement.
 - `platform-pki-service-renew` and `platform-pki service-renew` now share the
   same Python whole-command handler for managed and authenticated host-local
   renewal. Managed interruption recovery remains unified-only through
