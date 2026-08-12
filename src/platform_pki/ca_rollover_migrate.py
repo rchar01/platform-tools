@@ -23,6 +23,7 @@ from .ca_rollover_recovery import (
     LegacyMigrationRecoveryRecord,
     RecoveryRecordError,
     RootBootstrapRecoveryRecord,
+    is_terminal_bootstrap_record,
     parse_recovery_semantics,
 )
 from .errors import ApplicationError
@@ -537,12 +538,7 @@ def _terminal_journal_identity(path: str, pki_dir: str) -> FileIdentity:
         _die(f"PKI recovery is required before this command can continue: {path}")
     terminal = False
     if isinstance(record, (RootBootstrapRecoveryRecord, IntermediateBootstrapRecoveryRecord)):
-        terminal = (
-            record.committed
-            and record.phase == "complete"
-            and record.recovery_action is None
-            and record.recovery_step is None
-        )
+        terminal = is_terminal_bootstrap_record(record)
     elif isinstance(record, LegacyMigrationRecoveryRecord) and record.committed:
         terminal = (
             record.phase == "complete"

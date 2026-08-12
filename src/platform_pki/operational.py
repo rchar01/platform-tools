@@ -15,8 +15,8 @@ from pathlib import Path
 from .ca_rollover_recovery import (
     LegacyMigrationRecoveryRecord,
     MAX_RECOVERY_RECORD_BYTES,
-    RecoveryOperation,
     RecoveryRecordError,
+    is_terminal_bootstrap_record,
     parse_recovery_semantics,
 )
 from .errors import ApplicationError
@@ -426,11 +426,8 @@ def require_terminal_rollover_history(
         raise ApplicationError(message) from None
     if not record.committed:
         terminal = False
-    elif record.operation in {
-        RecoveryOperation.ROOT_BOOTSTRAP,
-        RecoveryOperation.INTERMEDIATE_BOOTSTRAP,
-    }:
-        terminal = record.phase == "complete" and record.recovery_step is None
+    elif is_terminal_bootstrap_record(record):
+        terminal = True
     elif isinstance(record, LegacyMigrationRecoveryRecord):
         terminal = (
             record.phase == "complete"

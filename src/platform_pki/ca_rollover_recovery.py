@@ -367,6 +367,26 @@ TypedRecoveryRecord: TypeAlias = (
 )
 
 
+def is_terminal_bootstrap_record(record: TypedRecoveryRecord) -> bool:
+    """Return whether an authority bootstrap journal is immutable history."""
+
+    if not isinstance(
+        record, (RootBootstrapRecoveryRecord, IntermediateBootstrapRecoveryRecord)
+    ) or not record.committed:
+        return False
+    if record.phase == "complete":
+        return record.recovery_action is None and record.recovery_step is None
+    if (
+        record.phase != "rolled-back"
+        or record.recovery_action is not RecoveryAction.ROLLBACK
+    ):
+        return False
+    return record.recovery_step == "complete" or (
+        isinstance(record, IntermediateBootstrapRecoveryRecord)
+        and record.recovery_step == "reservation-done"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PreparationTerminalMarker(Mapping[str, str]):
     record: GenericRecoveryRecord
@@ -829,6 +849,12 @@ def _validate_intermediate_bootstrap(
     _intermediate_for_root(intermediate, root, "intermediate_generation")
     transaction = record["transaction"]
     parent = os.path.join(pki_dir, "authorities", "intermediates")
+    frozen_rollback_terminal = (
+        record["committed"] == "true"
+        and record["phase"] == "rolled-back"
+        and record.recovery_action is RecoveryAction.ROLLBACK
+        and record["recovery_step"] == "reservation-done"
+    )
     paths: dict[str, str | None] = {
         "root_dir": _expect_path(
             record["root_dir"],
@@ -854,7 +880,22 @@ def _validate_intermediate_bootstrap(
     stage = _path(record["stage_dir"], "stage_dir", optional=True)
     paths["stage_dir"] = stage
     root_stage = _path(record["root_stage"], "root_stage", optional=True)
-    if root_stage is not None and (stage is None or root_stage != f"{stage}/root"):
+    frozen_root_stage = False
+    if frozen_rollback_terminal and stage is None and root_stage is not None:
+        frozen_stage = os.path.dirname(root_stage)
+        frozen_root_stage = (
+            root_stage == f"{frozen_stage}/root"
+            and os.path.dirname(frozen_stage) == parent
+            and re.fullmatch(
+                r"\.platform-pki-intermediate-create\.[A-Za-z0-9_-]+",
+                os.path.basename(frozen_stage),
+                re.ASCII,
+            )
+            is not None
+        )
+    if root_stage is not None and not frozen_root_stage and (
+        stage is None or root_stage != f"{stage}/root"
+    ):
         raise _semantic_error("recovery path root_stage is outside its contract")
     paths["root_stage"] = root_stage
     none = frozenset((IdentitySentinel.NONE,))
@@ -929,7 +970,11 @@ def _validate_intermediate_bootstrap(
         )
         if root_mutated and identities[field] is RecoveryIdentityPlaceholder.PENDING:
             raise _semantic_error("mutated intermediate bootstrap has pending root identity")
-    if stage is None and identities["stage_identity"] is not IdentitySentinel.NONE:
+    if (
+        stage is None
+        and identities["stage_identity"] is not IdentitySentinel.NONE
+        and not frozen_root_stage
+    ):
         raise _semantic_error("intermediate bootstrap stage identity has no stage path")
     if root_stage is None and identities["root_stage_identity"] is not IdentitySentinel.NONE:
         raise _semantic_error("intermediate bootstrap root-stage identity has no path")

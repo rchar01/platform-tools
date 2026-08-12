@@ -972,6 +972,7 @@ class _Transaction:
             self.write_journal("recovering")
         else:
             self.reservation_identity = self.abandoned_identity.state
+        self.recovery_step = "complete"
         self.write_journal("rolled-back", committed=True)
         # Final Bash intentionally performs an unbound rm -f here; recovery does too.
         parent, name = _parent(self.marker)

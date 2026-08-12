@@ -20,6 +20,7 @@ from .ca_rollover_recovery import (
     RecoveryStatusHeader,
     RolloverPrepareRecoveryRecord,
     RootBootstrapRecoveryRecord,
+    is_terminal_bootstrap_record,
     parse_preparation_terminal_marker,
     parse_recovery_fields,
     parse_recovery_semantics,
@@ -397,15 +398,8 @@ def _require_no_unresolved_journal(
             state = parse_recovery_semantics(data, pki_dir=pki_dir)
         except RecoveryRecordError:
             raise ApplicationError("PKI recovery journal has invalid recovery state") from None
-        terminal = state.committed and (
-            isinstance(
-                state,
-                (RootBootstrapRecoveryRecord, IntermediateBootstrapRecoveryRecord),
-            )
-            and state.phase == "complete"
-            and state.recovery_action is None
-            and state.recovery_step is None
-            or isinstance(state, LegacyMigrationRecoveryRecord)
+        terminal = is_terminal_bootstrap_record(state) or state.committed and (
+            isinstance(state, LegacyMigrationRecoveryRecord)
             and (
                 state.phase == "complete"
                 and (state.recovery_action is None or state.recovery_action.value == "resume")

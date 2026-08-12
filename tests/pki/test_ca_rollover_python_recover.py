@@ -662,8 +662,6 @@ def _assert_root_bootstrap_recovery_and_retry(
         workspace.pki / "state/generation-reservations/g1"
     )["status"] == "abandoned"
 
-    # Recovery retains authenticated terminal history. Remove it only as test
-    # fixture setup before exercising a fresh root transaction.
     parsed = recovery_schema.parse_recovery_semantics(
         journal.read_bytes(), pki_dir=workspace.pki
     )
@@ -671,11 +669,6 @@ def _assert_root_bootstrap_recovery_and_retry(
     assert parsed.committed and parsed.phase == "rolled-back"
     assert parsed.recovery_action is recovery_schema.RecoveryAction.ROLLBACK
     assert parsed.recovery_step == "complete"
-    journal_identity = identity_at(journal)
-    assert isinstance(journal_identity, FileIdentity)
-    with OpenedDirectory(journal.parent) as parent:
-        unlink_exact(parent, journal.name, journal_identity)
-
     retried = root_create.create_root(
         process_runner,
         workspace,

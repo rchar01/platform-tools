@@ -5,10 +5,14 @@ import os
 import re
 import stat
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from src.platform_pki import ca_rollover_recovery as recovery_schema
+from src.platform_pki import ca_rollover_migrate as rollover_migrate
+from src.platform_pki import ca_rollover_status as rollover_status
 from src.platform_pki import intermediate_create as intermediate_writer
 from src.platform_pki.errors import ApplicationError
 from src.platform_pki.filesystem import FileIdentity
@@ -650,6 +654,7 @@ def test_injected_failure_restores_root_and_bootstrap(tmp_path: Path, process_ru
     assert (value.pki / "state/bootstrap-root").is_file()
     assert _root_state(value) == before
     assert record(value.pki / "state/rollover/journal")["committed"] == "true"
+    assert record(value.pki / "state/rollover/journal")["recovery_step"] == "complete"
     reservation = value.pki / "state/generation-reservations/g1-i1"
     if reservation.exists():
         assert record(reservation)["status"] == "abandoned"
@@ -859,6 +864,8 @@ def test_frozen_bash_and_python_intermediate_writers_are_semantically_equivalent
         create_root(process_runner, seed, seed_environment, toolset),
         "intermediate differential root",
     )
+    # Its terminal journal binds the seed's absolute path and is not test input.
+    (seed.pki / "state/rollover/journal").unlink()
     case_root = tmp_path / "differential"
     base_environment = {
         **seed_environment,
@@ -915,6 +922,62 @@ def test_frozen_bash_and_python_intermediate_writers_are_semantically_equivalent
 
     result.assert_equivalent()
     assert result.bash.process.status == (0 if boundary is None else 1)
+    if boundary is not None:
+        bash_pki = case_root / "bash/namespace/pki"
+        terminal = record(bash_pki / "state/rollover/journal")
+        assert terminal["phase"] == "rolled-back"
+        assert terminal["recovery_action"] == "rollback"
+        assert terminal["recovery_step"] == "reservation-done"
+        assert terminal["committed"] == "true"
+        parsed = recovery_schema.parse_recovery_semantics(
+            (bash_pki / "state/rollover/journal").read_bytes(), pki_dir=bash_pki
+        )
+        assert recovery_schema.is_terminal_bootstrap_record(parsed)
+        assert not recovery_schema.is_terminal_bootstrap_record(
+            replace(parsed, committed=False)
+        )
+        assert not recovery_schema.is_terminal_bootstrap_record(
+            replace(parsed, phase="recovering")
+        )
+        assert not recovery_schema.is_terminal_bootstrap_record(
+            replace(parsed, recovery_step="root-index-done")
+        )
+        malformed = (bash_pki / "state/rollover/journal").read_bytes().replace(
+            b"recovery_step=reservation-done\n",
+            b"recovery_step=root-index-done\n",
+        )
+        with pytest.raises(
+            recovery_schema.RecoveryRecordError,
+            match="recovery path root_stage is outside its contract",
+        ):
+            recovery_schema.parse_recovery_semantics(malformed, pki_dir=bash_pki)
+        assert not (bash_pki / "state/rollover/recovery-required").exists()
+        retained = []
+        rollover_status._require_no_unresolved_journal(
+            os.fspath(bash_pki), retained, []
+        )
+        for opened in retained:
+            opened.close()
+        assert isinstance(
+            rollover_migrate._terminal_journal_identity(
+                os.fspath(bash_pki / "state/rollover/journal"),
+                os.fspath(bash_pki),
+            ),
+            FileIdentity,
+        )
+        retry_environment = dict(base_environment)
+        retry_environment.pop("PLATFORM_PKI_INTERMEDIATE_FAIL_AT")
+        require_success(
+            run(
+                process_runner,
+                argv(case_root / "bash", toolset.intermediate),
+                retry_environment,
+            ),
+            "Python retry from frozen intermediate rollback",
+        )
+        assert record(
+            bash_pki / "state/active-issuer"
+        )["intermediate"] == "g1-i2"
 
 
 @pytest.mark.parametrize(
@@ -938,6 +1001,8 @@ def test_sigkill_persisted_state_matches_frozen_writer_and_python_recovers(
         create_root(process_runner, seed, seed_environment, toolset),
         "intermediate SIGKILL differential root",
     )
+    # Its terminal journal binds the seed's absolute path and is not test input.
+    (seed.pki / "state/rollover/journal").unlink()
     case_root = tmp_path / "differential"
     crash_environment = {
         **seed_environment,
