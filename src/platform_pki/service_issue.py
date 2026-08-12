@@ -80,6 +80,7 @@ from .operational import (
     require_pki_directory,
     require_pilot_common_library,
     require_program,
+    require_terminal_rollover_history,
     resolve_paths,
 )
 from .parser import ParseResult
@@ -990,6 +991,15 @@ def _plan(
     bootstrap = _path(pki_dir, SERVICE_BOOTSTRAP_RELATIVE_PATH)
     if os.path.lexists(bootstrap):
         _die(f"Managed service bootstrap recovery is required before this command can continue: {bootstrap}")
+    rollover = _path(pki_dir, "state/rollover/journal")
+    if os.path.lexists(rollover):
+        require_terminal_rollover_history(
+            pki_dir,
+            rollover,
+            error_message=(
+                f"PKI recovery is required before this command can continue: {rollover}"
+            ),
+        )
     require_generation_layout(pki_dir)
     root, intermediate = load_active_issuer(pki_dir, environment)
     _prepare_service_control(pki_dir)

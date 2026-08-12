@@ -416,12 +416,17 @@ def require_terminal_rollover_history(
     message = error_message or (
         f"PKI recovery is required before this command can continue: {journal}"
     )
-    data = _read_state_bytes(
-        journal,
-        "PKI recovery journal",
-        max_size=MAX_RECOVERY_RECORD_BYTES,
-    )
-    _parse_state_map(data, "PKI recovery journal")
+    try:
+        data = _read_state_bytes(
+            journal,
+            "PKI recovery journal",
+            max_size=MAX_RECOVERY_RECORD_BYTES,
+        )
+        _parse_state_map(data, "PKI recovery journal")
+    except ApplicationError:
+        if error_message is None:
+            raise
+        raise ApplicationError(message) from None
     try:
         record = parse_recovery_semantics(data, pki_dir=pki_dir)
     except RecoveryRecordError:
