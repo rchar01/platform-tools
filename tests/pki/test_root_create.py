@@ -89,6 +89,7 @@ def _normalize_root_identity(
     labels: dict[str, str],
     *,
     dynamic_size: bool,
+    object_label: str | None = None,
 ) -> str:
     full = _FULL_IDENTITY.fullmatch(value)
     object_state = _OBJECT_IDENTITY.fullmatch(value)
@@ -96,14 +97,14 @@ def _normalize_root_identity(
     match = full or object_state or directory
     if match is None:
         raise ValueError("Root writer differential identity is malformed")
-    object_label = labels.setdefault(
+    label = object_label or labels.setdefault(
         match["object"], f"<OBJECT-{len(labels) + 1}>"
     )
     if directory is not None:
-        return f"{object_label}:{match['uid']}:{match['mode']}:directory"
+        return f"{label}:{match['uid']}:{match['mode']}:directory"
     size = "<DYNAMIC-SIZE>" if dynamic_size else match["size"]
     normalized = (
-        f"{object_label}:{match['uid']}:{match['mode']}:{match['links']}:"
+        f"{label}:{match['uid']}:{match['mode']}:{match['links']}:"
         f"{size}"
     )
     if full is not None:
@@ -126,6 +127,7 @@ def _root_writer_content_normalizer(*roots: Path):
         ):
             return content
 
+        fields = dict(line.removesuffix("\n").split("=", 1) for line in lines)
         labels: dict[str, str] = {}
         normalized = []
         for line in lines:
@@ -135,15 +137,70 @@ def _root_writer_content_normalizer(*roots: Path):
             for root in root_text:
                 value = value.replace(root, "<WORKSPACE>")
             if key in _ROOT_IDENTITY_FIELDS and value not in {"absent", "none"}:
+                field_scoped = (
+                    key == "bootstrap_identity"
+                    and fields.get("phase") == "rolled-back"
+                ) or (
+                    key == "reservation_reserved_identity"
+                    and value != fields.get("reservation_identity")
+                )
                 value = _normalize_root_identity(
                     value,
                     labels,
                     dynamic_size=key in _DYNAMIC_RESERVATION_SIZE_FIELDS,
+                    object_label=(
+                        f"<FIELD-OBJECT:{key}>" if field_scoped else None
+                    ),
                 )
             normalized.append(f"{key}={value}\n")
         return "".join(normalized).encode("ascii")
 
     return normalize
+
+
+def test_root_writer_normalizer_ignores_unlinked_inode_reuse() -> None:
+    reserved = "1:10:1000:600:1:50:regular file"
+    abandoned = "1:12:1000:600:1:50:regular file"
+    bootstrap_reused = "1:10:1000:600:1:40:regular file"
+    bootstrap_distinct = "1:11:1000:600:1:40:regular file"
+    common = (
+        "phase=rolled-back\n"
+        "reservation_identity={abandoned}\n"
+        "reservation_reserved_identity={reserved}\n"
+        "bootstrap_identity={bootstrap}\n"
+    )
+    normalize = _root_writer_content_normalizer()
+
+    reused = normalize(
+        "state/rollover/journal",
+        common.format(
+            abandoned=abandoned, reserved=reserved, bootstrap=bootstrap_reused
+        ).encode("ascii"),
+    )
+    distinct = normalize(
+        "state/rollover/journal",
+        common.format(
+            abandoned=abandoned, reserved=reserved, bootstrap=bootstrap_distinct
+        ).encode("ascii"),
+    )
+
+    assert reused == distinct
+
+
+def test_root_writer_normalizer_preserves_live_reservation_alias() -> None:
+    identity = "1:10:1000:600:1:50:regular file"
+    content = (
+        "phase=reserved\n"
+        f"reservation_identity={identity}\n"
+        f"reservation_reserved_identity={identity}\n"
+    ).encode("ascii")
+
+    normalized = _root_writer_content_normalizer()(
+        "state/rollover/journal", content
+    ).decode("ascii")
+
+    assert normalized.count("<OBJECT-1>") == 2
+    assert "<FIELD-OBJECT:" not in normalized
 
 
 def _deterministic_openssl(tmp_path: Path) -> Path:
