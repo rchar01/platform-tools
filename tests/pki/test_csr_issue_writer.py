@@ -1269,16 +1269,16 @@ def test_unowned_final_bash_signature_is_recreated_instead_of_adopted(
     assert_result(manual, 0)
     signature = signing / "response.sig"
     signature.chmod(0o600)
-    unowned_inode = signature.stat().st_ino
+    with signature.open("rb") as unowned:
+        unowned_inode = os.fstat(unowned.fileno()).st_ino
+        recovered = _recover_with_environment(
+            csr_workspace,
+            committed=True,
+            env=base,
+        )
 
-    recovered = _recover_with_environment(
-        csr_workspace,
-        committed=True,
-        env=base,
-    )
-
-    assert_result(recovered, 0, stderr="")
-    assert signature.stat().st_ino != unowned_inode
+        assert_result(recovered, 0, stderr="")
+        assert signature.stat().st_ino != unowned_inode
     assert log.read_text(encoding="ascii").splitlines() == ["sign", "verify"]
 
 
