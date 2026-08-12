@@ -3,18 +3,18 @@
 ## Status
 
 Phase 0 contract expansion remains in progress. Phases 1 through 5 are
-implemented. Phase 6 has Python-backed compatibility and unified `root-create`,
-`intermediate-create`, and `service-issue` routes plus unified
-`platform-pki ca-rollover recover`; `csr-recover` compatibility and unified
-dispatch are also Python-backed. Direct rollover compatibility remains Bash.
+implemented. Phase 6 and Phase 7 have Python-backed compatibility and unified
+`root-create`, `intermediate-create`, `csr-trust-install`,
+`certificate-export`, `csr-candidate`, `service-issue`, `csr-recover`, and
+`ca-rollover` routes.
 Managed service issue uses its Python schema-1 transaction writer, and exact
 managed recovery is public through unified-only `platform-pki service-recover`.
 Managed and host-local service renew now dispatch through the same Python
-handler for compatibility and unified routes. Remaining Bash-owned PKI command
-families are `csr-trust-install`, `certificate-export`, `csr-candidate`, and
-direct `ca-rollover` operations. Migration remains forward-only: installing an
+handler for compatibility and unified routes. Retained PKI Bash implementations
+are frozen compatibility oracles. Migration remains forward-only: installing an
 older Bash release after Python has written state is unsupported, and retained
-PKI shell libraries cannot be removed while those Bash commands remain.
+PKI shell libraries cannot be removed while live signing and shared-asset
+consumers or frozen compatibility tests still require them.
 
 ## Goal
 
@@ -229,13 +229,15 @@ Recorded cutovers:
 | `platform-pki-export-ansible` | `00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b` | `tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible` |
 | `platform-pki-root-create` | `ba9dd57214cae18f82c83dfb54b6ddce13882280` | `tests/pki/oracles/platform-pki-ca-rollover/platform-pki-root-create` |
 | `platform-pki-csr-trust-install` | `678daa6de2ea24ada1fd36199013347f79f303bf` | `tests/pki/oracles/platform-pki-csr-trust-install/platform-pki-csr-trust-install` |
+| `platform-pki-certificate-export` | `24db7d54ca5c113fe763d4007c5dfef507dc23a6` | `tests/pki/oracles/platform-pki-certificate-export/platform-pki-certificate-export` |
+| `platform-pki-csr-candidate` | `24db7d54ca5c113fe763d4007c5dfef507dc23a6` | `tests/pki/oracles/platform-pki-csr-candidate/platform-pki-csr-candidate` |
+| `platform-pki-ca-rollover` | `ba9dd57214cae18f82c83dfb54b6ddce13882280` | `tests/pki/oracles/platform-pki-ca-rollover/platform-pki-ca-rollover` |
 
 The CA recovery foundation also freezes the final Bash recovery and authority
 writer assets from `ba9dd57214cae18f82c83dfb54b6ddce13882280` under
-`tests/pki/oracles/platform-pki-ca-rollover/`. These are the retained authority-
-writer oracles and recovery evidence: unified recovery and root creation are
-Python while direct `platform-pki-ca-rollover recover` and the intermediate
-writer remain Bash.
+`tests/pki/oracles/platform-pki-ca-rollover/`. These are retained authority and
+rollover writer oracles and recovery evidence; all public rollover routes and
+both authority-creation routes are Python-backed.
 
 Recorded SHA-256 provenance for that oracle set is
 `7e9430e6d17969d5d1779e8073b9757e08157625e16b91969991e611953b806b`
@@ -415,15 +417,10 @@ Validation gate:
 Goal: Move related transaction protocols together after their shared primitives
 are proven.
 
-Approved sequencing exception: complete the `platform-pki-ca-rollover recover`
-leaf before migrating the Phase 6 root and intermediate authority writers. The
-leaf may temporarily coexist with Bash sibling leaves, matching the leaf-level
-Phase 7 migration order. Public recover dispatch remained Bash until the
-complete Python recovery state machines and differential gates were ready. That
-gate is now met for the unified `platform-pki ca-rollover recover` route; the
-`platform-pki-ca-rollover` compatibility executable and sibling leaves remain
-Bash. The earlier foundation checkpoints added codecs, strict record models,
-frozen oracles, and tests without mutating production recovery behavior.
+The approved sequencing exception completed unified rollover recovery before
+the authority writers and other rollover leaves. The complete compatibility and
+unified rollover command now use Python; frozen Bash assets remain for
+differential recovery and writer evidence.
 The compatibility and unified root and intermediate creation routes now share
 their respective Python schema-3 transaction writers.
 
@@ -502,8 +499,9 @@ CSR-recover checkpoint:
   `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`,
   and `ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f`.
 - [x] All retained signing and finalization differentials execute that frozen
-  oracle with its frozen libraries; final-Bash writer checkpoints remain
-  authoritative in the retained live shell writers.
+  oracle with its frozen libraries. Live Bash remains authoritative for signing
+  writer checkpoints; `src/platform_pki/csr_candidate.py` owns finalization
+  writer checkpoints and the frozen candidate library is compatibility evidence.
 - [x] Compatibility and unified routes share one Python handler and preserve
   parser, help, confirmation, diagnostics, output, and status contracts.
 - [x] Signing holds lifecycle through inventory; finalization holds lifecycle
@@ -648,20 +646,21 @@ Migration order:
 
 Tasks:
 
-- [ ] Model preparation, migration, bootstrap, publication, and terminal cleanup
+- [x] Model preparation, migration, bootstrap, publication, and terminal cleanup
   as explicit state machines.
-- [ ] Preserve schema, transaction fields, generation reservations, backup
+- [x] Preserve schema, transaction fields, generation reservations, backup
   receipts, trust snapshots, manifests, fault checkpoints, and recovery actions.
-- [ ] Reuse the established filesystem, lock, record, subprocess, and
+- [x] Reuse the established filesystem, lock, record, subprocess, and
   transaction primitives rather than creating rollover-specific duplicates.
-- [ ] Run Bash-to-Python and Python-to-Python crash recovery at every checkpoint.
-- [ ] Preserve the authoritative bounded-parallel rollover test suite.
+- [x] Run Bash-to-Python and Python-to-Python crash recovery at every checkpoint.
+- [x] Preserve the authoritative bounded-parallel rollover test suite.
 
 Validation gate:
 
-- [ ] Parser, preparation, migration, fault, lifecycle, recovery, and advanced
+- [x] Parser, preparation, migration, fault, lifecycle, recovery, and advanced
   rollover suites pass without skipped or weakened scenarios.
-- [ ] Rollover is independently releasable before Bash cleanup begins.
+- [ ] Rollover is independently releasable before Bash cleanup begins; final
+  `make container-check` acceptance remains pending.
 
 ## Phase 8: Retire PKI Bash Implementations
 
@@ -857,6 +856,10 @@ implementation.
 | 2026-08-11 | Host-local response-signature mutation ownership and test interception boundaries hardened. | Python recovery now writes a durable `response-signing` checkpoint before invoking `ssh-keygen`; only that owned post-sign/pre-evidence window may authenticate and adopt an exact safe signature after rechecking complete committed sources, while final-Bash-compatible `ca-committed` recovery removes and recreates a safe unowned signature. Malformed, unsafe-mode, hard-linked, or replaced signatures fail closed. OpenSSL interception regressions resolve the real executable before prepending an executable fake and assert invocation markers before profile or commit-gap outcomes. Pinned verification passed the expanded 73-test writer suite in 48.07 seconds, the 680-test CSR recovery foundation, two isolated descriptor/replacement signing tests, and six authenticated fixture-copy tests. Public issue dispatch and final-Bash compatibility remain unchanged; full acceptance was intentionally not run for this focused follow-up. |
 | 2026-08-11 | Service issue and managed recovery public cutover implemented. | `platform-pki-service-issue` and unified `service-issue` now share the Python managed/host-local handler; unified-only `service-recover` confirms and recovers one exact managed transaction. The final Bash executable from `6a7f162240c9970cf9a17091d9b37c8dea071ad8` is frozen at mode 755 and SHA-256 `c06bb8baba8d7a75f0a3a88f814b86740aab03f78eef2e8fcd05140534206fa5`, with loaded common and CSR-sign libraries pinned at SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f` and `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`. Service renew remains Bash-owned. |
 | 2026-08-11 | Service renewal public cutover implemented. | `platform-pki-service-renew` and unified `service-renew` now share one Python managed/host-local whole-command handler; managed interruption recovery remains unified-only through `service-recover`, while host-local recovery remains under `csr-recover`. Final Bash commit `c5a66cd846fe84bf7917da84613762b1f2db09ce` is frozen with mode/hash provenance and both managed and host-local differentials. Final focused verification passed 12 public renewal tests in 63.83 seconds, four managed writer/differential tests in 75.60 seconds, 47 host-local tests with four workers in 159.42 seconds, 167 managed recovery tests, 473 command-contract tests, 1,750 foundation tests, 175 installed-tool tests, and 48 migration-contract tests. Deterministic Bash/Python generation, static checks, and ShellCheck passed; full `make container-check` was intentionally not run for this focused cutover. |
+| 2026-08-12 | CSR trust installation public cutover implemented and final publication authorization hardened. | `platform-pki-csr-trust-install` and unified `csr-trust-install` now share one Python handler; final Bash commit `678daa6de2ea24ada1fd36199013347f79f303bf` is frozen with executable and loaded-library provenance. Frozen-oracle differentials cover fresh install, exact no-op, atomic update, and retained-root terminal history across all four signer rotations. Python-specific tests cover source, installed-state, inventory, retained-history, staging, lock, interruption, and immediate pre-publication authorization races. The bounded four-worker trust suite passed all 75 tests in 61.17 seconds; deterministic Python generation and static checks passed. Final `make container-check` remains reserved for migration acceptance. |
+| 2026-08-12 | Certificate export public cutover implemented and targeted acceptance completed. | Final Bash commit `24db7d54ca5c113fe763d4007c5dfef507dc23a6` is frozen at mode 755 and SHA-256 `21c73b92d8568a74e8b75f554831060309c4f998d4230d28b019d72c3e1f85fa`; loaded common and CSR-sign libraries are frozen at SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f` and `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`. Compatibility and unified `certificate-export publish|resolve` share one Python handler. Frozen-oracle differentials cover publication plus path, JSON, and wrong-pin resolution; final authenticated-source replacement races fail cleanly before publication or output. The expanded export suite passed 17 tests in 45.47 seconds; the Bash-owned candidate consumer passed 77 tests with four workers in 190.22 seconds; inventory, migration, parser, and foundation contracts passed 389 tests in 53.66 seconds; shared publication passed 175 tests; command contract passed 465 tests; and installed tools passed 175 tests. Deterministic Python generation, static verification, and whitespace checks passed. Final `make container-check` remains reserved for final migration acceptance. |
+| 2026-08-12 | CSR candidate public cutover implemented and handled-signal ownership hardened. | Final Bash commit `24db7d54ca5c113fe763d4007c5dfef507dc23a6` is frozen with executable SHA-256 `03566a3917505e1999e52e2ece0f7a29313cd8869c4f968802e6525c8a3b5c95` and exact common, CSR-sign, and candidate-library provenance. Compatibility and unified `csr-candidate verify|finalize|abandon` share one Python handler. Frozen-oracle help and state-tree differentials cover all three actions. Handled SIGHUP, SIGINT, and SIGTERM are deferred across pre-journal stage ownership and durable journal handoff; exact partial-stage cleanup cannot adopt foreign replacements, and post-journal interruption retains resume-only recovery. The committed compatibility candidate and finalization recovery target passed 104 tests; ownership, parser, foundation, inventory, migration, and Make contracts passed 424 tests; command contracts passed 461 tests; installed tools passed 175 tests; deterministic Python generation, static checks, retained Bash generation, ShellCheck, and whitespace checks passed. Final `make container-check` remains reserved for final migration acceptance. |
+| 2026-08-12 | CA rollover public cutover implemented and focused acceptance completed. | Final Bash commit `ba9dd57214cae18f82c83dfb54b6ddce13882280` remains frozen with executable SHA-256 `7e9430e6d17969d5d1779e8073b9757e08157625e16b91969991e611953b806b` and common-library SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified `ca-rollover migrate|status|prepare|recover` share Python handlers. Core migration, status, and preparation scenarios execute the generated compatibility launcher; private drivers remain limited to implementation-level race injection and frozen-oracle differentials. The complete four-worker rollover suite passed 544 tests, and focused trust-install, certificate-export, and candidate suites passed 75, 17, and 104 tests. Deterministic Python generation and the 250-test foundation passed. Final `make container-check` remains pending. |
 
 ## Decision Log
 

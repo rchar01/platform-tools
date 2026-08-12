@@ -44,6 +44,26 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through unified `service-recover`; host-local transactions continue to use
   `csr-recover`. Frozen final-Bash assets remain test oracles, not runtime
   ownership.
+- Changed `platform-pki-csr-trust-install` and unified
+  `platform-pki csr-trust-install` to use one Python handler while preserving
+  exact trust policy validation, retained-root historical authentication,
+  lifecycle-through-inventory locking, exact no-op behavior, and atomic
+  whole-directory publication. The final Bash executable and loaded libraries
+  remain frozen test oracles.
+- Changed `platform-pki-certificate-export` and unified
+  `platform-pki certificate-export publish|resolve` to use one Python handler
+  while preserving authenticated pending-response validation, immutable
+  certificate-only publication, exact digest-pinned resolution, locking, and
+  source and artifact identity rechecks. The final Bash executable and loaded
+  libraries remain frozen test oracles.
+- Changed `platform-pki-csr-candidate` and unified
+  `platform-pki csr-candidate verify|finalize|abandon` to use one Python
+  handler while preserving exact inventory, candidate, response, artifact,
+  deployment-trust, predecessor, terminal-history, and active-pointer
+  authentication. Finalization publishes the exact 82-field recovery journal
+  and delegates forward-only outcome and active-pointer publication to shared
+  CSR recovery. The final Bash executable and loaded libraries remain frozen
+  test oracles.
 - Changed `platform-pki-init` to use one Python 3.14 handler for its
   compatibility command and unified `platform-pki init` route, preserving its
   parser, help, path validation, private-tree creation, template publication,
@@ -119,16 +139,14 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   applicable inherited-descriptor boundaries; authoritative root files and
   rollback copies are bound to exact opened identities. Final-Bash and Python
   crash states remain recoverable through unified Python recovery.
-- Changed the unified `platform-pki ca-rollover recover` route to use Python
-  recovery state machines for final-Bash legacy migration, root and intermediate
-  bootstrap, rollover preparation, and receipt-bound terminal cleanup. Exact
-  journal rewrites, identity-bound mutation, lock ordering, diagnostics, output,
-  and action switching remain compatible for states final Bash accepts. Python
-  also authenticates and resumes root-DB publication or restoration completed
-  immediately before a pending journal rewrite, where final Bash fails closed
-  and leaves recovery required. The `platform-pki-ca-rollover` compatibility
-  executable and its sibling leaves remain Bash during the incremental rollover
-  migration.
+- Changed `platform-pki-ca-rollover` and unified `platform-pki ca-rollover` to
+  use shared Python handlers for migration, status, preparation, and recovery.
+  They preserve schema-2 and schema-5 journals, generation reservations,
+  immutable manifests, lock ordering, diagnostics, output, fault boundaries,
+  and recovery actions. Python also authenticates and resumes root-DB
+  publication or restoration completed immediately before a pending journal
+  rewrite, where final Bash fails closed and leaves recovery required. The
+  frozen final-Bash executable remains a differential-test oracle.
 - Changed `platform-pki-csr-recover` and unified `platform-pki csr-recover` to
   use one Python 3.14 handler for final-Bash signing and candidate-finalization
   journals. It preserves exact parser, help, confirmation, output, replay,

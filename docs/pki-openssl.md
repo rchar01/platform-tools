@@ -408,9 +408,12 @@ Install the reviewed public trust snapshot for authenticated CSR signing after
 PKI initialization:
 
 ```bash
+platform-pki csr-trust-install
 platform-pki-csr-trust-install
 platform-pki-csr-trust-install --private-repo /absolute/path/to/platform-private
 ```
+
+The unified and compatibility forms use the same Python handler.
 
 The source is `<private-repo>/pki/csr-trust`; the protected destination is
 `<pki-dir>/inventory/csr-trust`. The source directory must contain exactly:

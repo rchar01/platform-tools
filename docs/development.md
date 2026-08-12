@@ -74,11 +74,19 @@ cases; these measurements are diagnostic observations, not performance
 guarantees.
 
 `make test-pki-csr-candidate` directly collects its candidate and finalization
-recovery modules with bounded `PKI_PYTEST_WORKERS` and pytest `--dist load`. In
-the pinned test image on 2026-08-11, the 77-test target took 169.203 seconds of
-wall time with four workers, compared with 748.21 seconds serially: a 4.42x
-speedup and 77.4% wall-time reduction. These measurements are diagnostic
-observations, not performance guarantees.
+recovery modules with bounded `PKI_PYTEST_WORKERS` and pytest `--dist load`.
+The suite exercises the committed Python compatibility zipapp and retains the
+final Bash command only as a provenance-checked differential oracle. In the
+pinned test image on 2026-08-12, the pre-cutover 99-test source-built suite took
+142.51 seconds with four workers. This measurement is diagnostic, not a
+performance guarantee.
+
+`make test-pki-csr-trust-install` uses the same bounded worker setting and
+pytest distribution mode. In the pinned test image on 2026-08-12, its 75 tests
+took 61.17 seconds with four workers, compared with 185.58 seconds for the
+67-test serial suite before the final differential and default-path cases were
+added. The test counts differ, so this is an operational timing comparison, not
+a like-for-like benchmark or performance guarantee.
 
 The CSR signing, certificate-export, candidate, and schema-2 trust-install
 suites create one immutable PKI seed per pytest process. Every test receives a
@@ -339,7 +347,7 @@ filesystem durability operations. Before shell retirement, three four-worker
 runs completed the then-221-test suite without failures or skips in 560.24,
 548.54, and 548.57 seconds, compared with the 2501.68-second serial baseline.
 Two shell-harness-only progress tests were removed with the retired shell suite.
-The authoritative suite now collects 224 tests. Keep the serial target available
+The authoritative suite now collects 544 tests. Keep the serial target available
 for ordering and diagnostic checks.
 
 All 79 inventoried shell scenario groups have authoritative pytest mappings.

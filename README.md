@@ -94,7 +94,7 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki-backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- Python 3.14 or newer for the unified `platform-pki` zipapp and Python-backed `platform-pki-init`, `platform-pki-inventory-install`, `platform-pki-root-create`, `platform-pki-intermediate-create`, `platform-pki-csr-recover`, `platform-pki-service-issue`, `platform-pki-service-renew`, `platform-pki-print-cert`, `platform-pki-list-expiry`, `platform-pki-service-verify`, `platform-pki-export-ansible`, `platform-pki-backup`, `platform-pki-custody-report`, and `platform-pki-ca-passphrase-verify`; other operational PKI commands remain on their existing Bash executables during migration
+- Python 3.14 or newer for the unified `platform-pki` zipapp and all Python-backed `platform-pki-*` compatibility commands, including `platform-pki-ca-rollover`
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki-custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
@@ -199,17 +199,17 @@ Run the authoritative PKI rollover pytest scenarios:
 make test-pki-ca-rollover
 ```
 
-Run the same complete suite with final-Bash migration, status, preparation, and
-writer commands while routing recovery leaves through the generated unified
-Python command:
+Run the same complete suite while forcing recovery scenarios through the
+generated unified command instead of the Python compatibility launcher:
 
 ```bash
 make test-pki-ca-rollover-python-recover
 ```
 
-The shipped unified `platform-pki ca-rollover recover` route uses that Python
-handler. The compatibility `platform-pki-ca-rollover` executable, including its
-`recover` leaf, remains Bash while the rest of rollover migrates incrementally.
+The compatibility `platform-pki-ca-rollover` executable and unified
+`platform-pki ca-rollover` route use the same Python handlers for migration,
+status, preparation, and recovery. Frozen final-Bash assets remain only as
+differential-test oracles.
 
 Within `make test`, the authoritative rollover target runs only after the
 non-rollover pool and uses four workers by default. Invoking the rollover target
@@ -467,12 +467,36 @@ revocation. Managed keys and exports remain
 through the configured hold and require separate cleanup approval. Explicit
 host-local Ansible export remains rejected.
 
+Publish or resolve one exact certificate-only pending response with either the
+unified or compatibility command:
+
+```bash
+platform-pki certificate-export publish platform-example \
+  --request-id 0123456789abcdef0123456789abcdef
+platform-pki-certificate-export publish platform-example \
+  --request-id 0123456789abcdef0123456789abcdef
+
+platform-pki certificate-export resolve platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --manifest-sha256 <sha256>
+platform-pki-certificate-export resolve platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --manifest-sha256 <sha256>
+```
+
+Both forms use the same Python handler. Publication contains no private key;
+resolution requires the reported exact manifest digest and performs no
+deployment or finalization.
+
 Install reviewed public trust before signing:
 
 ```bash
+platform-pki csr-trust-install
 platform-pki-csr-trust-install
 platform-pki-csr-trust-install --private-repo /absolute/path/to/platform-private
 ```
+
+The unified and compatibility forms use the same Python handler.
 
 The command accepts the exact four-file schema-1 signing/export trust set or
 the exact five-file schema-2 set that adds `deployers.allowed_signers` under

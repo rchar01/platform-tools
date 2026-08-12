@@ -15,6 +15,28 @@ This file gives a short, release-oriented view of what changed between versions.
   `service-recover`; host-local interruption recovery remains with
   `csr-recover`. The final Bash command and its loaded libraries are retained
   only as frozen compatibility-test evidence.
+- `platform-pki-csr-trust-install` and unified
+  `platform-pki csr-trust-install` now share one Python handler. Trust rotation
+  continues to authenticate historical responses and deployments with their
+  immutable retained signer roots, while preserving exact no-op behavior,
+  current-inventory bindings, four-lock coverage, and atomic whole-directory
+  publication.
+- `platform-pki-certificate-export` and unified
+  `platform-pki certificate-export publish|resolve` now share one Python
+  handler. Publication remains certificate-only, immutable, and bound to one
+  authenticated pending CSR response; resolution still requires the exact
+  service, request ID, and manifest digest and performs no finalization.
+- `platform-pki-csr-candidate` and unified
+  `platform-pki csr-candidate verify|finalize|abandon` now share one Python
+  handler. Decisions still authenticate exact schema-2 deployment evidence,
+  preserve immutable terminal history, and delegate journaled finalization to
+  resume-only CSR recovery without performing or claiming live deployment.
+- `platform-pki-ca-rollover` and unified `platform-pki ca-rollover` now share
+  Python handlers for `migrate`, `status`, `prepare`, and `recover`. The
+  migration and preparation writers preserve their schema-2 and schema-5
+  journals, generation reservations, immutable manifests, fault boundaries,
+  and recovery actions; the final Bash command remains only as a frozen
+  compatibility oracle.
 - Added the deterministic, standard-library-only `platform-pki` Python 3.14
   zipapp as the unified migration interface. The foundation build provides the
   frozen 25-route parser, strict ordered-record and inventory models, bounded
@@ -86,9 +108,7 @@ This file gives a short, release-oriented view of what changed between versions.
   rollover preparation, and receipt-bound terminal cleanup. It preserves
   final-Bash journal, output, and recovery-action contracts
   for previously accepted states and additionally resumes authenticated root-DB
-  publication windows that Bash leaves recovery-required. The compatibility
-  `platform-pki-ca-rollover` executable and other operational routes not yet
-  migrated remain on Bash.
+  publication windows that Bash leaves recovery-required.
 - `platform-pki-csr-recover` and `platform-pki csr-recover` now share one Python
   recovery handler. It preserves final-Bash signing and candidate-finalization
   journals, exact confirmation and output contracts, pre-commit rollback,

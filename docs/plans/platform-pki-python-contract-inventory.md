@@ -8,16 +8,14 @@ existing tests remain the authoritative oracle until each command is cut over.
 The three Phase 3 read-oriented commands, all Phase 4 bounded-publication
 commands (`platform-pki-init`, `platform-pki-inventory-install`, and
 `platform-pki-export-ansible`), and the Phase 5 utility commands are
-Python-backed. Phase 6 has Python-backed compatibility and unified
-`root-create`, `intermediate-create`, `csr-recover`, `service-issue`, and
-`service-renew` routes plus unified
-`platform-pki ca-rollover recover`; the `platform-pki-ca-rollover`
-compatibility executable and other rollover leaves remain Bash. Managed and
+Python-backed. Phase 6 and the rollover phase have Python-backed compatibility and unified
+`root-create`, `intermediate-create`, `csr-recover`, `csr-trust-install`,
+`certificate-export`, `csr-candidate`, `service-issue`, `service-renew`, and
+`ca-rollover` routes. Managed and
 host-local service issue and renew compatibility and unified routes share their
 Python handlers. Exact managed transaction recovery is exposed only through
-unified `service-recover`. The remaining Bash-owned PKI command families are
-`csr-trust-install`, `certificate-export`, `csr-candidate`, and direct
-`ca-rollover` operations.
+unified `service-recover`. Retained PKI Bash implementations are compatibility
+oracles rather than runtime ownership.
 
 ## Runtime and Interfaces
 
@@ -314,16 +312,16 @@ or regenerated during migration.
 | CSR request | 1 | `PKI_CSR_REQUEST_FIELDS` | `platform-pki-csr-sign.sh` |
 | CSR approval | 1 | `PKI_CSR_APPROVAL_FIELDS` | `platform-pki-csr-sign.sh` |
 | CSR signing journal | 1 | 114 fixed writer-order fields | `src/platform_pki/csr_recovery.py`, checked against `PKI_CSR_JOURNAL_FIELDS` |
-| CSR response | 1 | `PKI_CANDIDATE_RESPONSE_FIELDS` | `platform-pki-csr-candidate.sh` |
-| CSR candidate | 1 | `PKI_CANDIDATE_RECORD_FIELDS` | `platform-pki-csr-candidate.sh` |
+| CSR response | 1 | `CSR_RESPONSE_FIELDS` | `src/platform_pki/csr_protocol.py`, checked against the frozen candidate library |
+| CSR candidate | 1 | `CSR_CANDIDATE_FIELDS` | `src/platform_pki/csr_protocol.py`, checked against the frozen candidate library |
 | CSR replay request | 1 | 9 fixed fields | literal writer in `platform-pki-csr-sign.sh` |
 | CSR replay nonce | 1 | 5 fixed fields | literal writer in `platform-pki-csr-sign.sh` |
 | CSR signing terminal | 1 | 7 fixed fields | literal writer in `platform-pki-csr-sign.sh` |
-| Export manifest | 1 | `PKI_CERTIFICATE_EXPORT_ARTIFACT_FIELDS` | certificate-export initializer |
-| Deployment evidence | 1 | `PKI_CANDIDATE_DEPLOYMENT_FIELDS` | `platform-pki-csr-candidate.sh` |
-| Active candidate pointer | 1 | `PKI_CANDIDATE_ACTIVE_FIELDS` | `platform-pki-csr-candidate.sh` |
-| Candidate outcome | 1 | `PKI_CANDIDATE_DECISION_FIELDS` | `platform-pki-csr-candidate.sh` |
-| Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py` and non-public `src/platform_pki/csr_recover.py`, checked against `PKI_CANDIDATE_JOURNAL_FIELDS` |
+| Export manifest | 1 | `CSR_ARTIFACT_FIELDS` | `src/platform_pki/certificate_export.py`, checked against the frozen certificate-export initializer |
+| Deployment evidence | 1 | `CSR_DEPLOYMENT_FIELDS` | `src/platform_pki/csr_history.py`, checked against the frozen candidate library |
+| Active candidate pointer | 1 | `CSR_ACTIVE_FIELDS` | `src/platform_pki/csr_history.py`, checked against the frozen candidate library |
+| Candidate outcome | 1 | `CSR_DECISION_FIELDS` | `src/platform_pki/csr_history.py`, checked against the frozen candidate library |
+| Candidate finalization journal | 1 | 82 fixed writer-order fields | `src/platform_pki/csr_recovery.py`, written by `src/platform_pki/csr_candidate.py` and recovered by `src/platform_pki/csr_recover.py`, checked against the frozen candidate library |
 | Managed service transaction journal | 1 | 485 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` and operational `src/platform_pki/service_recover.py` |
 | Managed service retained transaction | 1 | 13 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
 | Managed service retained terminal | 1 | 10 fixed writer-order fields | non-public `src/platform_pki/service_transaction.py` |
@@ -332,12 +330,13 @@ or regenerated during migration.
 | Rollover preparation journal | 5 | C-locale key order | rollover prepare/recover sources |
 | Rollover prepared-state manifest | 1 | canonical key order | rollover prepare source |
 
-Array-defined CSR, candidate, and certificate-export records have exact ordered
-field tuples in `tests/pki/migration_contract.py`; infrastructure tests compare
-those tuples with the authoritative shell declarations and verify the duplicate
-export/candidate declarations remain equal. Exact executable extraction of the
-remaining literal and dynamically assembled writers, including schema values
-and final-newline behavior, remains a Phase 0 item.
+Python-owned CSR, candidate, and certificate-export records use the exact ordered
+field tuples from `src/platform_pki/csr_protocol.py`,
+`src/platform_pki/csr_history.py`, and `src/platform_pki/csr_recovery.py`.
+Infrastructure tests compare those tuples with the frozen final candidate
+library. Exact executable extraction of the remaining literal and dynamically
+assembled writers, including schema values and final-newline behavior, remains a
+Phase 0 item.
 
 CA recovery field tuples are now authoritative in
 `src/platform_pki/ca_rollover_recovery.py` and are re-exported by
@@ -355,14 +354,14 @@ shape is one intermediate successful-copy checkpoint, not the complete family.
 Schema-5 typing now validates the complete declared field set, cumulative
 runtime-copy shapes, manifest triples, exact path relationships, typed identity
 sentinels, transaction-manifest rotation, and terminal marker/receipt bindings.
-The unified recovery route now binds those records to live filesystem state and
+The Python recovery handler now binds those records to live filesystem state and
 performs identity-checked recovery mutations for legacy migration, root and
 intermediate bootstrap, rollover preparation, and receipt-bound terminal
 cleanup. It accepts all supported final-Bash states and also resumes an
 authenticated root-DB publication or restoration completed immediately before
 its pending journal rewrite; final Bash rejects that narrow post-mutation
-window. The final Bash compatibility executable remains the retained oracle and
-continues to handle direct `platform-pki-ca-rollover recover` invocations. The
+window. The final Bash executable remains the retained differential oracle;
+direct and unified rollover invocations use the Python handlers. The
 Python root writer preserves the fixed schema-3 writer order and exact
 reservation/bootstrap encodings. It requires ASCII PKI paths so every persisted
 path remains representable by the canonical recovery-record codec, and defers
@@ -627,8 +626,11 @@ For initial migration, the following remain byte-identical:
 ### Candidate finalization
 
 - Recovery is resume-only and source-complete.
-- Tested crash checkpoints are `journal-written`, `outcome-published`, and
-  `active-published`.
+- Python writer ownership covers the pre-journal `outcome-staged` and
+  `active-staged` checkpoints. The retained `journal-written`,
+  `outcome-published`, and `active-published` phases preserve final-Bash
+  compatibility, while the recovery suite directly parameterizes the complete
+  `CSR_FINALIZATION_RECOVERY_CHECKPOINTS` domain.
 - Every journal-bound source identity and digest is revalidated.
 - Python recovery performs live validation, durable publication,
   and identity-bound cleanup for candidate finalization. Final-Bash and
