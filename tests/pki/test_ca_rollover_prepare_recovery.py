@@ -1095,7 +1095,10 @@ def test_staged_root_db_source_identities(
         isolated_environment,
         process_runner,
     )
-    common_library = Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
+    common_library = (
+        Path(__file__).resolve().parents[2]
+        / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+    )
 
     for key in PRESENT_ROOT_DB_KEYS:
         source = _root_db_path(transaction_directory, record, key)

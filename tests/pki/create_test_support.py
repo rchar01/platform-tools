@@ -48,7 +48,10 @@ def tools() -> CreateTools:
             Path(recover) if recover else binaries / "platform-pki-ca-rollover"
         ),
         version=(repository / "VERSION").read_text().strip(),
-        common=repository / "lib/platform-pki-common.sh",
+        common=(
+            repository
+            / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+        ),
     )
 
 

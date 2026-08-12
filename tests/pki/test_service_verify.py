@@ -165,7 +165,9 @@ def _environment(
     environment = dict(os.environ)
     environment.update(
         PATH=f"{fake_bin}:{environment['PATH']}",
-        REAL_COMMON=os.fspath(ROOT / "lib/platform-pki-common.sh"),
+        REAL_COMMON=os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+        ),
         PLATFORM_TOOLS_LIB_DIR=os.fspath(fake_library.parent),
         VERIFY_FAILURE=failure,
         VERIFY_LOG=os.fspath(log),
@@ -183,7 +185,10 @@ def _run(
     effective_environment = environment
     if command == (ORACLE,):
         effective_environment = dict(os.environ if environment is None else environment)
-        effective_environment.setdefault("PLATFORM_TOOLS_LIB_DIR", os.fspath(ROOT / "lib"))
+        effective_environment.setdefault(
+            "PLATFORM_TOOLS_LIB_DIR",
+            os.fspath(ROOT / "tests/pki/oracles/final-bash-source/lib"),
+        )
     return process_runner([*command, *arguments], env=effective_environment)
 
 
@@ -364,7 +369,9 @@ def test_extension_openssl_failure_still_runs_grep(
     environment = dict(
         os.environ,
         PATH=f"{fake_bin}:{os.environ['PATH']}",
-        PLATFORM_TOOLS_LIB_DIR=os.fspath(ROOT / "lib"),
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        ),
         VERIFY_LOG=os.fspath(log),
     )
 
@@ -467,20 +474,17 @@ def test_bash_python_success_state_and_output_are_equivalent(tmp_path: Path) -> 
     result.assert_equivalent()
 
 
-def test_installed_share_directory_layout(
+def test_missing_installed_share_library_is_ignored(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
     pki, fake_library, fake_bin = _workspace(tmp_path)
     tool = tmp_path / "installed/bin/platform-pki-service-verify"
     tool.parent.mkdir(mode=0o700, parents=True)
-    installed_library = tmp_path / "installed/share/lib/platform-pki-common.sh"
-    installed_library.parent.mkdir(mode=0o700, parents=True)
     shutil.copy2(TOOL, tool)
-    shutil.copy2(fake_library, installed_library)
     environment, _ = _environment(tmp_path, fake_library, fake_bin, "none")
     environment = dict(environment)
     environment.pop("PLATFORM_TOOLS_LIB_DIR")
-    environment["PLATFORM_TOOLS_SHARE_DIR"] = os.fspath(installed_library.parents[1])
+    environment["PLATFORM_TOOLS_SHARE_DIR"] = os.fspath(tmp_path / "installed/share")
 
     result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment, tool)
 
@@ -513,14 +517,19 @@ def test_help_does_not_require_shared_library(
     assert result.stderr == ""
 
 
-def test_command_requires_shared_library(
+def test_command_operates_without_shared_library(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
-    pki, _, _ = _workspace(tmp_path)
-    tool, environment = _isolated_tool(tmp_path)
+    pki, fake_library, fake_bin = _workspace(tmp_path)
+    tool, isolated = _isolated_tool(tmp_path)
+    environment, _ = _environment(tmp_path, fake_library, fake_bin, "none")
+    environment = dict(environment)
+    environment.pop("PLATFORM_TOOLS_LIB_DIR")
+    environment["HOME"] = isolated["HOME"]
+    environment["PLATFORM_TOOLS_SHARE_DIR"] = isolated["PLATFORM_TOOLS_SHARE_DIR"]
 
     result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment, tool)
 
-    assert result.status == 1
-    assert result.stdout == ""
-    assert "platform-pki-common.sh not found" in result.stderr
+    assert result == ProcessResult(
+        result.args, 0, "[OK] Verified service certificate: platform-example\n", ""
+    )

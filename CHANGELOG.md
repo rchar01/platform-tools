@@ -32,6 +32,14 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Retired the production PKI Bashly workspaces and the installed
+  `platform-pki-common.sh`, `platform-pki-csr-sign.sh`, and
+  `platform-pki-csr-candidate.sh` libraries. All maintained PKI routes and
+  current-release compatibility names now execute deterministic Python zipapps;
+  final-Bash executables, loaded libraries, and required source fragments remain
+  immutable test evidence under `tests/pki/oracles/`. Installation continues to
+  publish PKI templates, and compatibility names remain until the approved next
+  major release.
 - Changed `platform-pki-service-issue` and `platform-pki service-issue` to use
   one Python handler for managed issuance and authenticated host-local issue or
   migration. Added unified-only `platform-pki service-recover --transaction`
@@ -95,14 +103,13 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `platform-pki-service-verify` to use the same Python 3.14 operational handlers
   as their unified `platform-pki` routes, preserving their command names,
   parser and help contracts, output and status behavior,
-  lifecycle-through-inventory locks, OpenSSL child behavior, shared-asset
-  lookup, and legacy-state rejection. Other operational PKI commands remain on
-  Bash during migration.
+  lifecycle-through-inventory locks, OpenSSL child behavior, and legacy-state
+  rejection without loading an installed shell library.
 - Changed `platform-pki-custody-report` to use one Python 3.14 handler for its
   compatibility command and unified `platform-pki custody-report` route. It
   preserves exact text and compact schema-1 JSON bytes, ordering, findings,
   statuses, legacy/generation support, receipt compatibility, storage evidence,
-  installed common-library lookup, and lifecycle-through-export locking. It
+  and lifecycle-through-export locking. It
   strengthens no-follow identity and ancestry checks, enumerates metadata
   descriptor-relatively without sensitive temporary path lists, bounds helper
   output and runtime, and still never decrypts, cryptographically parses, hashes,

@@ -38,6 +38,7 @@ from src.platform_pki.persisted_identity import IdentitySentinel
 PKI_DIR = "/srv/platform/pki"
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE_ROOT = ROOT / "tests/pki/oracles/platform-pki-csr-recover"
+FINAL_BASH_LIB = ROOT / "tests/pki/oracles/final-bash-source/lib"
 ORACLE_COMMIT = "0843c1c11b952aab39f5c95b5eced82989656eb3"
 ORACLE_HASHES = {
     "platform-pki-csr-recover": "181528862958bf5a0810b3cae5c773b5f3d395c68226f2e2d17f019ad0757271",
@@ -503,7 +504,7 @@ def test_finalization_structure_requires_nonempty_values_and_one_newline() -> No
 
 
 def test_journal_newline_rules_match_the_shell_readers() -> None:
-    signing_source = (ROOT / "lib/platform-pki-csr-sign.sh").read_text(
+    signing_source = (FINAL_BASH_LIB / "platform-pki-csr-sign.sh").read_text(
         encoding="utf-8"
     )
     signing_reader = signing_source[
@@ -512,7 +513,7 @@ def test_journal_newline_rules_match_the_shell_readers() -> None:
     ]
     assert 'while IFS= read -r -u "$fd" line || [[ -n $line ]]; do' in signing_reader
 
-    candidate_source = (ROOT / "lib/platform-pki-csr-candidate.sh").read_text(
+    candidate_source = (FINAL_BASH_LIB / "platform-pki-csr-candidate.sh").read_text(
         encoding="utf-8"
     )
     candidate_reader = candidate_source[candidate_source.index("pki_candidate_recover()") :]
@@ -524,7 +525,7 @@ def test_journal_newline_rules_match_the_shell_readers() -> None:
 
 
 def test_signing_evidence_order_matches_the_shell_writer_and_recovery_rewrites() -> None:
-    source = (ROOT / "lib/platform-pki-csr-sign.sh").read_text(encoding="utf-8")
+    source = (FINAL_BASH_LIB / "platform-pki-csr-sign.sh").read_text(encoding="utf-8")
     external = source[
         source.index("pki_csr_sign_external()") : source.index("pki_csr_recover()")
     ]

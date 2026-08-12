@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import re
 import shlex
 from pathlib import Path
@@ -64,12 +65,35 @@ from .migration_contract import (
 
 pytestmark = pytest.mark.infrastructure
 ROOT = Path(__file__).parents[2]
+FINAL_BASH_SOURCE = ROOT / "tests/pki/oracles/final-bash-source"
 ROOT_CREATE_ORACLE = "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-root-create"
 INTERMEDIATE_CREATE_ORACLE = "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-intermediate-create"
 
 
 def _source(path: str) -> str:
-    return (ROOT / path).read_text(encoding="utf-8")
+    source = Path(path)
+    if source.parts[0] in {"bashly", "lib"}:
+        source = FINAL_BASH_SOURCE / source
+    else:
+        source = ROOT / source
+    return source.read_text(encoding="utf-8")
+
+
+def test_final_bash_source_manifest_is_complete_and_current() -> None:
+    entries = {}
+    for line in (FINAL_BASH_SOURCE / "SHA256SUMS").read_text(encoding="ascii").splitlines():
+        digest, relative = line.split("  ", 1)
+        assert relative not in entries
+        entries[relative] = digest
+    actual = {
+        path.relative_to(FINAL_BASH_SOURCE).as_posix()
+        for root in (FINAL_BASH_SOURCE / "bashly", FINAL_BASH_SOURCE / "lib")
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assert set(entries) == actual
+    for relative, digest in entries.items():
+        assert hashlib.sha256((FINAL_BASH_SOURCE / relative).read_bytes()).hexdigest() == digest
 
 
 def _source_record_block(path: str, start: str, end: str) -> str:
@@ -328,7 +352,7 @@ def test_python_command_map_matches_frozen_command_inventory() -> None:
     }
 
 
-def test_command_inventory_matches_make_and_bashly_sources() -> None:
+def test_command_inventory_matches_make_and_final_bash_source_oracles() -> None:
     expected = {
         contract.compatibility_name
         for contract in PKI_COMMAND_CONTRACTS
@@ -340,18 +364,25 @@ def test_command_inventory_matches_make_and_bashly_sources() -> None:
         for name in _make_words(variable)
         if name.startswith("platform-pki-")
     }
-    bashly = {
+    production_bashly = {
         definition.parents[1].name
         for definition in (ROOT / "bashly").glob("platform-pki-*/src/bashly.yml")
     }
+    oracle_bashly = {
+        definition.parents[1].name
+        for definition in (FINAL_BASH_SOURCE / "bashly").glob(
+            "platform-pki-*/src/bashly.yml"
+        )
+    }
     assert maintained == expected
-    assert bashly == expected
+    assert production_bashly == set()
+    assert oracle_bashly == expected
     active_bashly = {
         name
         for name in _make_words("BASHLY_TOOLS")
         if name.startswith("platform-pki-")
     }
-    assert active_bashly <= bashly
+    assert not active_bashly
     assert "platform-pki-service-renew" not in active_bashly
     assert "platform-pki-service-renew" in _make_words("PYTHON_ZIPAPPS")
     assert "platform-pki-csr-candidate" not in active_bashly
@@ -378,8 +409,10 @@ def test_nested_command_inventory_matches_current_command_families() -> None:
     }
 
 
-def test_parser_route_inventory_exactly_matches_resolved_bashly_yaml() -> None:
-    definitions = sorted((ROOT / "bashly").glob("platform-pki-*/src/bashly.yml"))
+def test_parser_route_inventory_exactly_matches_final_bashly_yaml() -> None:
+    definitions = sorted(
+        (FINAL_BASH_SOURCE / "bashly").glob("platform-pki-*/src/bashly.yml")
+    )
     actual = tuple(route for definition in definitions for route in _normalize_yaml_routes(definition))
     assert len(definitions) == 18
     frozen = tuple(
@@ -434,14 +467,14 @@ def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
         assert match is not None, contract
         assert tuple(match.group(1).split()) == contract.fields
     all_calls = []
-    for path in sorted((ROOT / "bashly").glob("platform-pki-*/src/*command.sh")) + sorted(
-        (ROOT / "bashly").glob("platform-pki-*/src/initialize.sh")
+    for path in sorted((FINAL_BASH_SOURCE / "bashly").glob("platform-pki-*/src/*command.sh")) + sorted(
+        (FINAL_BASH_SOURCE / "bashly").glob("platform-pki-*/src/initialize.sh")
     ):
         if "platform-pki-csr-candidate" in path.parts:
             continue
         source = path.read_text(encoding="utf-8")
         all_calls.extend(
-            (path.relative_to(ROOT).as_posix(), tuple(match.group(1).split()))
+            (path.relative_to(FINAL_BASH_SOURCE).as_posix(), tuple(match.group(1).split()))
             for match in re.finditer(r"(?m)^\s*pki_reject_repeated_options ((?:--[a-z0-9-]+ ?)+)$", source)
         )
     expected_calls = {
@@ -496,7 +529,7 @@ def test_pilot_runtime_dependencies_are_unique_and_source_backed() -> None:
     assert len(keys) == len(set(keys))
 
 
-def test_pilot_installed_assets_are_source_and_test_backed() -> None:
+def test_final_bash_assets_are_oracle_source_and_test_backed() -> None:
     pilot_routes = {("print-cert",), ("list-expiry",), ("service-verify",)}
     paths = []
     for contract in PILOT_INSTALLED_ASSET_CONTRACTS:
@@ -727,19 +760,17 @@ def test_every_generation_reservation_writer_matches_a_declared_variant() -> Non
     source_paths = (
         *(
             path
-            for path in (ROOT / "bashly").rglob("*.sh")
-            if path
-            not in {
-                ROOT / "bashly/platform-pki-root-create/src/root_command.sh",
-                ROOT / "bashly/platform-pki-intermediate-create/src/root_command.sh",
-            }
+            for path in (FINAL_BASH_SOURCE / "bashly").rglob("*.sh")
         ),
-        *(ROOT / "lib").glob("*.sh"),
+        *(FINAL_BASH_SOURCE / "lib").glob("*.sh"),
         ROOT / ROOT_CREATE_ORACLE,
         ROOT / INTERMEDIATE_CREATE_ORACLE,
     )
     for path in source_paths:
-        relative = path.relative_to(ROOT).as_posix()
+        try:
+            relative = path.relative_to(FINAL_BASH_SOURCE).as_posix()
+        except ValueError:
+            relative = path.relative_to(ROOT).as_posix()
         records = _generation_record_fields(relative)
         if records:
             actual[relative] = records
@@ -1007,7 +1038,7 @@ def test_recovery_contracts_match_authoritative_sources() -> None:
         "platform-pki ca-rollover recover": "bashly/platform-pki-ca-rollover/src/recover_command.sh",
     }
     for contract in RECOVERY_CONTRACTS:
-        source = (ROOT / contract.checkpoint_source).read_text(encoding="utf-8")
+        source = _source(contract.checkpoint_source)
         assert contract.operation in source
         assert re.search(rf"schema[^\n]*{contract.schema}", source)
         route_source = recovery_routes[contract.compatibility_recovery]

@@ -30,7 +30,6 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_inventory_readable,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     run_external,
@@ -420,7 +419,6 @@ def export_ansible(parsed: ParseResult) -> int:
     """Run the compatibility and unified Ansible export workflow."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     require_program("openssl", environment)
     services = tuple(parsed["services"])
     for service in services:

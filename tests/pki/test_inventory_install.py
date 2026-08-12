@@ -47,7 +47,10 @@ def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], na
 def run_interface(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], tool: tuple[Path | str, ...], namespace: Path, private: Path) -> ProcessResult:
     effective = dict(env)
     if tool == (ORACLE,):
-        effective.setdefault("PLATFORM_TOOLS_LIB_DIR", os.fspath(REPOSITORY / "lib"))
+        effective.setdefault(
+            "PLATFORM_TOOLS_LIB_DIR",
+            os.fspath(REPOSITORY / "tests/pki/oracles/final-bash-source/lib"),
+        )
     return process_runner(
         [*tool, "--namespace", namespace, "--private-repo", private],
         env=effective,
@@ -104,7 +107,7 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     )
     assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
     assert hashlib.sha256(
-        (REPOSITORY / "lib/platform-pki-common.sh").read_bytes()
+        (REPOSITORY / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh").read_bytes()
     ).hexdigest() == COMMON_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
@@ -442,7 +445,9 @@ def _run_inventory_differential(
 ):
     base_environment = environment(
         isolated_environment,
-        PLATFORM_TOOLS_LIB_DIR=os.fspath(REPOSITORY / "lib"),
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(
+            REPOSITORY / "tests/pki/oracles/final-bash-source/lib"
+        ),
     )
     if extra_environment is not None:
         base_environment.update(extra_environment)

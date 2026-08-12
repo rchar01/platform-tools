@@ -45,7 +45,6 @@ from .operational import (
     acquire_operational_locks,
     detect_layout,
     prepare_control_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -877,7 +876,6 @@ def ca_rollover_status(parsed: ParseResult) -> int:
     """Report exact recovery, layout, active, and prepared rollover state."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     paths = resolve_paths(parsed.values, environment)
     output_format = str(parsed["--format"])
     require_program("openssl", environment)

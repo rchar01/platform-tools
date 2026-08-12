@@ -94,27 +94,6 @@ def _script_directory() -> str:
         return os.path.realpath(directory)
 
 
-def _common_library(environment: Mapping[str, str]) -> str:
-    explicit = environment.get("PLATFORM_TOOLS_LIB_DIR", "")
-    if explicit:
-        candidate = f"{explicit}/platform-pki-common.sh"
-    else:
-        adjacent = f"{_script_directory()}/../lib/platform-pki-common.sh"
-        if os.access(adjacent, os.R_OK):
-            candidate = adjacent
-        else:
-            share = environment.get("PLATFORM_TOOLS_SHARE_DIR", "")
-            if not share:
-                data_home = environment.get("XDG_DATA_HOME", "")
-                if not data_home:
-                    data_home = f"{environment.get('HOME', '')}/.local/share"
-                share = f"{data_home}/platform-tools"
-            candidate = f"{share}/lib/platform-pki-common.sh"
-    if not os.path.isfile(candidate) or not os.access(candidate, os.R_OK):
-        _die("platform-pki-common.sh not found")
-    return candidate
-
-
 def _template_directory(environment: Mapping[str, str]) -> str:
     explicit = environment.get("PLATFORM_TOOLS_TEMPLATE_DIR", "")
     candidates = []
@@ -369,7 +348,6 @@ def initialize(parsed: ParseResult) -> int:
     """Create or refresh the Bash-compatible private PKI working tree."""
 
     environment = dict(os.environ)
-    _common_library(environment)
     namespace_value = parsed.values.get("--namespace")
     namespace = _expand_path(
         str(namespace_value) if namespace_value is not None else _default_namespace(environment),

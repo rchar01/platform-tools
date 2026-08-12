@@ -67,7 +67,8 @@ If `age` is unavailable, `platform-pki-backup` refuses to create an unencrypted 
 make install
 ```
 
-The install target copies command wrappers into `INSTALL_DIR` and shared PKI library/templates into `SHARE_DIR`.
+The install target copies commands into `INSTALL_DIR` and PKI templates into
+`SHARE_DIR`. PKI commands do not install or load shared shell libraries.
 
 Use custom paths when needed:
 
@@ -77,7 +78,7 @@ make install \
   SHARE_DIR="$PWD/.tools/share/platform-tools"
 ```
 
-If commands cannot find shared assets, set:
+If `platform-pki-init` cannot find its templates, set:
 
 ```bash
 export PLATFORM_TOOLS_SHARE_DIR="$PWD/.tools/share/platform-tools"

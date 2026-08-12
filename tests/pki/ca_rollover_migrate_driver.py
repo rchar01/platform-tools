@@ -11,7 +11,10 @@ from typing import Any
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, os.fspath(REPOSITORY))
-os.environ.setdefault("PLATFORM_TOOLS_LIB_DIR", os.fspath(REPOSITORY / "lib"))
+os.environ.setdefault(
+    "PLATFORM_TOOLS_LIB_DIR",
+    os.fspath(REPOSITORY / "tests/pki/oracles/final-bash-source/lib"),
+)
 
 from src.platform_pki import ca_rollover_migrate
 from src.platform_pki.errors import ApplicationError, render_error

@@ -15,6 +15,8 @@ from ..harness import ProcessResult
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 BIN = REPOSITORY / "bin"
+FINAL_BASH_SOURCE = REPOSITORY / "tests/pki/oracles/final-bash-source"
+FINAL_BASH_LIB = FINAL_BASH_SOURCE / "lib"
 
 
 def environment(base: Mapping[str, str], **values: str) -> dict[str, str]:

@@ -14,7 +14,6 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_inventory_readable,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -96,7 +95,6 @@ def list_expiry(parsed: ParseResult) -> int:
     """Print expiry status for every service in inventory order."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     paths = resolve_paths(parsed.values, environment)
     warn_days = int(str(parsed["--warn-days"]), 10)
     critical_days = int(str(parsed["--critical-days"]), 10)

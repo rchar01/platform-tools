@@ -10,7 +10,6 @@ import stat
 import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from pathlib import Path
 
 from .ca_rollover_recovery import (
     LegacyMigrationRecoveryRecord,
@@ -48,36 +47,6 @@ _LOCK_LABELS = {
     "inventory": "inventory operation",
     "export": "export operation",
 }
-
-
-def require_pilot_common_library(environment: Mapping[str, str]) -> None:
-    """Preserve the pilot commands' operational installed-asset boundary."""
-
-    explicit = environment.get("PLATFORM_TOOLS_LIB_DIR", "")
-    if explicit:
-        candidate = Path(explicit) / "platform-pki-common.sh"
-    else:
-        invocation = Path(sys.argv[0])
-        try:
-            adjacent = invocation.parent.resolve(strict=True).parent / "lib/platform-pki-common.sh"
-        except OSError:
-            adjacent = invocation.parent / "../lib/platform-pki-common.sh"
-        if os.access(adjacent, os.R_OK):
-            candidate = adjacent
-        else:
-            share = environment.get("PLATFORM_TOOLS_SHARE_DIR", "")
-            if not share:
-                data_home = environment.get("XDG_DATA_HOME", "")
-                if not data_home:
-                    home = environment.get("HOME", "")
-                    data_home = f"{home}/.local/share"
-                share = f"{data_home}/platform-tools"
-            candidate = Path(share) / "lib/platform-pki-common.sh"
-    try:
-        with OpenedFile(candidate, policy=FilePolicy(links=1)):
-            pass
-    except FilesystemError:
-        raise ApplicationError("platform-pki-common.sh not found")
 
 
 def validate_service_name(service: str) -> None:

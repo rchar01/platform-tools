@@ -41,7 +41,10 @@ def run_interface(
 ) -> ProcessResult:
     effective = dict(env)
     if tool == (ORACLE,):
-        effective.setdefault("PLATFORM_TOOLS_LIB_DIR", os.fspath(REPOSITORY / "lib"))
+        effective.setdefault(
+            "PLATFORM_TOOLS_LIB_DIR",
+            os.fspath(REPOSITORY / "tests/pki/oracles/final-bash-source/lib"),
+        )
         effective.setdefault(
             "PLATFORM_TOOLS_TEMPLATE_DIR", os.fspath(REPOSITORY / "templates")
         )
@@ -74,7 +77,7 @@ def test_frozen_oracle_and_assets_match_recorded_provenance() -> None:
     )
 
     assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
-    assert hashlib.sha256((REPOSITORY / "lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
+    assert hashlib.sha256((REPOSITORY / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
     assert hashlib.sha256((REPOSITORY / "templates/pki/services.yml.example").read_bytes()).hexdigest() == TEMPLATE_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
@@ -380,15 +383,12 @@ def test_init_template_discovery_and_missing_templates(tmp_path, process_runner,
             (custom / source.name).write_bytes(source.read_bytes())
     (custom / "services.yml.example").write_text("custom template source\n")
     explicit_bin = executable_directory / "explicit/bin"
-    explicit_lib = tmp_path / "explicit/lib"
     explicit_bin.mkdir(parents=True)
-    explicit_lib.mkdir(parents=True)
     (explicit_bin / TOOL.name).write_bytes(TOOL.read_bytes())
     (explicit_bin / TOOL.name).chmod(0o755)
-    (explicit_lib / "platform-pki-common.sh").write_bytes((REPOSITORY / "lib/platform-pki-common.sh").read_bytes())
     result = process_runner(
         [explicit_bin / TOOL.name, "--namespace", tmp_path / "custom-namespace", "--pki-dir", tmp_path / "custom-pki"],
-        env=environment(isolated_environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(explicit_lib), PLATFORM_TOOLS_TEMPLATE_DIR=os.fspath(custom.parent)), timeout=30,
+        env=environment(isolated_environment, PLATFORM_TOOLS_TEMPLATE_DIR=os.fspath(custom.parent)), timeout=30,
     )
     assert_result(result, 0, stderr="")
     assert (tmp_path / "custom-pki/inventory/services.yml.example").read_text() == "custom template source\n"
@@ -401,7 +401,7 @@ def test_init_template_discovery_and_missing_templates(tmp_path, process_runner,
     assert not incomplete.exists()
 
 
-def test_init_rejects_common_library_directory(
+def test_init_ignores_common_library_directory(
     tmp_path, process_runner, isolated_environment
 ) -> None:
     library = tmp_path / "bad-lib/platform-pki-common.sh"
@@ -418,10 +418,8 @@ def test_init_rejects_common_library_directory(
         namespace,
     )
 
-    assert result == ProcessResult(
-        result.args, 1, "", "[ERROR] platform-pki-common.sh not found\n"
-    )
-    assert not namespace.exists()
+    assert_result(result, 0, stderr="")
+    assert (namespace / "pki/inventory/services.yml.example").is_file()
 
 
 def test_init_failed_template_rename_cleans_temporary_file(tmp_path, process_runner, isolated_environment, executable_directory) -> None:
@@ -440,11 +438,10 @@ def test_init_failed_template_rename_cleans_temporary_file(tmp_path, process_run
 def test_init_installed_share_layout(tmp_path, process_runner, isolated_environment, executable_directory, templates_present) -> None:
     installed_bin = executable_directory / "installed/bin"
     share = tmp_path / "installed/share"
-    (share / "lib").mkdir(parents=True)
+    share.mkdir(parents=True)
     installed_bin.mkdir(parents=True)
     (installed_bin / TOOL.name).write_bytes(TOOL.read_bytes())
     (installed_bin / TOOL.name).chmod(0o755)
-    (share / "lib/platform-pki-common.sh").write_bytes((REPOSITORY / "lib/platform-pki-common.sh").read_bytes())
     if templates_present:
         destination = share / "templates/pki"
         destination.mkdir(parents=True)
@@ -470,7 +467,9 @@ def _normalize_case_root(root: Path, output: str) -> str:
 def _differential_environment(isolated_environment: Mapping[str, str]) -> dict[str, str]:
     return environment(
         isolated_environment,
-        PLATFORM_TOOLS_LIB_DIR=os.fspath(REPOSITORY / "lib"),
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(
+            REPOSITORY / "tests/pki/oracles/final-bash-source/lib"
+        ),
         PLATFORM_TOOLS_TEMPLATE_DIR=os.fspath(REPOSITORY / "templates"),
     )
 

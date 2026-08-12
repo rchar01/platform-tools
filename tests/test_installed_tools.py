@@ -13,16 +13,26 @@ from pathlib import Path
 import pytest
 
 from .harness import ProcessResult, run_process
+from src.platform_pki.compat import COMPATIBILITY_COMMANDS
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text().strip()
 
 
-def make_tools() -> tuple[str, ...]:
-    rule = ".PHONY: pytest-print-tools\npytest-print-tools:\n\t@printf '%s\\n' '$(TOOLS)'\n"
+def make_inventory(name: str) -> tuple[str, ...]:
+    rule = f".PHONY: pytest-print-{name}\npytest-print-{name}:\n\t@printf '%s\\n' '$({name})'\n"
     result = run_process(
-        ("make", "-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "pytest-print-tools"),
+        (
+            "make",
+            "-s",
+            "--no-print-directory",
+            "-f",
+            "Makefile",
+            "-f",
+            "-",
+            f"pytest-print-{name}",
+        ),
         cwd=ROOT,
         input=rule,
         timeout=30,
@@ -31,15 +41,21 @@ def make_tools() -> tuple[str, ...]:
         raise RuntimeError(
             f"failed to query Make inventory: status={result.status}, stderr={result.stderr!r}"
         )
-    tools = tuple(result.stdout.split())
-    if not tools:
-        raise RuntimeError("Make variable TOOLS must not be empty")
-    if len(tools) != len(set(tools)):
-        raise RuntimeError("Make variable TOOLS contains duplicates")
-    return tools
+    entries = tuple(result.stdout.split())
+    if not entries:
+        raise RuntimeError(f"Make variable {name} must not be empty")
+    if len(entries) != len(set(entries)):
+        raise RuntimeError(f"Make variable {name} contains duplicates")
+    return entries
 
 
-TOOLS = make_tools()
+TOOLS = make_inventory("TOOLS")
+PYTHON_ZIPAPPS = make_inventory("PYTHON_ZIPAPPS")
+RETIRED_SHELL_LIBRARIES = (
+    "platform-pki-common.sh",
+    "platform-pki-csr-sign.sh",
+    "platform-pki-csr-candidate.sh",
+)
 DEPENDENCIES = (
     "bash",
     "python3",
@@ -87,6 +103,7 @@ def state_parent_from_environment() -> Path:
 @dataclass(frozen=True)
 class Install:
     staged_bin: Path
+    staged_share: Path
     install_bin: Path
     share: Path
     runtime: Path
@@ -117,6 +134,7 @@ def install() -> Generator[Install, None, None]:
     base = Path(tempfile.mkdtemp(prefix="platform-tools-pytest-installed.", dir=state_parent))
     value = Install(
         staged_bin=staged_base / "install/bin",
+        staged_share=staged_base / "install/share/platform-tools",
         install_bin=base / "install/bin",
         share=base / "xdg-data/platform-tools",
         runtime=base / "runtime-bin",
@@ -128,7 +146,7 @@ def install() -> Generator[Install, None, None]:
     make = shutil.which("make")
     assert make is not None
     for install_dir, share_dir in (
-        (value.staged_bin, staged_base / "install/share/platform-tools"),
+        (value.staged_bin, value.staged_share),
         (value.install_bin, value.share),
     ):
         result = run_process(
@@ -195,6 +213,21 @@ def test_staged_and_installed_commands_exist(install: Install, tool: str) -> Non
     assert runtime.resolve(strict=True) == installed.resolve(strict=True)
 
 
+def test_python_compatibility_command_inventory_is_complete() -> None:
+    assert set(PYTHON_ZIPAPPS) == {"platform-pki", *COMPATIBILITY_COMMANDS}
+
+
+def test_installed_assets_exclude_retired_shell_libraries(install: Install) -> None:
+    for share in (install.staged_share, install.share):
+        for name in RETIRED_SHELL_LIBRARIES:
+            library = share / "lib" / name
+            assert not library.exists()
+            assert not library.is_symlink()
+        template = share / "templates/pki/services.yml.example"
+        assert template.is_file()
+        assert not template.is_symlink()
+
+
 @pytest.mark.parametrize("tool", TOOLS, ids=TOOLS)
 @pytest.mark.parametrize("flag", ("--help", "-h"), ids=("long", "short"))
 def test_installed_help(
@@ -238,9 +271,10 @@ def test_runtime_is_outside_checkout_and_has_minimal_path(install: Install) -> N
     for unexpected in (install.runtime / "ruby", install.runtime / "bashly"):
         assert not unexpected.exists()
         assert not unexpected.is_symlink()
-    adjacent_library = install.install_bin.parent / "lib/platform-pki-common.sh"
-    assert not adjacent_library.exists()
-    assert not adjacent_library.is_symlink()
+    for name in RETIRED_SHELL_LIBRARIES:
+        adjacent_library = install.install_bin.parent / "lib" / name
+        assert not adjacent_library.exists()
+        assert not adjacent_library.is_symlink()
 
 
 def test_relative_xdg_cache_home_is_rejected(
@@ -463,7 +497,7 @@ def test_installed_intermediate_create_operates_outside_checkout(
     (("platform-pki-inventory-install",), ("platform-pki", "inventory-install")),
     ids=("compatibility", "unified"),
 )
-def test_installed_inventory_install_uses_shared_library(
+def test_installed_inventory_install_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
     command: tuple[str, ...],
@@ -509,7 +543,7 @@ def test_installed_inventory_install_uses_shared_library(
     (("platform-pki-custody-report",), ("platform-pki", "custody-report")),
     ids=("compatibility", "unified"),
 )
-def test_installed_custody_report_uses_shared_library(
+def test_installed_custody_report_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
     command: tuple[str, ...],
@@ -565,7 +599,7 @@ def test_installed_custody_report_uses_shared_library(
     ),
     ids=("compatibility", "unified"),
 )
-def test_installed_ca_passphrase_verify_uses_shared_library(
+def test_installed_ca_passphrase_verify_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
     command: tuple[str, ...],
@@ -599,7 +633,7 @@ def test_installed_ca_passphrase_verify_uses_shared_library(
     (("platform-pki-backup",), ("platform-pki", "backup")),
     ids=("compatibility", "unified"),
 )
-def test_installed_backup_uses_shared_library(
+def test_installed_backup_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
     command: tuple[str, ...],
@@ -739,7 +773,7 @@ def _prepare_export_state(
     (("platform-pki-export-ansible",), ("platform-pki", "export-ansible")),
     ids=("compatibility", "unified"),
 )
-def test_installed_export_ansible_uses_shared_library(
+def test_installed_export_ansible_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
     command: tuple[str, ...],

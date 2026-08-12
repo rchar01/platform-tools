@@ -161,7 +161,9 @@ def _run_interface(
 ) -> ProcessResult:
     environment = dict(os.environ if env is None else env)
     if command == (ORACLE,):
-        environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ROOT / "lib")
+        environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        )
     return process_runner(
         [*command, "--pki-dir", pki, *arguments], env=environment, timeout=30
     )
@@ -214,7 +216,7 @@ def test_help_and_version(process_runner: Callable[..., ProcessResult]) -> None:
 def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     plan = (ROOT / "docs/plans/platform-pki-python-migration.md").read_text(encoding="utf-8")
     assert sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
-    assert sha256((ROOT / "lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
+    assert sha256((ROOT / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
 
@@ -222,7 +224,7 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
 def test_compatibility_help_matches_frozen_oracle(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
-    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "lib")}
+    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "tests/pki/oracles/final-bash-source/lib")}
     oracle = process_runner([ORACLE, "--help"], env=environment)
     result = process_runner([TOOL, "--help"], env=environment)
     assert result.status == oracle.status == 0
@@ -271,7 +273,7 @@ def test_clean_generation_process_and_state_match_frozen_oracle(
 ) -> None:
     seed = tmp_path / "seed"
     _workspace(seed, leaf_keys=False, backup=False)
-    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "lib")}
+    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "tests/pki/oracles/final-bash-source/lib")}
     result = run_differential_case(
         seed,
         tmp_path / f"case-{Path(command[0]).name}",

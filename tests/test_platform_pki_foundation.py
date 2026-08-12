@@ -519,7 +519,8 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
             "[ERROR] CSR trust source directory is missing or unsafe: "
         )
     elif contract.unified_route in {*operational_descriptions, "ca-rollover"}:
-        assert unavailable.stderr == "[ERROR] platform-pki-common.sh not found\n"
+        assert unavailable.stderr
+        assert "platform-pki-common.sh" not in unavailable.stderr
     else:
         assert "not available in the Python foundation" in unavailable.stderr
 

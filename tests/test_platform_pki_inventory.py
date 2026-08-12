@@ -102,7 +102,10 @@ def test_parser_matches_bash_c_locale_status_and_canonical_bytes(
             "-c",
             'source "$1"; pki_validate_inventory_file "$2" "$3"',
             "bash",
-            os.fspath(ROOT / "lib/platform-pki-common.sh"),
+            os.fspath(
+                ROOT
+                / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+            ),
             os.fspath(source),
             os.fspath(canonical),
         ),

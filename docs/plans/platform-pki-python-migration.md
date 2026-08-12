@@ -2,19 +2,13 @@
 
 ## Status
 
-Phase 0 contract expansion remains in progress. Phases 1 through 5 are
-implemented. Phase 6 and Phase 7 have Python-backed compatibility and unified
-`root-create`, `intermediate-create`, `csr-trust-install`,
-`certificate-export`, `csr-candidate`, `service-issue`, `csr-recover`, and
-`ca-rollover` routes.
-Managed service issue uses its Python schema-1 transaction writer, and exact
-managed recovery is public through unified-only `platform-pki service-recover`.
-Managed and host-local service renew now dispatch through the same Python
-handler for compatibility and unified routes. Retained PKI Bash implementations
-are frozen compatibility oracles. Migration remains forward-only: installing an
-older Bash release after Python has written state is unsupported, and retained
-PKI shell libraries cannot be removed while live signing and shared-asset
-consumers or frozen compatibility tests still require them.
+All runtime migration phases are implemented. Every maintained PKI route and
+current-release `platform-pki-*` compatibility executable is Python-backed.
+Exact managed recovery is public through unified-only
+`platform-pki service-recover`. Phase 8 has retired production PKI Bashly
+workspaces and shell libraries while preserving immutable final-Bash evidence
+under `tests/pki/oracles/`. Migration remains forward-only: installing an older
+Bash release after Python has written state is unsupported.
 
 ## Goal
 
@@ -659,36 +653,38 @@ Validation gate:
 
 - [x] Parser, preparation, migration, fault, lifecycle, recovery, and advanced
   rollover suites pass without skipped or weakened scenarios.
-- [ ] Rollover is independently releasable before Bash cleanup begins; final
-  `make container-check` acceptance remains pending.
+- [x] Rollover is independently releasable before Bash cleanup begins; final
+  pre-cleanup `make container-check` acceptance passed.
 
 ## Phase 8: Retire PKI Bash Implementations
 
-Goal: Remove obsolete PKI Bash code and compatibility executables after all
-unified routes use Python and pass final acceptance.
+Goal: Remove obsolete PKI Bash implementation and runtime-library ownership
+after all unified routes use Python and pass final acceptance. Keep the
+Python-backed compatibility executables until the approved next major release.
 
 Tasks:
 
-- [ ] Remove migrated PKI commands from `SHELL_TOOLS` and `BASHLY_TOOLS`.
-- [ ] Add all Python-backed command names to the maintained Python inventory.
+- [x] Remove migrated PKI commands from `SHELL_TOOLS` and `BASHLY_TOOLS`.
+- [x] Add all Python-backed command names to the maintained Python inventory.
 - [ ] Remove all `platform-pki-*` compatibility launchers from the installed
   tool inventory and retain only `platform-pki` at the next major-release
   boundary.
 - [ ] Remove compatibility-name dispatch and update user-facing examples,
   installed-tool tests, release notes, and upgrade guidance to unified routes.
-- [ ] Remove PKI Bashly workspaces only after the corresponding Python release
+- [x] Remove PKI Bashly workspaces only after the corresponding Python release
   has passed final acceptance.
-- [ ] Remove `lib/platform-pki-common.sh`, `lib/platform-pki-csr-sign.sh`, and
+- [x] Remove `lib/platform-pki-common.sh`, `lib/platform-pki-csr-sign.sh`, and
   `lib/platform-pki-csr-candidate.sh` only after no installed or checkout
   consumer remains.
-- [ ] Preserve the final Bash tag and migration compatibility evidence.
-- [ ] Update generation, verification, installation, docs, `NEWS.md`, and
+- [x] Preserve the final Bash commits and migration compatibility evidence under
+  `tests/pki/oracles/`.
+- [x] Update generation, verification, installation, docs, `NEWS.md`, and
   `CHANGELOG.md`.
-- [ ] Leave non-PKI Bashly commands unchanged.
+- [x] Leave non-PKI Bashly commands unchanged.
 
 Validation gate:
 
-- [ ] Command inventory, installed tools, focused PKI suites, generated-file
+- [x] Command inventory, installed tools, focused PKI suites, generated-file
   verification for remaining Bash tools, ShellCheck, and final container
   acceptance pass.
 
@@ -737,8 +733,8 @@ Use independently deployable releases rather than one large cutover:
 | Utilities | Custody report, passphrase verification, and backup |
 | Transactions | Authority, service, CSR, export, and candidate workflows |
 | Rollover | Status, migration, preparation, and recovery |
-| Next major | Remove compatibility launchers and install only `platform-pki` |
 | Cleanup | Retire PKI Bash sources and libraries |
+| Next major | Remove compatibility launchers and install only `platform-pki` |
 
 Each release must document:
 
@@ -860,6 +856,7 @@ implementation.
 | 2026-08-12 | Certificate export public cutover implemented and targeted acceptance completed. | Final Bash commit `24db7d54ca5c113fe763d4007c5dfef507dc23a6` is frozen at mode 755 and SHA-256 `21c73b92d8568a74e8b75f554831060309c4f998d4230d28b019d72c3e1f85fa`; loaded common and CSR-sign libraries are frozen at SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f` and `8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001`. Compatibility and unified `certificate-export publish|resolve` share one Python handler. Frozen-oracle differentials cover publication plus path, JSON, and wrong-pin resolution; final authenticated-source replacement races fail cleanly before publication or output. The expanded export suite passed 17 tests in 45.47 seconds; the Bash-owned candidate consumer passed 77 tests with four workers in 190.22 seconds; inventory, migration, parser, and foundation contracts passed 389 tests in 53.66 seconds; shared publication passed 175 tests; command contract passed 465 tests; and installed tools passed 175 tests. Deterministic Python generation, static verification, and whitespace checks passed. Final `make container-check` remains reserved for final migration acceptance. |
 | 2026-08-12 | CSR candidate public cutover implemented and handled-signal ownership hardened. | Final Bash commit `24db7d54ca5c113fe763d4007c5dfef507dc23a6` is frozen with executable SHA-256 `03566a3917505e1999e52e2ece0f7a29313cd8869c4f968802e6525c8a3b5c95` and exact common, CSR-sign, and candidate-library provenance. Compatibility and unified `csr-candidate verify|finalize|abandon` share one Python handler. Frozen-oracle help and state-tree differentials cover all three actions. Handled SIGHUP, SIGINT, and SIGTERM are deferred across pre-journal stage ownership and durable journal handoff; exact partial-stage cleanup cannot adopt foreign replacements, and post-journal interruption retains resume-only recovery. The committed compatibility candidate and finalization recovery target passed 104 tests; ownership, parser, foundation, inventory, migration, and Make contracts passed 424 tests; command contracts passed 461 tests; installed tools passed 175 tests; deterministic Python generation, static checks, retained Bash generation, ShellCheck, and whitespace checks passed. Final `make container-check` remains reserved for final migration acceptance. |
 | 2026-08-12 | CA rollover public cutover implemented and focused acceptance completed. | Final Bash commit `ba9dd57214cae18f82c83dfb54b6ddce13882280` remains frozen with executable SHA-256 `7e9430e6d17969d5d1779e8073b9757e08157625e16b91969991e611953b806b` and common-library SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified `ca-rollover migrate|status|prepare|recover` share Python handlers. Core migration, status, and preparation scenarios execute the generated compatibility launcher; private drivers remain limited to implementation-level race injection and frozen-oracle differentials. The complete four-worker rollover suite passed 544 tests, and focused trust-install, certificate-export, and candidate suites passed 75, 17, and 104 tests. Deterministic Python generation and the 250-test foundation passed. Final `make container-check` remains pending. |
+| 2026-08-13 | Phase 8 production Bash retirement completed. | PKI Bashly workspaces and installed shell libraries were removed after pre-cleanup acceptance. Current-release compatibility names remain deterministic Python zipapps. Required final-Bash source evidence was relocated byte-for-byte under `tests/pki/oracles/final-bash-source/` with a complete SHA-256 manifest; command-specific executable oracles remain unchanged. Final `make container-check` passed remaining Bash generation, ShellCheck, static checks, all 4,849 maintained tests including 544 rollover cases, and the 10-test archive smoke. |
 
 ## Decision Log
 

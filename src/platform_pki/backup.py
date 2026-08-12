@@ -31,7 +31,6 @@ from .operational import (
     load_active_issuer,
     prepare_control_state,
     require_no_unresolved_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -427,7 +426,6 @@ def backup(parsed: ParseResult) -> int:
     """Run the compatibility and unified backup workflow."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     require_program("tar", environment)
     tar_help = run_external(("tar", "--help"), environment)
     if b"--no-wildcards" not in tar_help.stdout:

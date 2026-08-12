@@ -106,9 +106,9 @@ each command test must explicitly declare any output or content normalization.
 
 ## Generated CLI Artifacts
 
-Bashly-backed command source lives under `bashly/<tool>/`. The corresponding
-`bin/<tool>` file is generated, committed, installed, and must not be edited by
-hand.
+Bashly-backed source for the six maintained non-PKI shell commands lives under
+`bashly/<tool>/`. The corresponding `bin/<tool>` file is generated, committed,
+installed, and must not be edited by hand.
 
 After changing a Bashly declaration, command partial, or library, regenerate
 the executable inside the container:
@@ -130,9 +130,10 @@ with the committed executable. It does not rewrite the working tree.
 executables so installed commands do not need Ruby, Bashly, or repository
 source files at runtime.
 
-The unified Python PKI source lives under `src/platform_pki/`. Its committed
-`bin/platform-pki` artifact is a standard-library-only zipapp and must not be
-edited by hand. Generate and verify it in the pinned Python 3.14 test image:
+The Python PKI source lives under `src/platform_pki/`. The unified command and
+all current-release `platform-pki-*` compatibility executables are committed
+standard-library-only zipapps and must not be edited by hand. Generate and
+verify them in the pinned Python 3.14 test image:
 
 ```bash
 ./scripts/in-test-container make generate-python
@@ -148,12 +149,16 @@ startup (`-I -S`) so checkout modules, `PYTHONPATH`, and user or system site
 packages cannot alter application imports.
 
 `platform-pki` provides the unified hierarchy, help, version, and frozen
-25-route parser contract. Migrated compatibility commands dispatch to the same
-handlers as their unified routes; unavailable handlers fail closed. Shared
-modules provide safe diagnostics, strict
+25-route parser contract. Compatibility commands dispatch to the same Python
+handlers as their unified routes. Shared modules provide safe diagnostics, strict
 ordered `key=value` records, strict inventory parsing, and bounded exact-argv
-subprocess execution. The Make inventories distinguish remaining Bashly tools
-from committed Python compatibility zipapps.
+subprocess execution. The Make inventories distinguish the six remaining
+non-PKI Bashly tools from committed Python PKI zipapps.
+
+Final PKI Bash executables, loaded libraries, and the source fragments still
+needed by historical contract tests live under `tests/pki/oracles/`. They are
+immutable test evidence, are not installed or generated, and must not be used
+as production implementation source.
 
 The foundation also provides `acquire_pki_locks`, a standard-library
 `fcntl.flock` context manager for the fixed lifecycle-through-export prefix

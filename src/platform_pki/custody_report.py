@@ -31,7 +31,6 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_no_unresolved_state,
-    require_pilot_common_library,
     require_pki_directory,
     resolve_paths,
 )
@@ -664,7 +663,6 @@ def _json_report(report: Report, layout: str, storage: str) -> str:
 
 def custody_report(parsed: ParseResult) -> int:
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     paths = resolve_paths(parsed.values, environment)
     require_pki_directory(paths.pki_dir)
     prepare_control_state(paths.pki_dir)

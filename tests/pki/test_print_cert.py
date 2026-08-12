@@ -120,7 +120,9 @@ def _run(
     effective_environment = environment
     if command == (ORACLE,):
         effective_environment = dict(os.environ if environment is None else environment)
-        effective_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ROOT / "lib")
+        effective_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        )
     return process_runner([*command, *arguments], env=effective_environment)
 
 
@@ -373,7 +375,9 @@ def test_bash_python_success_state_and_output_are_equivalent(tmp_path: Path) -> 
     environment, _ = _fake_environment(tmp_path, "differential-openssl.log")
     environment = dict(
         environment,
-        PLATFORM_TOOLS_LIB_DIR=os.fspath(ROOT / "lib"),
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        ),
     )
 
     result = run_differential_case(
@@ -449,7 +453,9 @@ def test_bash_python_recovery_gates_are_equivalent(
     environment, _ = _fake_environment(tmp_path, "recovery-gate-openssl.log")
     environment = dict(
         environment,
-        PLATFORM_TOOLS_LIB_DIR=os.fspath(ROOT / "lib"),
+        PLATFORM_TOOLS_LIB_DIR=os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        ),
     )
 
     result = run_differential_case(
@@ -477,18 +483,17 @@ def test_bash_python_recovery_gates_are_equivalent(
     result.assert_equivalent()
 
 
-def test_explicit_library_directory_layout(
+def test_explicit_library_directory_is_ignored(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, _ = _fake_environment(tmp_path, "explicit-openssl.log")
     copied_tool = tmp_path / "explicit/bin/platform-pki-print-cert"
     copied_tool.parent.mkdir(mode=0o700, parents=True)
-    library = tmp_path / "explicit/lib/platform-pki-common.sh"
-    library.parent.mkdir(mode=0o700, parents=True)
     shutil.copy2(TOOL, copied_tool)
-    shutil.copy2(ROOT / "lib/platform-pki-common.sh", library)
-    environment = dict(environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(library.parent))
+    environment = dict(
+        environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(tmp_path / "explicit/missing")
+    )
 
     result = _run(
         process_runner,
@@ -501,18 +506,17 @@ def test_explicit_library_directory_layout(
     assert result.stderr == ""
 
 
-def test_installed_share_directory_layout(
+def test_missing_installed_share_library_is_ignored(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, _ = _fake_environment(tmp_path, "installed-openssl.log")
     copied_tool = tmp_path / "installed/bin/platform-pki-print-cert"
     copied_tool.parent.mkdir(mode=0o700, parents=True)
-    library = tmp_path / "installed/share/lib/platform-pki-common.sh"
-    library.parent.mkdir(mode=0o700, parents=True)
     shutil.copy2(TOOL, copied_tool)
-    shutil.copy2(ROOT / "lib/platform-pki-common.sh", library)
-    environment = dict(environment, PLATFORM_TOOLS_SHARE_DIR=os.fspath(library.parents[1]))
+    environment = dict(
+        environment, PLATFORM_TOOLS_SHARE_DIR=os.fspath(tmp_path / "installed/share")
+    )
 
     result = _run(
         process_runner, ["--pki-dir", pki, "platform-example"], environment, copied_tool
@@ -548,14 +552,20 @@ def test_help_does_not_require_shared_library(
     assert result.stderr == ""
 
 
-def test_command_requires_shared_library(
+def test_command_operates_without_shared_library(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
     pki = _pki_tree(tmp_path)
-    tool, environment = _isolated_tool(tmp_path)
+    tool, isolated = _isolated_tool(tmp_path)
+    environment, _ = _fake_environment(tmp_path, "isolated-openssl.log")
+    environment = {
+        **environment,
+        "HOME": isolated["HOME"],
+        "PLATFORM_TOOLS_SHARE_DIR": isolated["PLATFORM_TOOLS_SHARE_DIR"],
+    }
 
     result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment, tool)
 
-    assert result.status == 1
-    assert result.stdout == ""
-    assert "platform-pki-common.sh not found" in result.stderr
+    assert result.status == 0, result.stderr
+    assert result.stdout
+    assert result.stderr == ""

@@ -2,20 +2,12 @@
 
 ## Status
 
-Active incremental-migration contract. This inventory records the compatibility
-surface that the Python migration must preserve. Retained Bash source and
-existing tests remain the authoritative oracle until each command is cut over.
-The three Phase 3 read-oriented commands, all Phase 4 bounded-publication
-commands (`platform-pki-init`, `platform-pki-inventory-install`, and
-`platform-pki-export-ansible`), and the Phase 5 utility commands are
-Python-backed. Phase 6 and the rollover phase have Python-backed compatibility and unified
-`root-create`, `intermediate-create`, `csr-recover`, `csr-trust-install`,
-`certificate-export`, `csr-candidate`, `service-issue`, `service-renew`, and
-`ca-rollover` routes. Managed and
-host-local service issue and renew compatibility and unified routes share their
-Python handlers. Exact managed transaction recovery is exposed only through
-unified `service-recover`. Retained PKI Bash implementations are compatibility
-oracles rather than runtime ownership.
+Completed runtime-migration contract. This inventory records the compatibility
+surface preserved by the Python implementation. All maintained PKI routes and
+current-release compatibility executable names are Python-backed. Exact managed
+transaction recovery is exposed only through unified `service-recover`.
+Retained Bash executables, libraries, and source fragments under
+`tests/pki/oracles/` are immutable test evidence rather than runtime ownership.
 
 ## Runtime and Interfaces
 
@@ -88,11 +80,11 @@ Authoritative evidence:
 
 - `tests/test_command_contract.py`
 - `tests/pki/test_ca_rollover_parser.py`
-- `bashly/platform-pki-*/src/bashly.yml`
-- `lib/platform-pki-common.sh`
+- `tests/pki/oracles/final-bash-source/bashly/platform-pki-*/src/bashly.yml`
+- `tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh`
 
 `tests/pki/test_migration_contract.py` separately normalizes the committed
-`PKI_PARSER_ROUTES` inventory against all Bashly sources.
+`PKI_PARSER_ROUTES` inventory against the immutable final-Bash source evidence.
 `tests/test_command_contract.py` then drives parser-edge probes through all 24
 retained routes, combining existing root-command checks with nested-leaf checks.
 The clean environment fixture rejects state creation under `HOME`,
@@ -108,11 +100,12 @@ also require that path to remain absent.
 - Service names match `[A-Za-z0-9][A-Za-z0-9_.-]*`.
 - Day values contain decimal digits and have an allowed range of 1 through
   365000; leading zeroes remain accepted.
-- Installed shared assets preserve checkout-relative,
+- Installed templates preserve checkout-relative,
   `PLATFORM_TOOLS_SHARE_DIR`, XDG data, and `/usr/local/share/platform-tools`
   lookup where currently supported.
-- `PLATFORM_TOOLS_LIB_DIR` and `PLATFORM_TOOLS_TEMPLATE_DIR` remain migration
-  compatibility inputs until their consumers are retired.
+- `PLATFORM_TOOLS_TEMPLATE_DIR` remains the explicit template override.
+  `PLATFORM_TOOLS_LIB_DIR` is accepted only by frozen Bash test oracles, not by
+  production Python commands.
 
 ## Command Surface
 
@@ -188,11 +181,11 @@ marker descriptor, identity, and exact bytes pinned through the final exchange
 boundary; displaced-tree cleanup rechecks every snapshotted name immediately
 before its destructive mutation.
 
-`tests/pki/migration_contract.py` now freezes all 24 leaf routes, including
+`tests/pki/migration_contract.py` freezes all 24 compatibility leaf routes, including
 ordered positionals and long flags, required names, defaults, enum values,
 conflicts, repeatable entries, and Bashly validators. Infrastructure tests load
-all 18 definitions with PyYAML so aliases are resolved and compare the complete
-normalized source shape with the committed inventory. Separate source-backed
+all 18 final-Bash definitions from test-only evidence with PyYAML so aliases are
+resolved and compare the complete normalized source shape with the committed inventory. Separate source-backed
 inventories record runtime-only conditional requirements, conflicts, explicit
 empty-value rejection, confirmations, and exact duplicate-option rejection
 fields.
@@ -216,10 +209,10 @@ The first migration tranche has machine-readable contracts for
 - All three require OpenSSL and nonblocking `flock` behavior during operational
   execution. The pilot inventory additionally records GNU `date -d` for expiry
   conversion and `cmp`/`grep` behavior for managed certificate verification.
-- All three load `lib/platform-pki-common.sh` only after parser dispatch. The
-  installed asset is a regular mode-644 file resolved through
-  `PLATFORM_TOOLS_LIB_DIR`, checkout-relative `../lib`, then
-  `PLATFORM_TOOLS_SHARE_DIR` or the XDG/default user share.
+- The frozen Bash versions loaded `lib/platform-pki-common.sh` only after parser
+  dispatch. The Python handlers preserve the operational behavior without
+  installing or loading that shell library; the exact historical library is
+  retained under `tests/pki/oracles/final-bash-source/lib/`.
 
 Infrastructure tests prove that every pilot contract references a retained
 route, authoritative source fragment, and maintained focused test function.
@@ -833,14 +826,9 @@ of the ordinary non-rollover Make pool.
 ## Open Items
 
 - Determine which target hosts require Python 3.14 provisioning.
-- Define the exact installation representation for compatibility aliases to the
-  zipapp.
-- Record each remaining command's exact final-Bash commit immediately before
-  cutover and add its command-specific differential cases. Completed Phase 5
-  cutovers retain frozen executable oracles: custody report uses
-  `a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4`, CA passphrase verification uses
-  `95c0b277af77375d00f23585282dcf3aed83b119`, and backup uses
-  `3d5e3b4ecd4c137f97748b4066c7e4c508e99655`.
+- Remove the Python compatibility zipapps at the approved next major-release
+  boundary; the current release installs one deterministic zipapp under every
+  supported compatibility name.
 - Freeze exact ordered fields, schema values, and final-newline behavior for the
   remaining literal and dynamically assembled persisted-record writers.
 - Complete live schema-5 filesystem validation and mutation across the 206

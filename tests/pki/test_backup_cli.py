@@ -43,7 +43,9 @@ def run_interface(
 ) -> ProcessResult:
     selected = dict(env)
     if command == (ORACLE,):
-        selected["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(REPOSITORY / "lib")
+        selected["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
+            REPOSITORY / "tests/pki/oracles/final-bash-source/lib"
+        )
     return process_runner([*command, *arguments], env=selected, timeout=30)
 
 
@@ -143,7 +145,7 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     )
     assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
     assert hashlib.sha256(
-        (REPOSITORY / "lib/platform-pki-common.sh").read_bytes()
+        (REPOSITORY / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh").read_bytes()
     ).hexdigest() == COMMON_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
@@ -475,7 +477,10 @@ def _set_direct_environment(
 ) -> None:
     for name, value in isolated_environment.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setenv("PLATFORM_TOOLS_LIB_DIR", os.fspath(REPOSITORY / "lib"))
+    monkeypatch.setenv(
+        "PLATFORM_TOOLS_LIB_DIR",
+        os.fspath(REPOSITORY / "tests/pki/oracles/final-bash-source/lib"),
+    )
 
 
 def test_receipt_publication_race_is_controlled_and_cleans_stage(

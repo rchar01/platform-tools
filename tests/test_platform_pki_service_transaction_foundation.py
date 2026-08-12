@@ -79,6 +79,8 @@ from src.platform_pki.service_transaction import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FINAL_BASH_SOURCE = ROOT / "tests/pki/oracles/final-bash-source"
+FINAL_BASH_LIB = FINAL_BASH_SOURCE / "lib"
 PKI_DIR = "/srv/platform/pki"
 DIGEST = "0" * 64
 EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -296,8 +298,8 @@ def _literal_fields(source: str, start: str, end: str) -> tuple[str, ...]:
 
 
 def test_host_local_field_tuples_match_retained_shell_declarations() -> None:
-    signing = (ROOT / "lib/platform-pki-csr-sign.sh").read_text(encoding="utf-8")
-    candidate = (ROOT / "lib/platform-pki-csr-candidate.sh").read_text(encoding="utf-8")
+    signing = (FINAL_BASH_LIB / "platform-pki-csr-sign.sh").read_text(encoding="utf-8")
+    candidate = (FINAL_BASH_LIB / "platform-pki-csr-candidate.sh").read_text(encoding="utf-8")
     assert CSR_REQUEST_FIELDS == _shell_array(signing, "PKI_CSR_REQUEST_FIELDS")
     assert CSR_APPROVAL_FIELDS == _shell_array(signing, "PKI_CSR_APPROVAL_FIELDS")
     assert CSR_RESPONSE_FIELDS == _shell_array(candidate, "PKI_CANDIDATE_RESPONSE_FIELDS")
@@ -434,8 +436,8 @@ def test_canonical_record_digest_bindings_match_retained_hash_behavior() -> None
     )
     validate_response_candidate_binding(response, candidate)
 
-    signing = (ROOT / "lib/platform-pki-csr-sign.sh").read_text(encoding="utf-8")
-    candidate_source = (ROOT / "lib/platform-pki-csr-candidate.sh").read_text(
+    signing = (FINAL_BASH_LIB / "platform-pki-csr-sign.sh").read_text(encoding="utf-8")
+    candidate_source = (FINAL_BASH_LIB / "platform-pki-csr-candidate.sh").read_text(
         encoding="utf-8"
     )
     assert 'CSR_REQUEST_SHA256=$(pki_csr_sha256 "$CSR_INPUT_DIR/request")' in signing
@@ -573,7 +575,7 @@ def test_request_approval_timing_rejects_retained_policy_violations(
 
 
 def test_request_approval_timing_constants_are_source_backed() -> None:
-    signing = (ROOT / "lib/platform-pki-csr-sign.sh").read_text(encoding="utf-8")
+    signing = (FINAL_BASH_LIB / "platform-pki-csr-sign.sh").read_text(encoding="utf-8")
     function = signing.split("pki_csr_validate_times() {", 1)[1].split("\n}", 1)[0]
     assert "request_expires - request_created <= 604800" in function
     assert "approval_expires - approval_created <= 86400" in function
@@ -1277,8 +1279,8 @@ def _parse_values(values: dict[str, str], *, bind_journal: bool = True):
 
 
 def test_managed_orders_and_lock_profile_are_backed_by_retained_sources() -> None:
-    issue = (ROOT / "bashly/platform-pki-service-issue/src/root_command.sh").read_text(encoding="utf-8")
-    renew = (ROOT / "bashly/platform-pki-service-renew/src/root_command.sh").read_text(encoding="utf-8")
+    issue = (FINAL_BASH_SOURCE / "bashly/platform-pki-service-issue/src/root_command.sh").read_text(encoding="utf-8")
+    renew = (FINAL_BASH_SOURCE / "bashly/platform-pki-service-renew/src/root_command.sh").read_text(encoding="utf-8")
     contract = (ROOT / "tests/pki/migration_contract.py").read_text(encoding="utf-8")
     expected = (
         "service_config", "service_csr", "service_certificate", "service_chain",

@@ -25,7 +25,6 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_no_unresolved_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -407,7 +406,6 @@ def _verify_authority(
 
 def verify_ca_passphrases(parsed: ParseResult) -> int:
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     paths = resolve_paths(parsed.values, environment)
     root_passphrase = _expand_passphrase_path(
         parsed.values.get("--root-pass-file"), environment

@@ -45,7 +45,6 @@ from .operational import (
     acquire_operational_locks,
     detect_layout,
     prepare_control_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -2447,7 +2446,6 @@ def migrate_ca_rollover(
     if not isinstance(parsed, ParseResult):
         raise TypeError("parsed must be a ParseResult")
     selected_environment = dict(os.environ if environment is None else environment)
-    require_pilot_common_library(selected_environment)
     require_program("openssl", selected_environment)
     paths = resolve_paths(parsed.values, selected_environment)
     _safe_record_path(paths.pki_dir, "PKI directory")

@@ -79,7 +79,6 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_pki_directory,
-    require_pilot_common_library,
     require_program,
     require_terminal_rollover_history,
     resolve_paths,
@@ -4260,7 +4259,6 @@ def issue_service(
     if not isinstance(arguments, ParseResult):
         raise TypeError("arguments must be a ParseResult")
     process_environment = dict(os.environ if environment is None else environment)
-    require_pilot_common_library(process_environment)
     paths = resolve_paths(arguments.values, process_environment)
     service = arguments["service"]
     assert isinstance(service, str)
@@ -4356,7 +4354,6 @@ def renew_service(
     if not isinstance(arguments, ParseResult):
         raise TypeError("arguments must be a ParseResult")
     process_environment = dict(os.environ if environment is None else environment)
-    require_pilot_common_library(process_environment)
     paths = resolve_paths(arguments.values, process_environment)
     service = arguments["service"]
     assert isinstance(service, str)

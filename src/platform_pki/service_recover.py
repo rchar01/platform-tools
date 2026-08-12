@@ -31,7 +31,6 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_pki_directory,
-    require_pilot_common_library,
     require_terminal_rollover_history,
     resolve_paths,
 )
@@ -2634,7 +2633,6 @@ def recover_service(
     if not isinstance(arguments, ParseResult):
         raise TypeError("arguments must be a ParseResult")
     process_environment = dict(os.environ if environment is None else environment)
-    require_pilot_common_library(process_environment)
     transaction = arguments["--transaction"]
     assert isinstance(transaction, str)
     if _TRANSACTION.fullmatch(transaction) is None:

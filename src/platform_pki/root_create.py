@@ -41,7 +41,6 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_no_unresolved_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -1177,7 +1176,6 @@ def create_root(parsed: ParseResult) -> int:
     """Create one root authority through compatibility or unified dispatch."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     name = str(parsed["--name"])
     organization = str(parsed["--org"])
     country = str(parsed["--country"])

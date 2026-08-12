@@ -210,7 +210,9 @@ def test_python_migration_success_matches_frozen_bash(
         workspace = _workspace(root)
         (workspace.pki / "state/rollover/journal").unlink(missing_ok=True)
         backup_environment = dict(environment)
-        backup_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(REPOSITORY / "lib")
+        backup_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
+            REPOSITORY / "tests/pki/oracles/final-bash-source/lib"
+        )
         _create_backup(
             rollover_tools, workspace, backup_environment, process_runner
         )
@@ -293,7 +295,12 @@ def test_python_migration_intermediate_state_matches_frozen_bash(
         _create_backup(
             rollover_tools,
             workspace,
-            dict(environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(REPOSITORY / "lib")),
+            dict(
+                environment,
+                PLATFORM_TOOLS_LIB_DIR=os.fspath(
+                    REPOSITORY / "tests/pki/oracles/final-bash-source/lib"
+                ),
+            ),
             process_runner,
         )
 

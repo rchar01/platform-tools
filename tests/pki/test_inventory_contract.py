@@ -4,7 +4,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-COMMON = ROOT / "lib/platform-pki-common.sh"
+FINAL_BASH_SOURCE = ROOT / "tests/pki/oracles/final-bash-source"
+COMMON = FINAL_BASH_SOURCE / "lib/platform-pki-common.sh"
 VALIDATOR = 'source "$1"; pki_validate_inventory_file "$2" "$3"'
 VALID_INVENTORY = b"""---
 # order is intentionally non-canonical
@@ -78,7 +79,7 @@ def test_consumer_loads_exactly_one_inventory_snapshot(consumer: str) -> None:
         assert source.read_text(encoding="utf-8").count("load_inventory(") == 1
         return
     else:
-        source = ROOT / "bashly" / consumer / "src/root_command.sh"
+        source = FINAL_BASH_SOURCE / "bashly" / consumer / "src/root_command.sh"
     assert source.read_text(encoding="utf-8").count("pki_load_inventory_snapshot") == 1
 
 

@@ -4,7 +4,9 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-COMMON = ROOT / "lib/platform-pki-common.sh"
+COMMON = (
+    ROOT / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+)
 INVENTORY_VALIDATOR = (
     'source "$1"; '
     'pki_validate_service_inventory_values platform-example "$2" "$3" "$4"'

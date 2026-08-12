@@ -54,7 +54,6 @@ from .operational import (
     detect_layout,
     prepare_control_state,
     require_no_unresolved_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -2642,7 +2641,6 @@ def prepare_ca_rollover(parsed: ParseResult) -> int:
     """Prepare one root or intermediate candidate through Python dispatch."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     preparation_type = str(parsed["--type"])
     if preparation_type not in {"root", "intermediate"}:
         _die("Candidate type must not be empty")

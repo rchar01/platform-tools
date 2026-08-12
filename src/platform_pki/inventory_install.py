@@ -24,7 +24,6 @@ from .filesystem import (
 from .inventory import InventoryError, parse_inventory
 from .operational import (
     acquire_operational_locks,
-    require_pilot_common_library,
     run_external,
 )
 from .parser import ParseResult
@@ -681,7 +680,6 @@ def install_inventory(parsed: ParseResult) -> int:
     """Run the Bash-compatible inventory installation workflow."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     namespace_value = parsed.values.get("--namespace")
     namespace = _expand_path(
         str(namespace_value)

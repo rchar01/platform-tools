@@ -17,7 +17,6 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_inventory_readable,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -95,7 +94,6 @@ def verify_service(parsed: ParseResult) -> int:
     """Verify one managed service certificate in the frozen check order."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     service_name = parsed["service"]
     assert isinstance(service_name, str)
     validate_service_name(service_name)

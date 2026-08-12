@@ -1019,7 +1019,7 @@ def test_python_prepare_success_matches_frozen_bash(
         (workspace.pki / "state/rollover/journal").unlink(missing_ok=True)
         backup_environment = dict(environment)
         backup_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
-            REPOSITORY / "lib"
+            REPOSITORY / "tests/pki/oracles/final-bash-source/lib"
         )
         _create_backup(
             rollover_tools, workspace, backup_environment, process_runner

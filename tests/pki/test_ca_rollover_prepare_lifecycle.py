@@ -654,7 +654,8 @@ def test_root_prepare_publication(
     assert "certificate signature failure" in invalid_signature.stderr
 
     common_library = (
-        Path(__file__).resolve().parents[2] / "lib/platform-pki-common.sh"
+        Path(__file__).resolve().parents[2]
+        / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
     )
     application_validation = _run(
         [

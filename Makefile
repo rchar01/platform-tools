@@ -12,7 +12,6 @@ PYTHON_ZIPAPPS := platform-pki platform-pki-init platform-pki-inventory-install 
 PYTHON_TOOLS := $(PYTHON_SOURCE_TOOLS) $(PYTHON_ZIPAPPS)
 PYTHON_SOURCES := scripts/build-platform-pki-zipapp.py $(wildcard src/platform_pki/*.py)
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
-LIBS := lib/platform-pki-common.sh lib/platform-pki-csr-sign.sh lib/platform-pki-csr-candidate.sh
 MAINTAINED_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/in-test-container scripts/verify-generated
 BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
 NON_ROLLOVER_TEST_TARGETS := test-python-infrastructure test-command-contract test-installed-tools test-platform-pki-foundation test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-issue-writer test-pki-csr-issue-writer test-pki-service-writer test-pki-service-renew test-pki-service-renew-writer test-pki-service-recover test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing
@@ -66,24 +65,20 @@ verify-python-generated:
 ## Install platform tools into INSTALL_DIR
 install: verify-python-generated
 	mkdir -p "$(INSTALL_DIR)"
-	mkdir -p "$(SHARE_DIR)/lib" "$(SHARE_DIR)/templates/pki"
+	mkdir -p "$(SHARE_DIR)/templates/pki"
 	@for tool in $(TOOLS); do \
 		cp "bin/$$tool" "$(INSTALL_DIR)/$$tool"; \
 		chmod 755 "$(INSTALL_DIR)/$$tool"; \
 		printf '%s\n' "Installed $$tool to $(INSTALL_DIR)/$$tool"; \
 	done
-	cp $(LIBS) "$(SHARE_DIR)/lib/"
 	cp templates/pki/* "$(SHARE_DIR)/templates/pki/"
-	chmod 644 "$(SHARE_DIR)/lib/platform-pki-common.sh" "$(SHARE_DIR)"/templates/pki/*
+	chmod 644 "$(SHARE_DIR)"/templates/pki/*
 	@printf '%s\n' "Installed shared assets to $(SHARE_DIR)"
 
 ## Run syntax checks for maintained tool scripts
 verify: verify-python-generated
 	@for tool in $(SHELL_TOOLS); do \
 		bash -n "bin/$$tool"; \
-	done
-	@for lib in $(LIBS); do \
-		bash -n "$$lib"; \
 	done
 	@for script in $(MAINTAINED_SCRIPTS); do \
 		bash -n "$$script"; \
@@ -346,4 +341,4 @@ test-pki-ca-rollover-parser:
 ## Run ShellCheck for maintained tool scripts
 shellcheck:
 	@command -v shellcheck >/dev/null 2>&1 || { printf '%s\n' 'shellcheck not found; install ShellCheck or skip this target' >&2; exit 1; }
-	shellcheck $(addprefix bin/,$(SHELL_TOOLS)) $(LIBS) $(MAINTAINED_SCRIPTS)
+	shellcheck $(addprefix bin/,$(SHELL_TOOLS)) $(MAINTAINED_SCRIPTS)

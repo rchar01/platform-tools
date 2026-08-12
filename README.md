@@ -36,7 +36,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
-| `platform-pki` | Unified Python PKI interface; migrated operational routes run directly while later migration routes remain fail-closed. |
+| `platform-pki` | Unified Python PKI interface for all maintained PKI routes. |
 | `platform-pki-init` | Create the outside-Git PKI working directory under `~/.config/platform-infrastructure/pki/`. |
 | `platform-pki-inventory-install` | Validate and install private-Git service inventory into protected PKI state. |
 | `platform-pki-csr-trust-install` | Validate and atomically install reviewed public trust for authenticated host-local CSR signing. |
@@ -67,7 +67,8 @@ cd platform-tools
 make install
 ```
 
-Use another install directory when needed. PKI helpers also install shared library and template assets under `SHARE_DIR`:
+Use another install directory when needed. PKI helpers install template assets
+under `SHARE_DIR`; they no longer install or load shared shell libraries:
 
 ```bash
 make install \
@@ -138,8 +139,8 @@ Run all maintained checks across both pinned containers:
 make container-check
 ```
 
-This is the canonical final acceptance command. It verifies generated Bashly
-artifacts and runs ShellCheck in the development image, then runs syntax checks,
+This is the canonical final acceptance command. It verifies the six remaining
+non-PKI Bashly artifacts and runs ShellCheck in the development image, then runs syntax checks,
 the complete pytest aggregate once, and the archive smoke in the test image. Do
 not run `make test` immediately before it unless a separate host-environment
 comparison is intentional.
@@ -208,8 +209,8 @@ make test-pki-ca-rollover-python-recover
 
 The compatibility `platform-pki-ca-rollover` executable and unified
 `platform-pki ca-rollover` route use the same Python handlers for migration,
-status, preparation, and recovery. Frozen final-Bash assets remain only as
-differential-test oracles.
+status, preparation, and recovery. Frozen final-Bash executables, libraries,
+and source fragments remain only under `tests/pki/oracles/` as test evidence.
 
 Within `make test`, the authoritative rollover target runs only after the
 non-rollover pool and uses four workers by default. Invoking the rollover target
@@ -243,16 +244,18 @@ Run the focused immutable certificate-only export scenarios:
 make test-pki-certificate-export
 ```
 
-Generate Bashly-backed executables and verify that committed output is current:
+Generate the six non-PKI Bashly-backed executables and verify that committed
+output is current:
 
 ```bash
 make generate
 make verify-generated
 ```
 
-Edit Bashly source under `bashly/<tool>/`, not the corresponding generated file
-under `bin/`. See [`docs/development.md`](docs/development.md) for the full
-workflow.
+Edit maintained non-PKI Bashly source under `bashly/<tool>/`, not the
+corresponding generated file under `bin/`. PKI source is maintained under
+`src/platform_pki/`; its frozen Bash evidence under `tests/pki/oracles/` must
+not be edited. See [`docs/development.md`](docs/development.md) for the full workflow.
 
 All maintained shell commands use the same generated CLI contract: leading
 `--help`/`-h` and `--version`/`-v` write to stdout and exit 0, while parser
@@ -293,12 +296,13 @@ Run maintained behavior tests:
 make test
 ```
 
-All maintained test orchestration uses pytest. The tests still execute the real
-generated Bash commands, external tools, PTYs, inherited file descriptors,
+All maintained test orchestration uses pytest. The tests still execute real
+generated non-PKI Bash commands, Python PKI zipapps, frozen Bash oracles,
+external tools, PTYs, inherited file descriptors,
 self-streamed SSH, and executable fakes as subprocesses. Coverage includes the
 cross-command CLI contract and a disposable installation smoke test for every
-command, including installed PKI shared-asset lookup without Ruby, Bashly, or
-checkout source paths at runtime.
+command, including installed PKI template lookup without Ruby, Bashly, shell
+libraries, or checkout source paths at runtime.
 
 Run only the isolated SSH identity helper tests:
 

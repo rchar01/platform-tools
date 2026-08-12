@@ -40,7 +40,6 @@ from .operational import (
     acquire_operational_locks,
     prepare_control_state,
     require_no_unresolved_state,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     resolve_paths,
@@ -1714,7 +1713,6 @@ def create_intermediate(parsed: ParseResult) -> int:
     """Create the first intermediate through compatibility or unified dispatch."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     name = str(parsed["--name"])
     organization = str(parsed["--org"])
     country = str(parsed["--country"])

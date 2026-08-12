@@ -68,7 +68,9 @@ def _run_interface(
 ) -> ProcessResult:
     selected_environment = dict(environment)
     if command == (ORACLE,):
-        selected_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ROOT / "lib")
+        selected_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        )
     return process_runner(
         [*command, "--namespace", workspace.namespace, *arguments],
         env=selected_environment,
@@ -123,7 +125,7 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
         encoding="utf-8"
     )
     assert sha256(ORACLE.read_bytes()).hexdigest() == ORACLE_SHA256
-    assert sha256((ROOT / "lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
+    assert sha256((ROOT / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
 
@@ -131,7 +133,12 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
 def test_compatibility_help_matches_frozen_oracle(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
-    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "lib")}
+    environment = {
+        **os.environ,
+        "PLATFORM_TOOLS_LIB_DIR": os.fspath(
+            ROOT / "tests/pki/oracles/final-bash-source/lib"
+        ),
+    }
     oracle = process_runner([ORACLE, "--help"], env=environment)
     result = process_runner([TOOL, "--help"], env=environment)
     assert (result.status, result.stdout, result.stderr) == (
@@ -712,7 +719,10 @@ def test_success_output_is_written_while_operational_locks_are_held(
     workspace = rollover_case_factory("output-lock-boundary")
     for name, value in isolated_environment.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setenv("PLATFORM_TOOLS_LIB_DIR", os.fspath(ROOT / "lib"))
+    monkeypatch.setenv(
+        "PLATFORM_TOOLS_LIB_DIR",
+        os.fspath(ROOT / "tests/pki/oracles/final-bash-source/lib"),
+    )
     writes: list[str] = []
     lifecycle_lock = workspace.pki / "locks/lifecycle"
 

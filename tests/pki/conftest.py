@@ -401,7 +401,10 @@ def _conditional_rollover_wrapper(
     wrapper_root = tmp_path_factory.mktemp("pki-rollover-wrapper")
     wrapper_bin = wrapper_root / "bin"
     wrapper_bin.mkdir(mode=0o700)
-    (wrapper_root / "lib").symlink_to(repository / "lib", target_is_directory=True)
+    (wrapper_root / "lib").symlink_to(
+        repository / "tests/pki/oracles/final-bash-source/lib",
+        target_is_directory=True,
+    )
     wrapper = wrapper_bin / "platform-pki-ca-rollover"
     _write_conditional_rollover_wrapper(
         wrapper,

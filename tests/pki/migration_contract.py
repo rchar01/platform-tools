@@ -769,17 +769,15 @@ PILOT_INSTALLED_ASSET_CONTRACTS = (
         ),
         "operational-only",
         (
-            ("Makefile", "LIBS := lib/platform-pki-common.sh"),
-            ("Makefile", "chmod 644 \"$(SHARE_DIR)/lib/platform-pki-common.sh\""),
             *(
                 (f"bashly/platform-pki-{route}/src/root_command.sh", "PLATFORM_TOOLS_SHARE_DIR")
                 for route in ("print-cert", "list-expiry", "service-verify")
             ),
         ),
         (
-            ("tests/pki/test_print_cert.py", "test_installed_share_directory_layout"),
-            ("tests/pki/test_list_expiry.py", "test_installed_share_directory_layout"),
-            ("tests/pki/test_service_verify.py", "test_installed_share_directory_layout"),
+            ("tests/pki/test_print_cert.py", "test_frozen_oracle_matches_recorded_provenance"),
+            ("tests/pki/test_list_expiry.py", "test_frozen_oracle_matches_recorded_provenance"),
+            ("tests/pki/test_service_verify.py", "test_frozen_oracle_matches_recorded_provenance"),
         ),
     ),
 )

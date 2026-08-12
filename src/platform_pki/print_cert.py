@@ -13,7 +13,6 @@ from .operational import (
     prepare_control_state,
     require_generation_layout,
     require_inventory_readable,
-    require_pilot_common_library,
     require_pki_directory,
     require_program,
     require_service,
@@ -35,7 +34,6 @@ def print_certificate(parsed: ParseResult) -> int:
     """Render one inventory service certificate through OpenSSL-owned output."""
 
     environment = dict(os.environ)
-    require_pilot_common_library(environment)
     service = parsed["service"]
     assert isinstance(service, str)
     validate_service_name(service)

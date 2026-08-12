@@ -4,6 +4,13 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- All maintained PKI routes and current-release `platform-pki-*` compatibility
+  commands are now Python zipapps. PKI Bashly workspaces and installed shell
+  libraries have been retired, so `make install` now publishes only PKI
+  templates under the shared-data directory. Immutable final-Bash executables,
+  libraries, and required source fragments remain test-only evidence under
+  `tests/pki/oracles/`. Compatibility command names remain supported until the
+  approved next major release.
 - `platform-pki-service-issue` and `platform-pki service-issue` now share one
   Python handler for managed issuance and authenticated host-local issue or
   migration. Managed schema-1 transactions can now be recovered through the
@@ -67,7 +74,7 @@ This file gives a short, release-oriented view of what changed between versions.
   `platform-pki-print-cert`, `platform-pki-list-expiry`, and
   `platform-pki-service-verify` likewise share their Python operational handlers
   with the corresponding unified routes while preserving locking, OpenSSL child
-  behavior, installed shared-asset lookup, and legacy-state rejection.
+  behavior and legacy-state rejection without an installed shell library.
   `platform-pki-export-ansible` and `platform-pki export-ansible` now build a
   complete mode-700 same-parent tree, copy source bytes through no-follow
   identity-checked descriptors, synchronize and revalidate the complete tree,

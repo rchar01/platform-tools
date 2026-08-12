@@ -23,6 +23,7 @@ from src.platform_pki.paths import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+COMMON = ROOT / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
 
 
 def _bash_common(
@@ -40,7 +41,7 @@ def _bash_common(
         "-c",
         command,
         "bash",
-        os.fspath(ROOT / "lib/platform-pki-common.sh"),
+        os.fspath(COMMON),
     ]
     if argument is not None:
         arguments.append(argument)

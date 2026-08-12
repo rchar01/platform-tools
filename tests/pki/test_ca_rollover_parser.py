@@ -382,7 +382,10 @@ def test_shared_helper_rejects_equals_form_empty_option(
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
-    common_library = rollover_tool.parent.parent / "lib/platform-pki-common.sh"
+    common_library = (
+        Path(__file__).resolve().parents[2]
+        / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+    )
     result = process_runner(
         [
             "bash",
