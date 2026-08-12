@@ -377,8 +377,7 @@ def _read_state_bytes(
     return data
 
 
-def _read_state_map(path: str, label: str) -> dict[str, str]:
-    data = _read_state_bytes(path, label)
+def _parse_state_map(data: bytes, label: str) -> dict[str, str]:
     values: dict[str, str] = {}
     lines = data.split(b"\n")
     if lines[-1] == b"":
@@ -402,6 +401,10 @@ def _read_state_map(path: str, label: str) -> dict[str, str]:
     return values
 
 
+def _read_state_map(path: str, label: str) -> dict[str, str]:
+    return _parse_state_map(_read_state_bytes(path, label), label)
+
+
 def require_terminal_rollover_history(
     pki_dir: str,
     journal: str,
@@ -413,16 +416,15 @@ def require_terminal_rollover_history(
     message = error_message or (
         f"PKI recovery is required before this command can continue: {journal}"
     )
+    data = _read_state_bytes(
+        journal,
+        "PKI recovery journal",
+        max_size=MAX_RECOVERY_RECORD_BYTES,
+    )
+    _parse_state_map(data, "PKI recovery journal")
     try:
-        record = parse_recovery_semantics(
-            _read_state_bytes(
-                journal,
-                "PKI recovery journal",
-                max_size=MAX_RECOVERY_RECORD_BYTES,
-            ),
-            pki_dir=pki_dir,
-        )
-    except (ApplicationError, RecoveryRecordError):
+        record = parse_recovery_semantics(data, pki_dir=pki_dir)
+    except RecoveryRecordError:
         raise ApplicationError(message) from None
     if not record.committed:
         terminal = False
