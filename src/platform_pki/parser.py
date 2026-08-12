@@ -215,9 +215,9 @@ _CANDIDATE_DECISION_DUPLICATES = (
     "--artifact-manifest-sha256",
     "--evidence-file",
     "--evidence-signature",
+    "--yes",
     "--namespace",
     "--pki-dir",
-    "--yes",
 )
 
 

@@ -253,6 +253,15 @@ class GenericRecoveryRecord(Mapping[str, str]):
 
 
 @dataclass(frozen=True, slots=True)
+class RecoveryStatusHeader(GenericRecoveryRecord):
+    operation: RecoveryOperation
+    schema: int
+    transaction: str
+    phase: str
+    committed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class RecoveryRecord(GenericRecoveryRecord):
     operation: RecoveryOperation
     schema: int
@@ -460,6 +469,12 @@ def _parse_generic(data: bytes) -> GenericRecoveryRecord:
     return GenericRecoveryRecord(tuple(pairs))
 
 
+def parse_recovery_fields(data: bytes) -> GenericRecoveryRecord:
+    """Parse canonical key/value fields without claiming recovery semantics."""
+
+    return _parse_generic(data)
+
+
 def _operation(record: GenericRecoveryRecord) -> RecoveryOperation:
     try:
         raw = record["operation"]
@@ -554,6 +569,36 @@ def parse_recovery_record(data: bytes) -> RecoveryRecord:
     elif action is None and generic["recovery_step"] != "none":
         raise RecoveryRecordError("bootstrap recovery step has no recovery action")
     return RecoveryRecord(generic._pairs, operation, schema, selected_order, action)
+
+
+def parse_recovery_status_header(data: bytes) -> RecoveryStatusHeader:
+    """Validate the bounded header needed to diagnose an incomplete journal."""
+
+    generic = _parse_generic(data)
+    operation = _operation(generic)
+    schema = _schema(generic)
+    if schema != _SCHEMAS[operation]:
+        raise RecoveryRecordError("recovery record schema does not match its operation")
+    try:
+        transaction = generic["transaction"]
+        phase = generic["phase"]
+        committed_raw = generic["committed"]
+    except KeyError:
+        raise RecoveryRecordError("recovery status header is missing a required field") from None
+    if _TRANSACTIONS[operation].fullmatch(transaction) is None:
+        raise RecoveryRecordError("recovery record transaction is invalid")
+    if committed_raw not in {"false", "true"}:
+        raise RecoveryRecordError("recovery record committed value is invalid")
+    if not phase:
+        raise RecoveryRecordError("recovery record phase is empty")
+    return RecoveryStatusHeader(
+        generic._pairs,
+        operation,
+        schema,
+        transaction,
+        phase,
+        committed_raw == "true",
+    )
 
 
 def parse_rollover_prepare_structure(data: bytes) -> GenericRecoveryRecord:

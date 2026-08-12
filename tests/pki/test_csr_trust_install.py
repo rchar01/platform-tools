@@ -5,12 +5,14 @@ import hashlib
 import os
 import shutil
 import stat
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 
-from ..harness import ProcessResult
+from ..harness import ManagedProcess, ProcessResult, run_process
+from .migration_harness import run_differential_case
 from .support import BIN, REPOSITORY, assert_result, digest, environment, executable, executable_directory, mode, write_executable, write_private
 from .test_csr_candidate import POLICY2, REQUEST_ID, configure_deployer_trust, decide, prepare, publish_request
 from .test_csr_signing import (
@@ -27,7 +29,10 @@ from .test_csr_signing import (
 pytestmark = pytest.mark.pki
 INIT = BIN / "platform-pki-init"
 TOOL = BIN / "platform-pki-csr-trust-install"
+UNIFIED = BIN / "platform-pki"
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-trust-install"
+ORACLE = ORACLE_ROOT / "platform-pki-csr-trust-install"
+ORACLE_LIB = ORACLE_ROOT / "lib"
 ORACLE_COMMIT = "678daa6de2ea24ada1fd36199013347f79f303bf"
 ORACLE_HASHES = {
     "platform-pki-csr-trust-install": "280333e79c824ea6d1d4f159c36d6cf8573d6a13fd985144f7ba0b0b4fbefa40",
@@ -67,12 +72,67 @@ def test_frozen_trust_install_oracle_matches_provenance_and_modes() -> None:
             assert os.access(path, os.X_OK)
 
 
+def test_trust_install_compatibility_help_matches_oracle(
+    process_runner, isolated_environment
+) -> None:
+    oracle = process_runner([ORACLE, "--help"], env=isolated_environment, timeout=30)
+    result = process_runner([TOOL, "--help"], env=isolated_environment, timeout=30)
+    assert result == ProcessResult(result.args, 0, oracle.stdout, "")
+
+
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], namespace: Path, private: Path, *arguments: object) -> ProcessResult:
     return process_runner(
         [TOOL, "--namespace", namespace, "--private-repo", private, *arguments],
         env=env,
         timeout=30,
     )
+
+
+def wait_for_path(
+    path: Path, process: ManagedProcess, timeout: float = 30.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        observation = process.observe()
+        if observation.status is not None:
+            pytest.fail(f"process exited before pause marker: {observation}")
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out waiting for pause marker: {path}")
+        time.sleep(0.01)
+
+
+def start_paused(
+    process_starter,
+    env: Mapping[str, str],
+    namespace: Path,
+    private: Path,
+    point: str,
+    marker: Path,
+    release: Path,
+) -> ManagedProcess:
+    return process_starter(
+        [TOOL, "--namespace", namespace, "--private-repo", private],
+        env=environment(
+            env,
+            PLATFORM_PKI_CSR_TRUST_INSTALL_PAUSE_AT=point,
+            PLATFORM_PKI_CSR_TRUST_INSTALL_PAUSE_MARKER=os.fspath(marker),
+            PLATFORM_PKI_CSR_TRUST_INSTALL_PAUSE_RELEASE=os.fspath(release),
+        ),
+        timeout=30,
+    )
+
+
+def assert_operation_locks_available(namespace: Path) -> None:
+    locks = []
+    try:
+        for name in ("lifecycle", "root", "intermediate", "inventory"):
+            lock = (namespace / f"pki/locks/{name}").open("a+")
+            locks.append(lock)
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        for lock in reversed(locks):
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
 
 
 def public_key(process_runner, env, root: Path, name: str) -> str:
@@ -107,6 +167,111 @@ def setup_workspace(tmp_path: Path, process_runner, env) -> tuple[Path, Path, Pa
     return namespace, private, keys
 
 
+def _normalize_case_root(root: Path, output: str) -> str:
+    return output.replace(os.fspath(root), "<CASE>")
+
+
+def _differential_seed(
+    tmp_path: Path,
+    process_runner,
+    isolated_environment: Mapping[str, str],
+    *,
+    installed: bool = False,
+    changed: bool = False,
+) -> Path:
+    seed = tmp_path / "seed"
+    seed.mkdir(mode=0o700)
+    namespace, private, keys = setup_workspace(
+        seed, process_runner, isolated_environment
+    )
+    if installed:
+        result = process_runner(
+            [
+                ORACLE,
+                "--namespace",
+                namespace,
+                "--private-repo",
+                private,
+            ],
+            env=environment(
+                isolated_environment,
+                PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB),
+            ),
+            timeout=30,
+        )
+        assert_result(result, 0)
+    if changed:
+        replacement = public_key(
+            process_runner,
+            isolated_environment,
+            keys,
+            "differential-requester",
+        )
+        write_private(
+            private / "pki/csr-trust/requesters.allowed_signers",
+            f"host-01 {replacement}\n",
+        )
+    return seed
+
+
+def _run_trust_install_differential(
+    seed: Path,
+    case_root: Path,
+    isolated_environment: Mapping[str, str],
+):
+    def command(root: Path, tool: tuple[Path | str, ...]):
+        return (
+            *tool,
+            "--namespace",
+            root / "namespace",
+            "--private-repo",
+            root / "platform-private",
+        )
+
+    return run_differential_case(
+        seed,
+        case_root,
+        Path("namespace/pki"),
+        lambda root: command(root, (ORACLE,)),
+        lambda root: command(root, (UNIFIED, "csr-trust-install")),
+        environment(
+            isolated_environment,
+            PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB),
+        ),
+        output_normalizers=(_normalize_case_root,),
+        runner=run_process,
+        run_options={"timeout": 30},
+    )
+
+
+@pytest.mark.parametrize(
+    ("installed", "changed"),
+    (
+        pytest.param(False, False, id="fresh-install"),
+        pytest.param(True, False, id="exact-noop"),
+        pytest.param(True, True, id="atomic-update"),
+    ),
+)
+def test_bash_python_trust_install_is_equivalent(
+    tmp_path,
+    process_runner,
+    isolated_environment,
+    installed: bool,
+    changed: bool,
+) -> None:
+    seed = _differential_seed(
+        tmp_path,
+        process_runner,
+        isolated_environment,
+        installed=installed,
+        changed=changed,
+    )
+    result = _run_trust_install_differential(
+        seed, tmp_path / "differential", isolated_environment
+    )
+    result.assert_equivalent()
+
+
 def test_install_noop_and_atomic_update(tmp_path, process_runner, isolated_environment) -> None:
     namespace, private, keys = setup_workspace(tmp_path, process_runner, isolated_environment)
     destination = namespace / "pki/inventory/csr-trust"
@@ -135,42 +300,49 @@ def test_install_noop_and_atomic_update(tmp_path, process_runner, isolated_envir
     assert replacement in (destination / "requesters.allowed_signers").read_text()
 
 
+def test_default_parent_relative_private_repo(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    namespace, _, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    controller = tmp_path / "controller"
+    controller.mkdir(mode=0o700)
+
+    result = process_runner(
+        [TOOL, "--namespace", namespace],
+        cwd=controller,
+        env=isolated_environment,
+        timeout=30,
+    )
+
+    assert_result(result, 0)
+    assert (namespace / "pki/inventory/csr-trust").is_dir()
+
+
 def test_noop_rechecks_each_installed_trust_file(
-    tmp_path, process_runner, isolated_environment, executable_directory
+    tmp_path, process_runner, process_starter, isolated_environment
 ) -> None:
     namespace, private, _ = setup_workspace(
         tmp_path, process_runner, isolated_environment
     )
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)
     installed = namespace / "pki/inventory/csr-trust/responses.allowed_signers"
-    fake_bin = executable_directory / "noop-installed-race"
     marker = tmp_path / "noop-installed-race.marker"
-    write_executable(
-        fake_bin / "cmp",
-        """#!/usr/bin/env bash
-set -u
-"$REAL_CMP" "$@"
-status=$?
-if (( status == 0 )) && [[ ${!#} == "$RACE_INSTALLED" && ! -e $RACE_MARKER ]]; then
-  printf '\n' >>"$RACE_INSTALLED"
-  : >"$RACE_MARKER"
-fi
-exit "$status"
-""",
-    )
-
-    result = run(
-        process_runner,
-        environment(
-            isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-            REAL_CMP=executable("cmp"),
-            RACE_INSTALLED=os.fspath(installed),
-            RACE_MARKER=os.fspath(marker),
-        ),
+    release = tmp_path / "noop-installed-race.release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
         namespace,
         private,
+        "csr-trust-before-noop-installed-recheck",
+        marker,
+        release,
     )
+    wait_for_path(marker, process)
+    installed.write_bytes(installed.read_bytes() + b"\n")
+    release.touch()
+    result = process.wait()
 
     assert result.status == 1
     assert marker.is_file()
@@ -178,7 +350,7 @@ exit "$status"
 
 
 def test_update_rechecks_installed_trust_after_final_state_digest(
-    csr_workspace: CsrWorkspace, executable_directory, tmp_path
+    csr_workspace: CsrWorkspace, process_starter, tmp_path
 ) -> None:
     workspace = csr_workspace
     artifact, manifest_digest = prepare(workspace)
@@ -198,32 +370,21 @@ def test_update_rechecks_installed_trust_after_final_state_digest(
     deployer_before = digest(destination / "deployers.allowed_signers")
     installed = destination / "responses.allowed_signers"
     replace_deployer_trust(workspace)
-    fake_bin = executable_directory / "update-installed-race"
     marker = tmp_path / "update-installed-race.marker"
-    write_executable(
-        fake_bin / "sha256sum",
-        """#!/usr/bin/env bash
-set -euo pipefail
-if (( $# == 0 )) && [[ ! -e $RACE_MARKER ]]; then
-  printf '\n' >>"$RACE_INSTALLED"
-  : >"$RACE_MARKER"
-fi
-exec "$REAL_SHA256SUM" "$@"
-""",
-    )
-
-    result = run(
-        workspace.runner,
-        environment(
-            workspace.env,
-            PATH=f"{fake_bin}:{workspace.env['PATH']}",
-            REAL_SHA256SUM=executable("sha256sum"),
-            RACE_INSTALLED=os.fspath(installed),
-            RACE_MARKER=os.fspath(marker),
-        ),
+    release = tmp_path / "update-installed-race.release"
+    process = start_paused(
+        process_starter,
+        workspace.env,
         workspace.namespace,
         workspace.private,
+        "replacement-before-final-authorization",
+        marker,
+        release,
     )
+    wait_for_path(marker, process)
+    installed.write_bytes(installed.read_bytes() + b"\n")
+    release.touch()
+    result = process.wait()
 
     assert result.status == 1
     assert marker.is_file()
@@ -318,7 +479,7 @@ def test_invalid_trust_is_rejected_without_replacing_installed_state(tmp_path, p
     ("policy", "requesters.allowed_signers", "approvers.allowed_signers", "responses.allowed_signers"),
 )
 def test_each_source_replacement_during_staging_is_rejected(
-    tmp_path, process_runner, isolated_environment, executable_directory, name: str
+    tmp_path, process_runner, process_starter, isolated_environment, name: str
 ) -> None:
     namespace, private, keys = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)
@@ -332,43 +493,33 @@ def test_each_source_replacement_during_staging_is_rejected(
         principal = {"requesters.allowed_signers": "host-01", "approvers.allowed_signers": "offline-approver", "responses.allowed_signers": "offline-response"}[name]
         key_name = name.split(".", 1)[0] + "-replacement"
         write_private(replacement, f"{principal} {public_key(process_runner, isolated_environment, keys, key_name)}\n")
-    fake_bin = executable_directory / f"replace-{name}"
-    write_executable(
-        fake_bin / "cp",
-        """#!/usr/bin/env bash
-set -euo pipefail
-"$REAL_CP" "$@"
-if [[ ${3:-} == "$RACE_SOURCE" && ! -e $RACE_MARKER ]]; then
-  mv -T -- "$RACE_REPLACEMENT" "$RACE_SOURCE"
-  : >"$RACE_MARKER"
-fi
-""",
-    )
     marker = tmp_path / f"{name}.marker"
-
-    result = run(
-        process_runner,
-        environment(
-            isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-            REAL_CP=executable("cp"),
-            RACE_SOURCE=os.fspath(source),
-            RACE_REPLACEMENT=os.fspath(replacement),
-            RACE_MARKER=os.fspath(marker),
-        ),
+    release = tmp_path / f"{name}.release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
         namespace,
         private,
+        "csr-trust-after-stage-before-source-recheck",
+        marker,
+        release,
     )
+    wait_for_path(marker, process)
+    replacement.replace(source)
+    release.touch()
+    result = process.wait()
 
     assert result.status == 1
     assert marker.is_file()
-    assert "CSR trust source directory changed during installation" in result.stderr
+    assert "CSR trust source changed during installation" in result.stderr
     assert {path.name: digest(path) for path in destination.iterdir()} == before
-    assert not tuple((namespace / "pki/inventory").glob(".platform-pki-csr-trust.*"))
+    assert not tuple(
+        (namespace / "pki/inventory").glob(".platform-pki-csr-trust.*")
+    )
 
 
 def test_public_key_validation_cleanup_preserves_foreign_replacement(
-    tmp_path, process_runner, isolated_environment, executable_directory
+    tmp_path, process_runner, process_starter, isolated_environment
 ) -> None:
     namespace, private, _ = setup_workspace(tmp_path, process_runner, isolated_environment)
     temporary = tmp_path / "public-key-validation-tmp"
@@ -379,49 +530,36 @@ def test_public_key_validation_cleanup_preserves_foreign_replacement(
     before = (metadata.st_mode, metadata.st_uid, metadata.st_gid, metadata.st_ino, metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns, digest(foreign))
     displaced = tmp_path / "displaced-public-key-validation"
     marker = tmp_path / "public-key-validation-race.marker"
-    fake_bin = executable_directory / "public-key-validation-race"
-    write_executable(
-        fake_bin / "ssh-keygen",
-        """#!/usr/bin/env bash
-set -u
-"$REAL_SSH_KEYGEN" "$@"
-status=$?
-target=''
-for ((index = 1; index <= $#; index++)); do
-  if [[ ${!index} == -f ]]; then next=$((index + 1)); target=${!next}; break; fi
-done
-if [[ ${target%/*} == "$RACE_TMPDIR" && ${target##*/} == platform-pki-csr-public-key.* && ! -e $RACE_MARKER ]]; then
-  "$REAL_MV" -T -- "$target" "$RACE_DISPLACED"
-  "$REAL_MV" -T -- "$RACE_FOREIGN" "$target"
-  : >"$RACE_MARKER"
-fi
-exit "$status"
-""",
-    )
-
-    result = run(
-        process_runner,
+    release = tmp_path / "public-key-validation-race.release"
+    process = start_paused(
+        process_starter,
         environment(
             isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
             TMPDIR=os.fspath(temporary),
-            REAL_SSH_KEYGEN=executable("ssh-keygen"),
-            REAL_MV=executable("mv"),
-            RACE_TMPDIR=os.fspath(temporary),
-            RACE_FOREIGN=os.fspath(foreign),
-            RACE_DISPLACED=os.fspath(displaced),
-            RACE_MARKER=os.fspath(marker),
         ),
         namespace,
         private,
+        "csr-trust-public-key-before-validation",
+        marker,
+        release,
     )
+    wait_for_path(marker, process)
+    staged = tuple(
+        temporary.glob("platform-pki-csr-public-key.*/.public-key.stage-*")
+    )
+    assert len(staged) == 1
+    staged[0].replace(displaced)
+    foreign.replace(staged[0])
+    release.touch()
+    result = process.wait()
 
     retained = tuple(temporary.glob("platform-pki-csr-public-key.*"))
     assert len(retained) == 1
-    metadata = retained[0].lstat()
-    after = (metadata.st_mode, metadata.st_uid, metadata.st_gid, metadata.st_ino, metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns, digest(retained[0]))
+    retained_file = retained[0] / staged[0].name
+    metadata = retained_file.lstat()
+    after = (metadata.st_mode, metadata.st_uid, metadata.st_gid, metadata.st_ino, metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns, digest(retained_file))
     assert result.status == 1
-    assert "CSR trust public-key validation file changed before cleanup" in result.stderr
+    assert "Cannot stage CSR trust public-key validation" in result.stderr
     assert marker.is_file()
     assert displaced.is_file()
     assert after == before
@@ -429,7 +567,7 @@ exit "$status"
 
 
 def test_installed_destination_replacement_before_exchange_is_rejected(
-    tmp_path, process_runner, isolated_environment, executable_directory
+    tmp_path, process_runner, process_starter, isolated_environment
 ) -> None:
     namespace, private, keys = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)
@@ -440,45 +578,33 @@ def test_installed_destination_replacement_before_exchange_is_rejected(
     shutil.copytree(destination, replacement, copy_function=shutil.copy2)
     new_key = public_key(process_runner, isolated_environment, keys, "requester-destination-race")
     write_private(private / "pki/csr-trust/requesters.allowed_signers", f"host-01 {new_key}\n")
-    fake_bin = executable_directory / "destination-race"
     marker = tmp_path / "destination-race.marker"
-    write_executable(
-        fake_bin / "cmp",
-        """#!/usr/bin/env bash
-set -euo pipefail
-if [[ ! -e $RACE_MARKER ]]; then
-  mv -T -- "$RACE_DESTINATION" "$RACE_DISPLACED"
-  mv -T -- "$RACE_REPLACEMENT" "$RACE_DESTINATION"
-  : >"$RACE_MARKER"
-fi
-exec "$REAL_CMP" "$@"
-""",
-    )
-
-    result = run(
-        process_runner,
-        environment(
-            isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-            REAL_CMP=executable("cmp"),
-            RACE_DESTINATION=os.fspath(destination),
-            RACE_DISPLACED=os.fspath(displaced),
-            RACE_REPLACEMENT=os.fspath(replacement),
-            RACE_MARKER=os.fspath(marker),
-        ),
+    release = tmp_path / "destination-race.release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
         namespace,
         private,
+        "replacement-before-exchange",
+        marker,
+        release,
     )
+    wait_for_path(marker, process)
+    destination.replace(displaced)
+    replacement.replace(destination)
+    release.touch()
+    result = process.wait()
 
     assert result.status == 1
     assert marker.is_file()
-    assert "Installed CSR trust changed before publication" in result.stderr
+    assert "Publication object identity changed" in result.stderr
+    assert displaced.is_dir()
     assert new_key not in (destination / "requesters.allowed_signers").read_text()
     assert not tuple(inventory.glob(".platform-pki-csr-trust.*"))
 
 
-def test_destination_replacement_at_exchange_is_preserved(
-    tmp_path, process_runner, isolated_environment, executable_directory
+def test_final_authorization_rejects_destination_replacement(
+    tmp_path, process_runner, process_starter, isolated_environment
 ) -> None:
     namespace, private, keys = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)
@@ -491,123 +617,64 @@ def test_destination_replacement_at_exchange_is_preserved(
     foreign_inode = foreign.stat().st_ino
     new_key = public_key(process_runner, isolated_environment, keys, "requester-exchange-race")
     write_private(private / "pki/csr-trust/requesters.allowed_signers", f"host-01 {new_key}\n")
-    fake_bin = executable_directory / "exchange-destination-race"
     marker = tmp_path / "exchange-destination-race.marker"
-    write_executable(
-        fake_bin / "mv",
-        """#!/usr/bin/env bash
-set -euo pipefail
-if [[ $* == *--exchange* && ! -e $RACE_MARKER ]]; then
-  "$REAL_MV" -T -- "$RACE_DESTINATION" "$RACE_DISPLACED"
-  "$REAL_MV" -T -- "$RACE_FOREIGN" "$RACE_DESTINATION"
-  : >"$RACE_MARKER"
-fi
-exec "$REAL_MV" "$@"
-""",
-    )
-
-    result = run(
-        process_runner,
-        environment(
-            isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-            REAL_MV=executable("mv"),
-            RACE_DESTINATION=os.fspath(destination),
-            RACE_DISPLACED=os.fspath(displaced),
-            RACE_FOREIGN=os.fspath(foreign),
-            RACE_MARKER=os.fspath(marker),
-        ),
+    release = tmp_path / "exchange-destination-race.release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
         namespace,
         private,
+        "replacement-before-final-authorization",
+        marker,
+        release,
     )
+    wait_for_path(marker, process)
+    destination.replace(displaced)
+    foreign.replace(destination)
+    release.touch()
+    result = process.wait()
 
     retained = tuple(inventory.glob(".platform-pki-csr-trust.*"))
     assert result.status == 1
     assert result.stdout == ""
-    assert "CSR trust exchange identity check failed" in result.stderr
+    assert "Installed CSR trust" in result.stderr
     assert marker.is_file()
     assert displaced.is_dir()
-    assert len(retained) == 1
-    assert retained[0].stat().st_ino == foreign_inode
-    assert (retained[0] / "foreign-owned").read_text() == "must survive failed exchange\n"
-    assert new_key in (destination / "requesters.allowed_signers").read_text()
+    assert not retained
+    assert destination.stat().st_ino == foreign_inode
+    assert (destination / "foreign-owned").read_text() == "must survive failed exchange\n"
+    assert new_key not in (destination / "requesters.allowed_signers").read_text()
 
 
-@pytest.mark.parametrize("case", ("exchange-after-mutation", "post-publication-fsync", "cleanup"))
+@pytest.mark.parametrize(
+    "fault_point",
+    (
+        "replacement-after-exchange",
+        "replacement-after-exchange-durability",
+        "tree-cleanup-before-mutation",
+    ),
+)
 def test_update_interruptions_leave_one_complete_trust_tree(
-    tmp_path, process_runner, isolated_environment, executable_directory, case: str
+    tmp_path, process_runner, isolated_environment, fault_point: str
 ) -> None:
     namespace, private, keys = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)
     inventory = namespace / "pki/inventory"
     destination = inventory / "csr-trust"
     prior_requester = (destination / "requesters.allowed_signers").read_text()
-    new_key = public_key(process_runner, isolated_environment, keys, f"requester-{case}")
+    new_key = public_key(process_runner, isolated_environment, keys, f"requester-{fault_point}")
     write_private(private / "pki/csr-trust/requesters.allowed_signers", f"host-01 {new_key}\n")
-    fake_bin = executable_directory / f"interruption-{case}"
-    marker = tmp_path / f"{case}.marker"
-    environment_values: dict[str, str] = {
-        "PATH": f"{fake_bin}:{isolated_environment['PATH']}",
-        "RACE_MARKER": os.fspath(marker),
-    }
-    if case == "exchange-after-mutation":
-        write_executable(
-            fake_bin / "mv",
-            """#!/usr/bin/env bash
-set -euo pipefail
-if [[ $* == *--exchange* && ! -e $RACE_MARKER ]]; then
-  "$REAL_MV" "$@"
-  : >"$RACE_MARKER"
-  exit 42
-fi
-exec "$REAL_MV" "$@"
-""",
-        )
-        environment_values["REAL_MV"] = executable("mv")
-    elif case == "post-publication-fsync":
-        counter = tmp_path / "sync.counter"
-        write_executable(
-            fake_bin / "sync",
-            """#!/usr/bin/env bash
-set -euo pipefail
-if [[ ${!#} == "$RACE_INVENTORY" ]]; then
-  count=0
-  [[ ! -f $RACE_COUNTER ]] || read -r count <"$RACE_COUNTER"
-  count=$((count + 1))
-  printf '%s\n' "$count" >"$RACE_COUNTER"
-  if (( count == 2 )); then : >"$RACE_MARKER"; exit 42; fi
-fi
-exec "$REAL_SYNC" "$@"
-""",
-        )
-        environment_values.update(
-            REAL_SYNC=executable("sync"),
-            RACE_INVENTORY=os.fspath(inventory),
-            RACE_COUNTER=os.fspath(counter),
-        )
-    else:
-        write_executable(
-            fake_bin / "rm",
-            """#!/usr/bin/env bash
-set -euo pipefail
-if [[ $* == *'.platform-pki-csr-trust.'* && ! -e $RACE_MARKER ]]; then
-  : >"$RACE_MARKER"
-  exit 42
-fi
-exec "$REAL_RM" "$@"
-""",
-        )
-        environment_values["REAL_RM"] = executable("rm")
-
     result = run(
         process_runner,
-        environment(isolated_environment, **environment_values),
+        environment(
+            isolated_environment,
+            PLATFORM_PKI_CSR_TRUST_INSTALL_FAILURE_AT=fault_point,
+        ),
         namespace,
         private,
     )
 
     assert result.status == 1
-    assert marker.is_file()
     assert sorted(path.name for path in destination.iterdir()) == [
         "approvers.allowed_signers", "policy", "requesters.allowed_signers", "responses.allowed_signers"
     ]
@@ -639,22 +706,19 @@ def test_unsafe_source_is_rejected(tmp_path, process_runner, isolated_environmen
     assert not (namespace / "pki/inventory/csr-trust").exists()
 
 
-def test_failed_exchange_preserves_installed_trust(tmp_path, process_runner, isolated_environment, executable_directory) -> None:
+def test_failed_exchange_preserves_installed_trust(tmp_path, process_runner, isolated_environment) -> None:
     namespace, private, keys = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert_result(run(process_runner, isolated_environment, namespace, private), 0)
     destination = namespace / "pki/inventory/csr-trust"
     before = digest(destination / "requesters.allowed_signers")
     replacement = public_key(process_runner, isolated_environment, keys, "requester-failure")
     write_private(private / "pki/csr-trust/requesters.allowed_signers", f"host-01 {replacement}\n")
-    fake_bin = executable_directory / "exchange-failure"
-    write_executable(fake_bin / "mv", """#!/usr/bin/env bash
-if [[ $* == *--exchange* ]]; then exit 42; fi
-exec "$REAL_MV" "$@"
-""")
-
     result = run(
         process_runner,
-        environment(isolated_environment, PATH=f"{fake_bin}:{isolated_environment['PATH']}", REAL_MV=executable("mv")),
+        environment(
+            isolated_environment,
+            PLATFORM_PKI_CSR_TRUST_INSTALL_FAILURE_AT="replacement-before-exchange",
+        ),
         namespace,
         private,
     )
@@ -664,36 +728,98 @@ exec "$REAL_MV" "$@"
     assert not tuple((namespace / "pki/inventory").glob(".platform-pki-csr-trust.*"))
 
 
-def test_source_change_during_staging_is_rejected(tmp_path, process_runner, isolated_environment, executable_directory) -> None:
-    namespace, private, _ = setup_workspace(tmp_path, process_runner, isolated_environment)
-    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
-    destination = namespace / "pki/inventory/csr-trust"
-    before = {path.name: digest(path) for path in destination.iterdir()}
-    source = private / "pki/csr-trust/requesters.allowed_signers"
-    fake_bin = executable_directory / "source-race"
-    write_executable(fake_bin / "cp", """#!/usr/bin/env bash
-"$REAL_CP" "$@"
-status=$?
-if (( status == 0 )) && [[ ${3:-} == "$RACE_SOURCE" ]]; then chmod 622 -- "$RACE_SOURCE"; fi
-exit "$status"
-""")
+def test_ambiguous_initial_publication_reports_both_possible_locations(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    namespace, private, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    inventory = namespace / "pki/inventory"
+    destination = inventory / "csr-trust"
 
     result = run(
         process_runner,
         environment(
             isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-            RACE_SOURCE=str(source),
-            REAL_CP=executable("cp"),
+            PLATFORM_PKI_CSR_TRUST_INSTALL_FAILURE_AT="publication-after-mutation",
         ),
         namespace,
         private,
     )
 
     assert result.status == 1
-    assert "CSR trust source changed during installation: requesters.allowed_signers" in result.stderr
+    assert destination.is_dir()
+    assert sorted(path.name for path in destination.iterdir()) == [
+        "approvers.allowed_signers",
+        "policy",
+        "requesters.allowed_signers",
+        "responses.allowed_signers",
+    ]
+    assert f"retained evidence may be at: {destination} or " in result.stderr
+    assert f"{inventory}/.platform-pki-csr-trust." in result.stderr
+
+
+def test_initial_publication_rechecks_source_immediately_before_rename(
+    tmp_path, process_runner, process_starter, isolated_environment
+) -> None:
+    namespace, private, _ = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    source = private / "pki/csr-trust/requesters.allowed_signers"
+    marker = tmp_path / "initial-publication-source-race.marker"
+    release = tmp_path / "initial-publication-source-race.release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
+        namespace,
+        private,
+        "publication-before-mutation",
+        marker,
+        release,
+    )
+    wait_for_path(marker, process)
+    source.chmod(0o622)
+    release.touch()
+    result = process.wait()
+
+    assert result.status == 1
+    assert "CSR trust source must be a readable non-symlink regular file" in result.stderr
+    inventory = namespace / "pki/inventory"
+    assert not (inventory / "csr-trust").exists()
+    assert not tuple(inventory.glob(".platform-pki-csr-trust.*"))
+
+
+def test_source_change_during_staging_is_rejected(tmp_path, process_runner, process_starter, isolated_environment) -> None:
+    namespace, private, _ = setup_workspace(tmp_path, process_runner, isolated_environment)
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = namespace / "pki/inventory/csr-trust"
+    before = {path.name: digest(path) for path in destination.iterdir()}
+    source = private / "pki/csr-trust/requesters.allowed_signers"
+    marker = tmp_path / "source-race.marker"
+    release = tmp_path / "source-race.release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
+        namespace,
+        private,
+        "csr-trust-after-stage-before-source-recheck",
+        marker,
+        release,
+    )
+    wait_for_path(marker, process)
+    source.chmod(0o622)
+    release.touch()
+    result = process.wait()
+
+    assert result.status == 1
+    assert (
+        "CSR trust source must be a readable non-symlink regular file: "
+        f"{source}"
+    ) in result.stderr
     assert {path.name: digest(path) for path in destination.iterdir()} == before
-    assert not tuple((namespace / "pki/inventory").glob(".platform-pki-csr-trust.*"))
+    assert not tuple(
+        (namespace / "pki/inventory").glob(".platform-pki-csr-trust.*")
+    )
 
 
 def test_unsafe_installed_trust_is_not_replaced(tmp_path, process_runner, isolated_environment) -> None:
@@ -743,11 +869,10 @@ def test_each_operation_lock_blocks_installation(
 
 
 @pytest.mark.parametrize("case", ("success", "failure"))
-def test_operation_locks_are_released_in_reverse_order(
+def test_operation_locks_are_available_after_completion(
     tmp_path,
     process_runner,
     isolated_environment,
-    executable_directory,
     case: str,
 ) -> None:
     namespace, private, _ = setup_workspace(
@@ -758,74 +883,35 @@ def test_operation_locks_are_released_in_reverse_order(
             run(process_runner, isolated_environment, namespace, private), 0
         )
         (namespace / "pki/inventory/csr-trust/policy").chmod(0o644)
-    fake_bin = executable_directory / f"flock-release-{case}"
-    log = tmp_path / f"flock-release-{case}.log"
-    write_executable(
-        fake_bin / "flock",
-        """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >>"$FLOCK_LOG"
-exec "$REAL_FLOCK" "$@"
-""",
-    )
     result = run(
         process_runner,
-        environment(
-            isolated_environment,
-            PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-            FLOCK_LOG=os.fspath(log),
-            REAL_FLOCK=executable("flock"),
-        ),
+        isolated_environment,
         namespace,
         private,
     )
 
     assert result.status == (0 if case == "success" else 1)
-    calls = log.read_text().splitlines()
-    acquired = [call.removeprefix("-n ") for call in calls if call.startswith("-n ")]
-    released = [call.removeprefix("-u ") for call in calls if call.startswith("-u ")]
-    assert len(acquired) == 4
-    assert released == list(reversed(acquired))
+    assert_operation_locks_available(namespace)
 
 
-def test_root_contention_explicitly_releases_lifecycle_lock(
-    tmp_path, process_runner, isolated_environment, executable_directory
+def test_root_contention_releases_lifecycle_lock(
+    tmp_path, process_runner, isolated_environment
 ) -> None:
     namespace, private, _ = setup_workspace(
         tmp_path, process_runner, isolated_environment
     )
     root_lock = namespace / "pki/locks/root"
-    fake_bin = executable_directory / "flock-root-contention"
-    log = tmp_path / "flock-root-contention.log"
-    write_executable(
-        fake_bin / "flock",
-        """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >>"$FLOCK_LOG"
-exec "$REAL_FLOCK" "$@"
-""",
-    )
     with root_lock.open("a+") as lock:
         root_lock.chmod(0o600)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = run(
-            process_runner,
-            environment(
-                isolated_environment,
-                PATH=f"{fake_bin}:{isolated_environment['PATH']}",
-                FLOCK_LOG=os.fspath(log),
-                REAL_FLOCK=executable("flock"),
-            ),
-            namespace,
-            private,
+            process_runner, isolated_environment, namespace, private
         )
+        with (namespace / "pki/locks/lifecycle").open("a+") as lifecycle:
+            fcntl.flock(lifecycle, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     assert result.status == 1
-    calls = log.read_text().splitlines()
-    acquired = [call.removeprefix("-n ") for call in calls if call.startswith("-n ")]
-    released = [call.removeprefix("-u ") for call in calls if call.startswith("-u ")]
-    assert len(acquired) == 2
-    assert released == [acquired[0]]
+    assert f"Another root CA operation is in progress: {root_lock}" in result.stderr
 
 
 def replace_deployer_trust(workspace: CsrWorkspace) -> None:
@@ -947,6 +1033,46 @@ def test_authenticated_terminal_history_allows_schema_two_rotation(
     assert "CSR trust updated:" in result.stdout
 
 
+def test_bash_python_terminal_history_uses_retained_roots_across_rotation(
+    csr_workspace: CsrWorkspace,
+    tmp_path,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    trust = workspace.private / "pki/csr-trust"
+    rotations = (
+        ("requesters.allowed_signers", "host-01", "requester"),
+        ("approvers.allowed_signers", "offline-approver", "approver"),
+        ("responses.allowed_signers", "offline-response", "response"),
+        ("deployers.allowed_signers", "host-01", "deployer"),
+    )
+    for file_name, principal, key_name in rotations:
+        replacement = public_key(
+            workspace.runner,
+            workspace.env,
+            tmp_path,
+            f"rotated-{key_name}",
+        )
+        write_private(trust / file_name, f"{principal} {replacement}\n")
+
+    seed = workspace.namespace.parent
+    case_root = tmp_path.parent / f"{tmp_path.name}-trust-rotation-differential"
+    result = _run_trust_install_differential(seed, case_root, workspace.env)
+
+    result.assert_equivalent()
+
+
 def test_terminal_history_fails_closed_without_current_inventory_binding(
     csr_workspace: CsrWorkspace,
 ) -> None:
@@ -978,7 +1104,10 @@ def test_terminal_history_fails_closed_without_current_inventory_binding(
     )
 
     assert result.status == 1
-    assert "is not defined" in result.stderr
+    assert result.stderr == (
+        "[ERROR] Retained CSR candidate service is absent from current inventory: "
+        "external\n"
+    )
 
 
 def test_superseded_terminal_history_allows_schema_two_rotation(

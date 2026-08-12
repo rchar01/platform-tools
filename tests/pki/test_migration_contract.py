@@ -18,6 +18,13 @@ from src.platform_pki.parser import ROUTE_SPECS
 from .migration_contract import (
     ACTIVE_ISSUER_FIELDS,
     BACKUP_RECEIPT_FIELDS,
+    CANDIDATE_ACTIVE_FIELDS,
+    CANDIDATE_ARTIFACT_FIELDS,
+    CANDIDATE_DECISION_FIELDS,
+    CANDIDATE_DEPLOYMENT_FIELDS,
+    CANDIDATE_JOURNAL_FIELDS,
+    CANDIDATE_RECORD_FIELDS,
+    CANDIDATE_RESPONSE_FIELDS,
     CSR_DB_KEYS,
     FAULT_HOOK_CONTRACTS,
     GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS,
@@ -347,6 +354,8 @@ def test_command_inventory_matches_make_and_bashly_sources() -> None:
     assert active_bashly <= bashly
     assert "platform-pki-service-renew" not in active_bashly
     assert "platform-pki-service-renew" in _make_words("PYTHON_ZIPAPPS")
+    assert "platform-pki-csr-candidate" not in active_bashly
+    assert "platform-pki-csr-candidate" in _make_words("PYTHON_ZIPAPPS")
 
 
 def test_all_lock_profiles_are_ordered_prefixes() -> None:
@@ -428,6 +437,8 @@ def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
     for path in sorted((ROOT / "bashly").glob("platform-pki-*/src/*command.sh")) + sorted(
         (ROOT / "bashly").glob("platform-pki-*/src/initialize.sh")
     ):
+        if "platform-pki-csr-candidate" in path.parts:
+            continue
         source = path.read_text(encoding="utf-8")
         all_calls.extend(
             (path.relative_to(ROOT).as_posix(), tuple(match.group(1).split()))
@@ -968,18 +979,26 @@ def test_atomic_state_writer_canonicalizes_to_one_final_newline() -> None:
         assert fragment in source
 
 
-def test_certificate_export_duplicate_record_declarations_match_candidate_library() -> None:
-    export = _source("bashly/platform-pki-certificate-export/src/initialize.sh")
-    candidate = _source("lib/platform-pki-csr-candidate.sh")
-    assert _shell_array(export, "PKI_CERTIFICATE_EXPORT_RESPONSE_FIELDS") == _shell_array(
-        candidate, "PKI_CANDIDATE_RESPONSE_FIELDS"
+def test_python_candidate_record_declarations_match_frozen_candidate_library() -> None:
+    candidate = _source(
+        "tests/pki/oracles/platform-pki-csr-candidate/lib/platform-pki-csr-candidate.sh"
     )
-    assert _shell_array(export, "PKI_CERTIFICATE_EXPORT_CANDIDATE_FIELDS") == _shell_array(
-        candidate, "PKI_CANDIDATE_RECORD_FIELDS"
+    declarations = (
+        ("PKI_CANDIDATE_RESPONSE_FIELDS", CANDIDATE_RESPONSE_FIELDS),
+        ("PKI_CANDIDATE_RECORD_FIELDS", CANDIDATE_RECORD_FIELDS),
+        ("PKI_CANDIDATE_ARTIFACT_FIELDS", CANDIDATE_ARTIFACT_FIELDS),
+        ("PKI_CANDIDATE_DEPLOYMENT_FIELDS", CANDIDATE_DEPLOYMENT_FIELDS),
+        ("PKI_CANDIDATE_ACTIVE_FIELDS", CANDIDATE_ACTIVE_FIELDS),
+        ("PKI_CANDIDATE_DECISION_FIELDS", CANDIDATE_DECISION_FIELDS),
     )
-    assert _shell_array(export, "PKI_CERTIFICATE_EXPORT_ARTIFACT_FIELDS") == _shell_array(
-        candidate, "PKI_CANDIDATE_ARTIFACT_FIELDS"
-    )
+    for symbol, fields in declarations:
+        assert _shell_array(candidate, symbol) == fields
+    assert _expanded_shell_array(
+        candidate,
+        "PKI_CANDIDATE_JOURNAL_FIELDS",
+        "pki_candidate_source_key",
+        "PKI_CANDIDATE_SOURCE_KEYS",
+    ) == CANDIDATE_JOURNAL_FIELDS
 
 
 def test_recovery_contracts_match_authoritative_sources() -> None:
@@ -1032,10 +1051,7 @@ def test_literal_and_finite_writer_fault_hooks_match_authoritative_sources() -> 
         variable in _source(intermediate.source)
         for variable in intermediate.fault_variables
     )
-    for name in (
-        "CSR signing writer",
-        "candidate finalization writer", "legacy migration writer",
-    ):
+    for name in ("CSR signing writer", "legacy migration writer"):
         contract = contracts[name]
         source = _source(contract.source)
         functions = (contract.hook,)
@@ -1044,6 +1060,27 @@ def test_literal_and_finite_writer_fault_hooks_match_authoritative_sources() -> 
         actual = _call_arguments(source, functions)
         assert actual == _fault_expressions(contract)
         assert all(variable in source for variable in contract.fault_variables)
+    candidate_writer = contracts["candidate finalization writer"]
+    candidate_source = ast.parse(_source(candidate_writer.source))
+    writer_calls = {
+        node.args[0].value
+        for node in ast.walk(candidate_source)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == candidate_writer.hook
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    assert writer_calls == _fault_expressions(candidate_writer)
+    candidate_recovery = contracts["candidate finalization recovery"]
+    assert set(
+        _literal_assignment(candidate_recovery.source, candidate_recovery.hook)
+    ) == _fault_expressions(candidate_recovery)
+    assert all(
+        variable in _source(candidate_recovery.source)
+        for variable in candidate_recovery.fault_variables
+    )
 
 
 def test_rollover_prepare_fault_hooks_and_helper_domains_match_source() -> None:
@@ -1107,8 +1144,39 @@ def test_maintained_pytest_writer_checkpoint_domains_are_covered() -> None:
         categories.update({family.template.format(**{family.variable: value}): family.category for value in family.domain})
     assert all((categories[str(row[0])] == "post-commit") is row[1] for row in csr_rows)
 
-    candidate_rows = _parametrize_rows("tests/pki/test_csr_candidate.py", "test_finalize_recovery_resumes_outcome_and_active_pointer")
-    assert tuple(row[0] for row in candidate_rows) == contracts["candidate finalization writer"].categories[0].checkpoints
+    candidate_writer = contracts["candidate finalization writer"]
+    candidate_recovery = contracts["candidate finalization recovery"]
+    writer_rows = _parametrize_rows(
+        "tests/pki/test_csr_candidate.py",
+        "test_finalize_recovery_resumes_outcome_and_active_pointer",
+    )
+    assert tuple(row[0] for row in writer_rows) == (
+        "journal-written",
+        "outcome-published",
+        "active-published",
+    )
+    candidate_tests = _source("tests/pki/test_csr_candidate.py")
+    assert all(
+        f'PLATFORM_PKI_CANDIDATE_SIGNAL_AT="{checkpoint}"' in candidate_tests
+        or f'pytest.param("{checkpoint}",' in candidate_tests
+        for checkpoint in candidate_writer.categories[0].checkpoints
+    )
+    recovery_tree = ast.parse(_source("tests/pki/test_csr_finalization_recover.py"))
+    recovery_test = next(
+        node
+        for node in recovery_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "test_python_recovery_restarts_after_every_recovery_checkpoint"
+    )
+    recovery_decorator = next(
+        decorator
+        for decorator in recovery_test.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "parametrize"
+    )
+    assert isinstance(recovery_decorator.args[1], ast.Name)
+    assert recovery_decorator.args[1].id == candidate_recovery.hook
 
     migration_pairs = _literal_assignment("tests/pki/test_ca_rollover_migrate.py", "MIGRATION_FAILURE_BOUNDARIES")
     migration_tested = {"after-journal", *(pair[0] for pair in migration_pairs)}

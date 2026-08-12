@@ -335,9 +335,8 @@ def test_intermediate_prepare_publication(
     certificate = workspace.pki / "services/next/certs/tls.crt"
     assert issue.status == 0
     assert re.fullmatch(
-        rf"Using configuration from {re.escape(str(workspace.pki))}/authorities/"
-        r"intermediates/g1-i1/\.platform-pki-service-issue\.[A-Za-z0-9]+/"
-        r"intermediate-ca/openssl\.cnf\n"
+        rf"Using configuration from {re.escape(str(workspace.pki))}/state/service/"
+        r"transactions/service-[0-9a-f]{32}/stage/inputs/signing_ca_config\n"
         r"Check that the request matches the signature\n"
         r"Signature ok\n"
         r"The Subject's Distinguished Name is as follows\n"

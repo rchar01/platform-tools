@@ -23,10 +23,26 @@ def _handler(route: tuple[str, ...]):
         from .inventory_install import install_inventory
 
         return install_inventory
+    if route == ("csr-trust-install",):
+        from .csr_trust_install import install_csr_trust
+
+        return install_csr_trust
     if route == ("csr-recover",):
         from .csr_recover import recover_csr
 
         return recover_csr
+    if route in (
+        ("csr-candidate", "verify"),
+        ("csr-candidate", "finalize"),
+        ("csr-candidate", "abandon"),
+    ):
+        from .csr_candidate import csr_candidate
+
+        return csr_candidate
+    if route in (("certificate-export", "publish"), ("certificate-export", "resolve")):
+        from .certificate_export import certificate_export
+
+        return certificate_export
     if route == ("export-ansible",):
         from .export_ansible import export_ansible
 
@@ -51,6 +67,18 @@ def _handler(route: tuple[str, ...]):
         from .intermediate_create import create_intermediate
 
         return create_intermediate
+    if route == ("ca-rollover", "migrate"):
+        from .ca_rollover_migrate import migrate_ca_rollover
+
+        return migrate_ca_rollover
+    if route == ("ca-rollover", "status"):
+        from .ca_rollover_status import ca_rollover_status
+
+        return ca_rollover_status
+    if route == ("ca-rollover", "prepare"):
+        from .ca_rollover_prepare import prepare_ca_rollover
+
+        return prepare_ca_rollover
     if route == ("ca-rollover", "recover"):
         from .ca_rollover_recover import recover_ca_rollover
 
@@ -126,6 +154,146 @@ def _error(message: str) -> int:
 
 
 def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> None:
+    if len(route) == 2 and route[0] == "csr-candidate" and not unified:
+        action = route[1]
+        descriptions = {
+            "verify": "Verify one exact candidate and report accepted historical state",
+            "finalize": "Accept authenticated activation and validation evidence",
+            "abandon": "Record authenticated non-activation or rollback evidence",
+        }
+        options = (
+            f"  {_color('--request-id ID (required)', '35')}\n"
+            "    Exact 32-character lowercase hexadecimal CSR request ID\n\n"
+        )
+        if action == "verify":
+            options += (
+                f"  {_color('--format FORMAT', '35')}\n"
+                "    Output format\n"
+                "    Allowed: text, json\n"
+                "    Default: text\n\n"
+            )
+        else:
+            options += (
+                f"  {_color('--artifact-manifest-sha256 DIGEST (required)', '35')}\n"
+                "    Exact lowercase SHA-256 digest of the export artifact manifest\n\n"
+                f"  {_color('--evidence-file PATH (required)', '35')}\n"
+                "    Exact canonical deployment evidence record\n\n"
+                f"  {_color('--evidence-signature PATH (required)', '35')}\n"
+                "    Detached OpenSSH deployment evidence signature\n\n"
+                f"  {_color('--yes', '35')}\n"
+                "    Confirm the exact decision without a TTY\n\n"
+            )
+        print(
+            f"{name} {action} - {descriptions[action]}\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} {action} SERVICE [OPTIONS]\n"
+            f"  {name} {action} --help | -h\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"{options}"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICE', '34')}\n"
+            "    Exact inventory service\n\n",
+            end="",
+        )
+        return
+    if route in (
+        ("certificate-export", "publish"),
+        ("certificate-export", "resolve"),
+    ) and not unified:
+        action = route[1]
+        if action == "publish":
+            description = "Publish one exact pending CSR response as an immutable export"
+            options = (
+                f"  {_color('--request-id ID (required)', '35')}\n"
+                "    Exact 32-character lowercase hexadecimal CSR request ID\n\n"
+                f"  {_color('--namespace PATH', '35')}\n"
+                "    Platform namespace root\n\n"
+                f"  {_color('--pki-dir PATH', '35')}\n"
+                "    PKI directory\n\n"
+            )
+            example = (
+                f"  {name} publish platform-example --request-id\n"
+                "  0123456789abcdef0123456789abcdef\n"
+            )
+        else:
+            description = "Resolve one digest-pinned immutable certificate export"
+            options = (
+                f"  {_color('--request-id ID (required)', '35')}\n"
+                "    Exact 32-character lowercase hexadecimal CSR request ID\n\n"
+                f"  {_color('--manifest-sha256 DIGEST (required)', '35')}\n"
+                "    Exact lowercase SHA-256 digest of the artifact manifest\n\n"
+                f"  {_color('--format FORMAT', '35')}\n"
+                "    Output format\n"
+                "    Allowed: path, json\n"
+                "    Default: path\n\n"
+                f"  {_color('--namespace PATH', '35')}\n"
+                "    Platform namespace root\n\n"
+                f"  {_color('--pki-dir PATH', '35')}\n"
+                "    PKI directory\n\n"
+            )
+            example = (
+                f"  {name} resolve platform-example --request-id\n"
+                "  0123456789abcdef0123456789abcdef --manifest-sha256\n"
+                "  0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+            )
+        print(
+            f"{name} {action} - {description}\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} {action} SERVICE [OPTIONS]\n"
+            f"  {name} {action} --help | -h\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"{options}"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"{_color('Arguments:', '1')}\n"
+            f"  {_color('SERVICE', '34')}\n"
+            "    Exact inventory service\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"{example}\n",
+            end="",
+        )
+        return
+    if route == ("csr-trust-install",) and not unified:
+        print(
+            f"{name} - Install reviewed host-local CSR signing trust\n\n"
+            f"{_color('Usage:', '1')}\n"
+            f"  {name} [OPTIONS]\n"
+            f"  {name} --help | -h\n"
+            f"  {name} --version | -v\n\n"
+            f"{_color('Options:', '1')}\n"
+            f"  {_color('--private-repo PATH', '35')}\n"
+            "    Private repository path\n"
+            "    Default: ../platform-private\n\n"
+            f"  {_color('--namespace PATH', '35')}\n"
+            "    Platform namespace root\n\n"
+            f"  {_color('--pki-dir PATH', '35')}\n"
+            "    PKI directory\n\n"
+            f"  {_color('--help, -h', '35')}\n"
+            "    Show this help\n\n"
+            f"  {_color('--version, -v', '35')}\n"
+            "    Show version number\n\n"
+            f"{_color('Examples:', '1')}\n"
+            f"  {name}\n"
+            f"  {name} --private-repo /srv/platform-private\n\n"
+            "The source is <private-repo>/pki/csr-trust. Schema 1 contains exactly policy,\n"
+            "requesters.allowed_signers, approvers.allowed_signers, and\n"
+            "responses.allowed_signers. Schema 2 adds exactly deployers.allowed_signers\n"
+            "and is required for candidate finalization or abandonment. The complete\n"
+            "validated snapshot is atomically installed under\n"
+            "<pki-dir>/inventory/csr-trust while holding the lifecycle, root, intermediate,\n"
+            "and inventory locks. Initial schema-2 installation is allowed when no\n"
+            "candidate is pending, and identical content remains a no-op. Any actual change\n"
+            "involving schema 2 is rejected while a retained candidate lacks an\n"
+            "authenticated finalized or abandoned outcome. No private key is installed.\n\n",
+            end="",
+        )
+        return
     if route == ("init",) and not unified:
         print(
             f"{name} - Create the local outside-Git PKI working directory\n\n"
@@ -681,6 +849,77 @@ def _print_route_help(name: str, route: tuple[str, ...], *, unified: bool) -> No
     print(text, end="")
 
 
+def _print_certificate_export_root_help(name: str) -> None:
+    print(
+        f"{name} - Publish or resolve an immutable certificate-only CSR export\n\n"
+        f"{_color('Usage:', '1')}\n"
+        f"  {name} COMMAND\n"
+        f"  {name} [COMMAND] --help | -h\n"
+        f"  {name} --version | -v\n\n"
+        f"{_color('Commands:', '1')}\n"
+        f"  {_color('publish', '32')}   Publish one exact pending CSR response as an immutable export\n"
+        f"  {_color('resolve', '32')}   Resolve one digest-pinned immutable certificate export\n\n"
+        f"{_color('Options:', '1')}\n"
+        f"  {_color('--help, -h', '35')}\n"
+        "    Show this help\n\n"
+        f"  {_color('--version, -v', '35')}\n"
+        "    Show version number\n\n"
+        "Publication copies only an authenticated pending CSR certificate response.\n"
+        "Exports are unfinalized and contain no private key. Resolution requires the\n"
+        "exact service, request ID, and manifest digest; it never infers current or\n"
+        "latest state and performs no deployment, activation, or finalization.\n\n",
+        end="",
+    )
+
+
+def _print_candidate_root_help(name: str) -> None:
+    print(
+        f"{name} - Verify, finalize, or abandon authenticated CSR candidate evidence\n\n"
+        f"{_color('Usage:', '1')}\n"
+        f"  {name} COMMAND\n"
+        f"  {name} [COMMAND] --help | -h\n"
+        f"  {name} --version | -v\n\n"
+        f"{_color('Commands:', '1')}\n"
+        f"  {_color('verify', '32')}     Verify one exact candidate and report accepted historical state\n"
+        f"  {_color('finalize', '32')}   Accept authenticated activation and validation evidence\n"
+        f"  {_color('abandon', '32')}    Record authenticated non-activation or rollback evidence\n\n"
+        f"{_color('Options:', '1')}\n"
+        f"  {_color('--help, -h', '35')}\n"
+        "    Show this help\n\n"
+        f"  {_color('--version, -v', '35')}\n"
+        "    Show version number\n\n"
+        "Verification reports accepted historical evidence and never claims current\n"
+        "live state. Finalization verifies bounded-time authenticated evidence but\n"
+        "performs no deployment. Abandonment is not revocation. Candidate, response,\n"
+        "replay, signing transaction, export, managed keys, and managed exports remain.\n\n",
+        end="",
+    )
+
+
+def _print_rollover_root_help(name: str) -> None:
+    print(
+        f"{name} - Prepare or inspect generation-aware CA rollover state\n\n"
+        f"{_color('Usage:', '1')}\n"
+        f"  {name} COMMAND\n"
+        f"  {name} [COMMAND] --help | -h\n"
+        f"  {name} --version | -v\n\n"
+        f"{_color('Commands:', '1')}\n"
+        f"  {_color('migrate', '32')}   Move a verified legacy CA layout into generation g1 and g1-i1\n"
+        f"  {_color('status', '32')}    Report active, candidate, retired, or recovery-required CA state\n"
+        f"  {_color('prepare', '32')}   Prepare an immutable root or intermediate rollover candidate\n"
+        f"  {_color('recover', '32')}   Resume migration or terminal cleanup, or roll back the journaled transaction\n\n"
+        f"{_color('Options:', '1')}\n"
+        f"  {_color('--help, -h', '35')}\n"
+        "    Show this help\n\n"
+        f"  {_color('--version, -v', '35')}\n"
+        "    Show version number\n\n"
+        "This milestone implements migration, candidate preparation, recovery, and status.\n"
+        "activate, acknowledge, rollback, retire, and complete remain unavailable until\n"
+        "the immutable export and evidence milestone is implemented.\n\n",
+        end="",
+    )
+
+
 def _parser_error(error: ParserError) -> int:
     print(error.render(), file=sys.stderr, end="")
     return 1
@@ -750,10 +989,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             assert compatibility_command is not None
             nested = COMMANDS[compatibility_command]
             if nested:
-                print(
-                    _command_help(name, (), subcommands=nested),
-                    end="",
-                )
+                if compatibility_command == "certificate-export":
+                    _print_certificate_export_root_help(name)
+                elif compatibility_command == "csr-candidate":
+                    _print_candidate_root_help(name)
+                elif compatibility_command == "ca-rollover":
+                    _print_rollover_root_help(name)
+                else:
+                    print(
+                        _command_help(name, (), subcommands=nested),
+                        end="",
+                    )
             else:
                 _print_route_help(name, (compatibility_command,), unified=False)
         return 0

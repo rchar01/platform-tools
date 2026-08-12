@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -10,12 +11,24 @@ from pathlib import Path
 
 import pytest
 
-from .support import BIN, assert_result, digest, write_private
+from ..harness import ProcessResult
+from .migration_harness import run_differential_case
+from .support import BIN, REPOSITORY, assert_result, digest, environment, write_private
 from .test_csr_signing import CsrWorkspace, csr_workspace, tree_snapshot
 
 
 pytestmark = pytest.mark.pki
 EXPORT = BIN / "platform-pki-certificate-export"
+UNIFIED = BIN / "platform-pki"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-certificate-export"
+ORACLE = ORACLE_ROOT / "platform-pki-certificate-export"
+ORACLE_LIB = ORACLE_ROOT / "lib"
+ORACLE_COMMIT = "24db7d54ca5c113fe763d4007c5dfef507dc23a6"
+ORACLE_HASHES = {
+    "platform-pki-certificate-export": "21c73b92d8568a74e8b75f554831060309c4f998d4230d28b019d72c3e1f85fa",
+    "lib/platform-pki-common.sh": "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f",
+    "lib/platform-pki-csr-sign.sh": "8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001",
+}
 REQUEST_ID = "0123456789abcdef0123456789abcdef"
 EXPECTED_FILES = {
     "artifact",
@@ -51,6 +64,35 @@ ARTIFACT_FIELDS = (
 )
 
 
+def test_frozen_certificate_export_oracle_matches_provenance_and_modes() -> None:
+    plan = (REPOSITORY / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert ORACLE_COMMIT in plan
+    assert {
+        path.relative_to(ORACLE_ROOT).as_posix()
+        for path in ORACLE_ROOT.rglob("*")
+    } == {"lib", *ORACLE_HASHES}
+    for relative, expected in ORACLE_HASHES.items():
+        path = ORACLE_ROOT / relative
+        assert path.is_file() and not path.is_symlink()
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+        expected_mode = 0o644 if relative.startswith("lib/") else 0o755
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
+
+
+def test_certificate_export_compatibility_help_matches_oracle(
+    process_runner, isolated_environment
+) -> None:
+    oracle_environment = environment(
+        isolated_environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)
+    )
+    for action in (("--help",), ("publish", "--help"), ("resolve", "--help")):
+        oracle = process_runner([ORACLE, *action], env=oracle_environment, timeout=30)
+        result = process_runner([EXPORT, *action], env=isolated_environment, timeout=30)
+        assert result == ProcessResult(result.args, oracle.status, oracle.stdout, oracle.stderr)
+
+
 def run(workspace: CsrWorkspace, *arguments: object):
     return workspace.runner(
         [EXPORT, *arguments, "--namespace", workspace.namespace],
@@ -65,6 +107,102 @@ def publish(workspace: CsrWorkspace):
 
 def artifact_path(workspace: CsrWorkspace) -> Path:
     return workspace.pki / f"export/certificates/v1/artifacts/external/{REQUEST_ID}"
+
+
+def _normalize_case_root(root: Path, value: str) -> str:
+    return value.replace(os.fspath(root), "<case>")
+
+
+def test_bash_python_publish_is_equivalent(
+    csr_workspace: CsrWorkspace,
+    tmp_path: Path,
+) -> None:
+    workspace = csr_workspace
+    assert_result(workspace.issue(), 0)
+    seed = workspace.namespace.parent
+    differential = run_differential_case(
+        seed,
+        tmp_path / "publish-differential",
+        Path("namespace/pki"),
+        lambda root: (
+            ORACLE,
+            "publish",
+            "external",
+            "--request-id",
+            REQUEST_ID,
+            "--namespace",
+            root / "namespace",
+        ),
+        lambda root: (
+            UNIFIED,
+            "certificate-export",
+            "publish",
+            "external",
+            "--request-id",
+            REQUEST_ID,
+            "--namespace",
+            root / "namespace",
+        ),
+        environment(workspace.env, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)),
+        output_normalizers=(_normalize_case_root,),
+        run_options={"timeout": 120},
+    )
+    differential.assert_equivalent()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "case_name"),
+    (
+        ((), "path"),
+        (("--format", "json"), "json"),
+        (("--manifest-sha256", "0" * 64), "wrong-pin"),
+    ),
+)
+def test_bash_python_resolve_is_equivalent(
+    csr_workspace: CsrWorkspace,
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    case_name: str,
+) -> None:
+    workspace = csr_workspace
+    assert_result(workspace.issue(), 0)
+    assert_result(publish(workspace), 0)
+    manifest_sha256 = digest(artifact_path(workspace) / "artifact")
+    if arguments[:1] == ("--manifest-sha256",):
+        pin_arguments = arguments
+    else:
+        pin_arguments = ("--manifest-sha256", manifest_sha256, *arguments)
+    seed = workspace.namespace.parent
+    differential = run_differential_case(
+        seed,
+        tmp_path / f"resolve-{case_name}-differential",
+        Path("namespace/pki"),
+        lambda root: (
+            ORACLE,
+            "resolve",
+            "external",
+            "--request-id",
+            REQUEST_ID,
+            *pin_arguments,
+            "--namespace",
+            root / "namespace",
+        ),
+        lambda root: (
+            UNIFIED,
+            "certificate-export",
+            "resolve",
+            "external",
+            "--request-id",
+            REQUEST_ID,
+            *pin_arguments,
+            "--namespace",
+            root / "namespace",
+        ),
+        environment(workspace.env, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)),
+        output_normalizers=(_normalize_case_root,),
+        run_options={"timeout": 120},
+    )
+    differential.assert_equivalent()
 
 
 def wait_for_path(path: Path, timeout: float = 30) -> None:
@@ -496,6 +634,59 @@ def test_publish_no_clobber_race_preserves_competing_destination(
     (artifact / "foreign").unlink()
     artifact.rmdir()
     assert_result(publish(workspace), 0)
+
+
+@pytest.mark.parametrize(
+    ("action", "pause_point"),
+    (("publish", "publish-before-rename"), ("resolve", "resolver-before-output")),
+)
+def test_final_source_replacement_fails_cleanly_before_publication_or_output(
+    csr_workspace: CsrWorkspace,
+    process_starter,
+    tmp_path: Path,
+    action: str,
+    pause_point: str,
+) -> None:
+    workspace = csr_workspace
+    assert_result(workspace.issue(), 0)
+    artifact = artifact_path(workspace)
+    if action == "resolve":
+        assert_result(publish(workspace), 0)
+        arguments: list[object] = [
+            "resolve",
+            "external",
+            "--request-id",
+            REQUEST_ID,
+            "--manifest-sha256",
+            digest(artifact / "artifact"),
+        ]
+    else:
+        arguments = ["publish", "external", "--request-id", REQUEST_ID]
+    marker = tmp_path / f"{action}-source-validated"
+    release = tmp_path / f"{action}-source-release"
+    process = start_paused(
+        process_starter, workspace, arguments, pause_point, marker, release
+    )
+    wait_for_path(marker)
+    source = workspace.pki / f"state/csr/candidates/external/{REQUEST_ID}/tls.crt"
+    saved = source.with_name("tls.crt.saved")
+    source.rename(saved)
+    shutil.copy2(saved, source)
+    source.chmod(0o600)
+    release.touch()
+    result = process.wait()
+    assert result.status == 1
+    assert result.stdout == ""
+    assert "CSR historical evidence changed during validation" in result.stderr
+    assert "Traceback" not in result.stderr
+    if action == "publish":
+        assert not artifact.exists()
+        assert not any(
+            path.name.startswith(f".platform-pki-certificate-export.{REQUEST_ID}.")
+            for path in artifact.parent.iterdir()
+        )
+    else:
+        assert artifact.is_dir()
 
 
 def test_parser_requires_explicit_request_and_manifest_pin(

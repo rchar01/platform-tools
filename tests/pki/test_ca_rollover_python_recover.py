@@ -24,6 +24,7 @@ from src.platform_pki.persisted_identity import (
 from src.platform_pki.publication import (
     PublicationReplacementAmbiguousError,
     replace_exact,
+    unlink_exact,
 )
 
 from ..harness import ProcessResult
@@ -57,7 +58,11 @@ from .test_root_create import (
 pytestmark = pytest.mark.pki
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-BASH_ROLLOVER = REPOSITORY / "bin/platform-pki-ca-rollover"
+FROZEN_BASH_ROLLOVER = (
+    REPOSITORY
+    / "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-ca-rollover"
+)
+FROZEN_BASH_LIBRARY = FROZEN_BASH_ROLLOVER.parent / "lib"
 UNIFIED_PLATFORM_PKI = REPOSITORY / "bin/platform-pki"
 
 _ROOT_BOOTSTRAP_TOKENS = (
@@ -656,6 +661,20 @@ def _assert_root_bootstrap_recovery_and_retry(
     assert root_create.record(
         workspace.pki / "state/generation-reservations/g1"
     )["status"] == "abandoned"
+
+    # Recovery retains authenticated terminal history. Remove it only as test
+    # fixture setup before exercising a fresh root transaction.
+    parsed = recovery_schema.parse_recovery_semantics(
+        journal.read_bytes(), pki_dir=workspace.pki
+    )
+    assert isinstance(parsed, recovery_schema.RootBootstrapRecoveryRecord)
+    assert parsed.committed and parsed.phase == "rolled-back"
+    assert parsed.recovery_action is recovery_schema.RecoveryAction.ROLLBACK
+    assert parsed.recovery_step == "complete"
+    journal_identity = identity_at(journal)
+    assert isinstance(journal_identity, FileIdentity)
+    with OpenedDirectory(journal.parent) as parent:
+        unlink_exact(parent, journal.name, journal_identity)
 
     retried = root_create.create_root(
         process_runner,
@@ -1323,17 +1342,21 @@ def _run_recovery_differential(
     *,
     transaction_source: str = "journal",
 ) -> DifferentialResult:
+    differential_environment = dict(environment)
+    differential_environment["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(
+        FROZEN_BASH_LIBRARY
+    )
     return run_differential_case(
         seed.root,
         case_root,
         Path("ns/pki"),
         lambda root: _recovery_argv(
-            root, BASH_ROLLOVER, action, transaction_source
+            root, FROZEN_BASH_ROLLOVER, action, transaction_source
         ),
         lambda root: _recovery_argv(
             root, UNIFIED_PLATFORM_PKI, action, transaction_source
         ),
-        environment,
+        differential_environment,
         output_normalizers=(
             lambda root, value: _normalize_recovery_output(
                 root, value, normalization
@@ -1587,6 +1610,20 @@ def test_recovery_differential_intermediate_cleanup_resume(
             operation,
         )
 
+    # The writer retains terminal bootstrap evidence. It is not part of the
+    # interrupted intermediate transaction copied into each differential case.
+    journal = seed.pki / "state/rollover/journal"
+    parsed = recovery_schema.parse_recovery_semantics(
+        journal.read_bytes(), pki_dir=seed.pki
+    )
+    assert isinstance(parsed, recovery_schema.RootBootstrapRecoveryRecord)
+    assert parsed.committed and parsed.phase == "complete"
+    assert parsed.recovery_action is None and parsed.recovery_step is None
+    journal_identity = identity_at(journal)
+    assert isinstance(journal_identity, FileIdentity)
+    with OpenedDirectory(journal.parent) as parent:
+        unlink_exact(parent, journal.name, journal_identity)
+
     def interrupt(root: Path, environment: Mapping[str, str]) -> None:
         workspace = _copied_workspace(root)
         crashed = process_runner(
@@ -1723,7 +1760,7 @@ def test_recovery_differential_preparation_root_db_window(
 
         crashed = process_runner(
             [
-                BASH_ROLLOVER,
+                FROZEN_BASH_ROLLOVER,
                 "recover",
                 "--namespace",
                 workspace.namespace,
@@ -1808,7 +1845,7 @@ def test_recovery_differential_terminal_marker_only_cleanup(
         )
         crashed = process_runner(
             [
-                BASH_ROLLOVER,
+                FROZEN_BASH_ROLLOVER,
                 "recover",
                 "--namespace",
                 workspace.namespace,

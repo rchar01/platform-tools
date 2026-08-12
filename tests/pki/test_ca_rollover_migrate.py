@@ -1667,12 +1667,7 @@ def test_missing_generation_destination_preparation_is_safely_retryable(
     (workspace.pki / "authorities/intermediates").rmdir()
     (workspace.pki / "authorities").rmdir()
     journal = workspace.pki / "state/rollover/journal"
-    journal_content = journal.read_text()
-    journal_identity = (
-        journal.stat().st_dev,
-        journal.stat().st_ino,
-        journal.stat().st_mtime_ns,
-    )
+    assert not journal.exists()
     receipt = backup_receipt_factory(workspace)
     receipt_content = receipt.read_text()
     receipt.write_text(
@@ -1718,12 +1713,7 @@ def test_missing_generation_destination_preparation_is_safely_retryable(
     ):
         assert directory.is_dir() and not directory.is_symlink()
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
-    assert journal.read_text() == journal_content
-    assert (
-        journal.stat().st_dev,
-        journal.stat().st_ino,
-        journal.stat().st_mtime_ns,
-    ) == journal_identity
+    assert not journal.exists()
     assert not (workspace.pki / "state/rollover/recovery-required").exists()
     status = process_runner(
         [

@@ -24,6 +24,13 @@ from src.platform_pki.csr_recovery import (
     CSR_DB_KEYS,
     CSR_SIGNING_JOURNAL_FIELDS as CSR_JOURNAL_FIELDS,
 )
+from src.platform_pki.csr_recover import CSR_FINALIZATION_RECOVERY_CHECKPOINTS
+from src.platform_pki.csr_history import (
+    CSR_ACTIVE_FIELDS as CANDIDATE_ACTIVE_FIELDS,
+    CSR_ARTIFACT_FIELDS as CANDIDATE_ARTIFACT_FIELDS,
+    CSR_DECISION_FIELDS as CANDIDATE_DECISION_FIELDS,
+    CSR_DEPLOYMENT_FIELDS as CANDIDATE_DEPLOYMENT_FIELDS,
+)
 from src.platform_pki.csr_protocol import (
     CSR_APPROVAL_FIELDS,
     CSR_CANDIDATE_FIELDS as CANDIDATE_RECORD_FIELDS,
@@ -549,8 +556,8 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
     *(
         RuntimeOptionRelationship(
             ("csr-candidate", action), "confirmation", "--yes is absent",
-            ("--yes", "--request-id"), "bashly/platform-pki-csr-candidate/src/initialize.sh",
-            '[[ $confirmation == "$action $service $request_id" ]]',
+            ("--yes", "--request-id"), "src/platform_pki/csr_candidate.py",
+            'sys.stdin.readline().rstrip("\\n") != f"{action} {service_name} {request_id}"',
         )
         for action in ("finalize", "abandon")
     ),
@@ -601,7 +608,7 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
 
 
 _CERTIFICATE_EXPORT_DUPLICATES = ("--request-id", "--manifest-sha256", "--format", "--namespace", "--pki-dir")
-_CANDIDATE_DECISION_DUPLICATES = ("--request-id", "--artifact-manifest-sha256", "--evidence-file", "--evidence-signature", "--namespace", "--pki-dir", "--yes")
+_CANDIDATE_DECISION_DUPLICATES = ("--request-id", "--artifact-manifest-sha256", "--evidence-file", "--evidence-signature", "--yes", "--namespace", "--pki-dir")
 PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("inventory-install",), ("--private-repo", "--namespace", "--pki-dir"), "bashly/platform-pki-inventory-install/src/root_command.sh", "reject_repeated_options"),
     DuplicateOptionContract(("csr-trust-install",), ("--private-repo", "--namespace", "--pki-dir"), "bashly/platform-pki-csr-trust-install/src/root_command.sh"),
@@ -609,9 +616,9 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("csr-recover",), ("--transaction", "--response-key", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("certificate-export", "publish"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("certificate-export", "resolve"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
-    DuplicateOptionContract(("csr-candidate", "verify"), ("--request-id", "--format", "--namespace", "--pki-dir"), "bashly/platform-pki-csr-candidate/src/verify_command.sh"),
-    DuplicateOptionContract(("csr-candidate", "finalize"), _CANDIDATE_DECISION_DUPLICATES, "bashly/platform-pki-csr-candidate/src/finalize_command.sh"),
-    DuplicateOptionContract(("csr-candidate", "abandon"), _CANDIDATE_DECISION_DUPLICATES, "bashly/platform-pki-csr-candidate/src/abandon_command.sh"),
+    DuplicateOptionContract(("csr-candidate", "verify"), ("--request-id", "--format", "--namespace", "--pki-dir"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("csr-candidate", "finalize"), _CANDIDATE_DECISION_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("csr-candidate", "abandon"), _CANDIDATE_DECISION_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("service-issue",), _CSR_INPUT_FLAGS, "bashly/platform-pki-service-issue/src/root_command.sh"),
     DuplicateOptionContract(("service-renew",), _CSR_INPUT_FLAGS, "bashly/platform-pki-service-renew/src/root_command.sh"),
     DuplicateOptionContract(("service-renew",), _CSR_INPUT_FLAGS, "src/platform_pki/parser.py", "parser_reject_duplicates"),
@@ -782,42 +789,6 @@ def _fields(value: str) -> tuple[str, ...]:
     return tuple(value.split())
 
 
-CANDIDATE_ARTIFACT_FIELDS = _fields("""
-schema kind service request_id operation target source_kind
-source_response_sha256 source_response_signature_sha256 certificate_sha256
-certificate_spki_sha256 chain_sha256 fullchain_sha256 issuer_root
-issuer_intermediate serial not_before_epoch not_after_epoch candidate_state
-deployment_state response_principal created_epoch
-""")
-CANDIDATE_DEPLOYMENT_FIELDS = _fields("""
-schema request_id nonce operation service target request_sha256 response_sha256
-response_signature_sha256 candidate_sha256 artifact_request_id
-artifact_manifest_sha256 certificate_sha256 certificate_spki_sha256
-chain_sha256 fullchain_sha256 action result local_certificate_sha256
-local_key_spki_sha256 local_key_certificate_match served_certificate_sha256
-served_intermediate_sha256 validation_boundary_sha256 validation_result
-activation_epoch validation_epoch rollback_state rollback_hold_until_epoch
-deployment_principal created_epoch expires_epoch
-""")
-CANDIDATE_ACTIVE_FIELDS = _fields("""
-schema service target request_id operation certificate_sha256
-certificate_spki_sha256 response_sha256 artifact_manifest_sha256
-deployment_sha256 decision_sha256 activation_epoch rollback_hold_until_epoch
-updated_epoch
-""")
-CANDIDATE_DECISION_FIELDS = _fields("""
-schema action state service target request_id operation request_sha256
-response_sha256 response_signature_sha256 candidate_sha256
-artifact_manifest_sha256 certificate_sha256 certificate_spki_sha256
-chain_sha256 fullchain_sha256 deployment_sha256
-deployment_signature_sha256 deployers_sha256 predecessor_kind
-predecessor_request_id predecessor_certificate_sha256
-predecessor_certificate_spki_sha256 predecessor_intermediate_sha256
-predecessor_response_sha256 predecessor_artifact_manifest_sha256
-predecessor_deployment_sha256 predecessor_decision_sha256
-resulting_active_request_id created_epoch
-""")
-
 ACTIVE_ISSUER_FIELDS = ("root", "intermediate")
 GENERATION_RESERVATION_TRANSACTION_FIELDS = (
     "generation", "kind", "status", "transaction",
@@ -886,26 +857,26 @@ PERSISTED_RECORD_CONTRACTS = (
     RecordContract("CSR request", 1, "PKI_CSR_REQUEST_FIELDS", "lib/platform-pki-csr-sign.sh", CSR_REQUEST_FIELDS),
     RecordContract("CSR approval", 1, "PKI_CSR_APPROVAL_FIELDS", "lib/platform-pki-csr-sign.sh", CSR_APPROVAL_FIELDS),
     RecordContract("CSR signing journal", 1, "PKI_CSR_JOURNAL_FIELDS", "lib/platform-pki-csr-sign.sh", CSR_JOURNAL_FIELDS),
-    RecordContract("CSR response", 1, "PKI_CANDIDATE_RESPONSE_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_RESPONSE_FIELDS),
-    RecordContract("CSR candidate", 1, "PKI_CANDIDATE_RECORD_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_RECORD_FIELDS),
+    RecordContract("CSR response", 1, "literal Python CSR response", "src/platform_pki/csr_protocol.py", CANDIDATE_RESPONSE_FIELDS),
+    RecordContract("CSR candidate", 1, "literal Python CSR candidate", "src/platform_pki/csr_protocol.py", CANDIDATE_RECORD_FIELDS),
     RecordContract("CSR replay request", 1, "literal CSR replay request", "lib/platform-pki-csr-sign.sh", CSR_REPLAY_REQUEST_FIELDS),
     RecordContract("CSR replay nonce", 1, "literal CSR replay nonce", "lib/platform-pki-csr-sign.sh", CSR_REPLAY_NONCE_FIELDS),
     RecordContract("CSR signing terminal", 1, "literal CSR signing terminal", "lib/platform-pki-csr-sign.sh", CSR_TERMINAL_FIELDS),
     RecordContract(
         "certificate export manifest",
         1,
-        "PKI_CERTIFICATE_EXPORT_ARTIFACT_FIELDS",
-        "bashly/platform-pki-certificate-export/src/initialize.sh",
+        "literal Python certificate export manifest",
+        "src/platform_pki/csr_history.py",
         CANDIDATE_ARTIFACT_FIELDS,
     ),
-    RecordContract("deployment evidence", 1, "PKI_CANDIDATE_DEPLOYMENT_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_DEPLOYMENT_FIELDS),
-    RecordContract("active candidate", 1, "PKI_CANDIDATE_ACTIVE_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_ACTIVE_FIELDS),
-    RecordContract("candidate outcome", 1, "PKI_CANDIDATE_DECISION_FIELDS", "lib/platform-pki-csr-candidate.sh", CANDIDATE_DECISION_FIELDS),
+    RecordContract("deployment evidence", 1, "literal Python deployment evidence", "src/platform_pki/csr_history.py", CANDIDATE_DEPLOYMENT_FIELDS),
+    RecordContract("active candidate", 1, "literal Python active candidate", "src/platform_pki/csr_history.py", CANDIDATE_ACTIVE_FIELDS),
+    RecordContract("candidate outcome", 1, "literal Python candidate outcome", "src/platform_pki/csr_history.py", CANDIDATE_DECISION_FIELDS),
     RecordContract(
         "candidate finalization journal",
         1,
-        "PKI_CANDIDATE_JOURNAL_FIELDS",
-        "lib/platform-pki-csr-candidate.sh",
+        "literal Python candidate finalization journal",
+        "src/platform_pki/csr_recovery.py",
         CANDIDATE_JOURNAL_FIELDS,
     ),
     RecordContract(
@@ -991,7 +962,7 @@ RECOVERY_CONTRACTS = (
         "csr-finalize",
         1,
         "platform-pki csr-recover",
-        "lib/platform-pki-csr-candidate.sh",
+        "src/platform_pki/csr_recovery.py",
         ("resume",),
         (
             ("route", _CSR_RECOVERY, "_recover_finalization_locked"),
@@ -1095,9 +1066,15 @@ FAULT_HOOK_CONTRACTS = (
         ("rollback-pre-commit", "resume-post-commit"),
     ),
     FaultHookContract(
-        "candidate finalization writer", ("csr-finalize",), (1,), "lib/platform-pki-csr-candidate.sh", "pki_candidate_fault",
-        ("PLATFORM_PKI_CANDIDATE_CRASH_AT", "PLATFORM_PKI_CANDIDATE_FAIL_AT"),
-        (CheckpointCategory("resume-only", ("journal-written", "outcome-published", "active-published")),),
+        "candidate finalization writer", ("csr-finalize",), (1,), "src/platform_pki/csr_candidate.py", "fault",
+        (),
+        (CheckpointCategory("pre-journal", ("outcome-staged", "active-staged")),),
+        (), ("cleanup",),
+    ),
+    FaultHookContract(
+        "candidate finalization recovery", ("csr-finalize",), (1,), "src/platform_pki/csr_recover.py", "CSR_FINALIZATION_RECOVERY_CHECKPOINTS",
+        ("PLATFORM_PKI_CANDIDATE_CRASH_AT", "PLATFORM_PKI_CANDIDATE_SIGNAL_AT", "PLATFORM_PKI_CANDIDATE_FAIL_AT"),
+        (CheckpointCategory("resume-only", CSR_FINALIZATION_RECOVERY_CHECKPOINTS),),
         (), ("resume",),
     ),
     FaultHookContract(

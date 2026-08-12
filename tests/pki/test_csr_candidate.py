@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import shlex
 import signal
+import stat
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from .support import BIN, assert_result, digest, environment, write_private
+import src.platform_pki.csr_candidate as candidate_module
+
+from src.platform_pki.errors import ApplicationError
+from src.platform_pki.filesystem import OpenedDirectory
+
+from ..harness import ProcessResult
+from .migration_harness import run_differential_case
+from .support import BIN, REPOSITORY, assert_result, digest, environment, write_private
 from .test_csr_signing import (
     EXPORT as ANSIBLE_EXPORT,
     INVENTORY,
@@ -24,9 +36,27 @@ from .test_csr_signing import (
 
 pytestmark = pytest.mark.pki
 CANDIDATE = BIN / "platform-pki-csr-candidate"
+CANDIDATE_COMMAND = tuple(
+    shlex.split(
+        os.environ.get(
+            "PLATFORM_PKI_CANDIDATE_TEST_COMMAND",
+            os.fspath(CANDIDATE),
+        )
+    )
+)
 CERTIFICATE_EXPORT = BIN / "platform-pki-certificate-export"
 TRUST_INSTALL = BIN / "platform-pki-csr-trust-install"
 RECOVER = BIN / "platform-pki-csr-recover"
+ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-candidate"
+ORACLE = ORACLE_ROOT / "platform-pki-csr-candidate"
+ORACLE_LIB = ORACLE_ROOT / "lib"
+ORACLE_COMMIT = "24db7d54ca5c113fe763d4007c5dfef507dc23a6"
+ORACLE_HASHES = {
+    "platform-pki-csr-candidate": "03566a3917505e1999e52e2ece0f7a29313cd8869c4f968802e6525c8a3b5c95",
+    "lib/platform-pki-common.sh": "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f",
+    "lib/platform-pki-csr-sign.sh": "8659a730f91c592c12fa3d40acbb080cf10d3eff6bd2de38fa486e8055f3e001",
+    "lib/platform-pki-csr-candidate.sh": "ca1fb976f09730fbbc840ce97cb0c6db3ae76e5d679fdc777a1a96d80df5b43f",
+}
 REQUEST_ID = "0123456789abcdef0123456789abcdef"
 POLICY2 = """schema=2
 request_namespace=platform-pki-csr-request-v1
@@ -43,12 +73,84 @@ response_principal=offline-response
 """
 
 
+def test_frozen_candidate_oracle_matches_provenance_and_modes() -> None:
+    plan = (REPOSITORY / "docs/plans/platform-pki-python-migration.md").read_text(
+        encoding="utf-8"
+    )
+    assert ORACLE_COMMIT in plan
+    assert {
+        path.relative_to(ORACLE_ROOT).as_posix()
+        for path in ORACLE_ROOT.rglob("*")
+    } == {"lib", *ORACLE_HASHES}
+    for relative, expected in ORACLE_HASHES.items():
+        path = ORACLE_ROOT / relative
+        assert path.is_file() and not path.is_symlink()
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+        expected_mode = 0o644 if relative.startswith("lib/") else 0o755
+        assert stat.S_IMODE(path.stat().st_mode) == expected_mode
+
+
+def test_candidate_compatibility_help_matches_oracle(
+    process_runner, isolated_environment
+) -> None:
+    oracle_environment = environment(
+        isolated_environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)
+    )
+    for action in (
+        ("--help",),
+        ("verify", "--help"),
+        ("finalize", "--help"),
+        ("abandon", "--help"),
+    ):
+        oracle = process_runner([ORACLE, *action], env=oracle_environment, timeout=30)
+        result = process_runner(
+            [*CANDIDATE_COMMAND, *action], env=isolated_environment, timeout=30
+        )
+        assert result == ProcessResult(result.args, oracle.status, oracle.stdout, oracle.stderr)
+
+
 def run(workspace: CsrWorkspace, *arguments: object):
     return workspace.runner(
-        [CANDIDATE, *arguments, "--namespace", workspace.namespace],
+        [*CANDIDATE_COMMAND, *arguments, "--namespace", workspace.namespace],
         env=workspace.env,
         timeout=120,
     )
+
+
+def wait_for_path(path: Path, process, timeout: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        observation = process.observe()
+        if observation.status is not None:
+            pytest.fail(f"process exited before pause marker: {observation}")
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out waiting for pause marker: {path}")
+        time.sleep(0.01)
+
+
+def candidate_arguments(
+    workspace: CsrWorkspace,
+    action: str,
+    manifest_digest: str,
+    evidence: Path,
+    signature: Path,
+) -> list[object]:
+    return [
+        *CANDIDATE_COMMAND,
+        action,
+        "external",
+        "--request-id",
+        REQUEST_ID,
+        "--artifact-manifest-sha256",
+        manifest_digest,
+        "--evidence-file",
+        evidence,
+        "--evidence-signature",
+        signature,
+        "--yes",
+        "--namespace",
+        workspace.namespace,
+    ]
 
 
 def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
@@ -75,6 +177,62 @@ def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
         / f"export/certificates/v1/artifacts/external/{REQUEST_ID}"
     )
     return artifact, digest(artifact / "artifact")
+
+
+def _normalize_case_root(root: Path, value: str) -> str:
+    return value.replace(os.fspath(root), "<case>")
+
+
+@pytest.mark.parametrize("action", ("verify", "finalize", "abandon"))
+def test_bash_python_candidate_decisions_are_equivalent(
+    csr_workspace: CsrWorkspace,
+    tmp_path: Path,
+    action: str,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    arguments: tuple[str | os.PathLike[str], ...] = (
+        action,
+        "external",
+        "--request-id",
+        REQUEST_ID,
+    )
+    if action != "verify":
+        evidence, signature = write_evidence(
+            csr_workspace,
+            artifact,
+            action=action,
+            result="activated" if action == "finalize" else "not-activated",
+        )
+        arguments += (
+            "--artifact-manifest-sha256",
+            manifest_digest,
+            "--evidence-file",
+            Path("artifacts") / evidence.name,
+            "--evidence-signature",
+            Path("artifacts") / signature.name,
+            "--yes",
+        )
+
+    def argv(
+        root: Path, command: tuple[str, ...]
+    ) -> tuple[str | os.PathLike[str], ...]:
+        resolved = tuple(
+            root / argument if isinstance(argument, Path) else argument
+            for argument in arguments
+        )
+        return (*command, *resolved, "--namespace", root / "namespace")
+
+    differential = run_differential_case(
+        csr_workspace.namespace.parent,
+        tmp_path / f"{action}-differential",
+        Path("namespace/pki"),
+        lambda root: argv(root, (os.fspath(ORACLE),)),
+        lambda root: argv(root, CANDIDATE_COMMAND),
+        environment(csr_workspace.env, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)),
+        output_normalizers=(_normalize_case_root,),
+        run_options={"timeout": 120},
+    )
+    differential.assert_equivalent()
 
 
 def install_deployer_trust(workspace: CsrWorkspace) -> None:
@@ -307,6 +465,352 @@ def test_verify_finalize_and_exact_rerun(csr_workspace: CsrWorkspace) -> None:
     )
 
 
+def test_exact_rerun_uses_immutable_outcome_deployer_trust(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace, artifact, action="abandon", result="not-activated"
+    )
+    arguments = (
+        "abandon",
+        "external",
+        "--request-id",
+        REQUEST_ID,
+        "--artifact-manifest-sha256",
+        manifest_digest,
+        "--evidence-file",
+        evidence,
+        "--evidence-signature",
+        signature,
+        "--yes",
+    )
+    assert_result(run(csr_workspace, *arguments), 0)
+
+    replacement = csr_workspace.response_key.with_suffix(".pub").read_text().split()
+    write_private(
+        csr_workspace.pki / "inventory/csr-trust/deployers.allowed_signers",
+        f"host-01 {replacement[0]} {replacement[1]}\n",
+    )
+    assert_result(run(csr_workspace, *arguments), 0)
+
+
+def test_finalize_post_journal_mutation_failure_retains_recovery_state(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace, artifact, action="finalize", result="activated"
+    )
+    failed = csr_workspace.runner(
+        candidate_arguments(
+            csr_workspace,
+            "finalize",
+            manifest_digest,
+            evidence,
+            signature,
+        ),
+        env=environment(
+            csr_workspace.env,
+            PLATFORM_PKI_CANDIDATE_FAIL_AT="publication-after-mutation",
+        ),
+        timeout=120,
+    )
+    assert failed.status == 1
+    assert "requires explicit recovery" in failed.stderr
+    journal = csr_workspace.pki / "state/csr/finalization-recovery-journal"
+    assert journal.is_file()
+    assert list((csr_workspace.pki / "state/csr/outcomes/external").glob(
+        f".platform-pki-csr-outcome.{REQUEST_ID}.*"
+    ))
+    assert list((csr_workspace.pki / "state/csr/active").glob(
+        ".platform-pki-active.external.*"
+    ))
+
+
+def test_outcome_member_failure_removes_exact_partial_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_path = tmp_path / "outcomes"
+    parent_path.mkdir(mode=0o700)
+    deployment = SimpleNamespace(
+        deployment_bytes=b"deployment\n",
+        signature_bytes=b"signature\n",
+        deployers_bytes=b"deployers\n",
+    )
+    original = candidate_module._write_file
+
+    def fail_second_member(directory, name: str, data: bytes):
+        if name == "deployment.sig":
+            raise ApplicationError("Injected outcome member failure")
+        return original(directory, name, data)
+
+    monkeypatch.setattr(candidate_module, "_write_file", fail_second_member)
+    with OpenedDirectory(parent_path, policy=candidate_module._DIRECTORY) as parent:
+        with pytest.raises(ApplicationError, match="Injected outcome member failure"):
+            candidate_module._create_outcome_stage(
+                parent,
+                REQUEST_ID,
+                deployment,  # type: ignore[arg-type]
+                b"decision\n",
+            )
+
+    assert not tuple(parent_path.iterdir())
+
+
+def test_outcome_member_failure_preserves_foreign_stage_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parent_path = tmp_path / "outcomes"
+    parent_path.mkdir(mode=0o700)
+    displaced = tmp_path / "displaced-outcome-stage"
+    deployment = SimpleNamespace(
+        deployment_bytes=b"deployment\n",
+        signature_bytes=b"signature\n",
+        deployers_bytes=b"deployers\n",
+    )
+    original = candidate_module._write_file
+
+    def replace_before_failure(directory, name: str, data: bytes):
+        if name == "deployment.sig":
+            entries = tuple(parent_path.iterdir())
+            assert len(entries) == 1
+            entries[0].rename(displaced)
+            entries[0].mkdir(mode=0o700)
+            write_private(entries[0] / "foreign", "foreign stage\n")
+            raise ApplicationError("Injected outcome member failure")
+        return original(directory, name, data)
+
+    monkeypatch.setattr(candidate_module, "_write_file", replace_before_failure)
+    with OpenedDirectory(parent_path, policy=candidate_module._DIRECTORY) as parent:
+        with pytest.raises(ApplicationError, match="Injected outcome member failure"):
+            candidate_module._create_outcome_stage(
+                parent,
+                REQUEST_ID,
+                deployment,  # type: ignore[arg-type]
+                b"decision\n",
+            )
+
+    foreign = tuple(parent_path.iterdir())
+    assert len(foreign) == 1
+    assert (foreign[0] / "foreign").read_text() == "foreign stage\n"
+    assert (displaced / "deployment").read_bytes() == b"deployment\n"
+    assert (
+        "Partial CSR outcome stage could not be removed safely after identity change"
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "process_signal", (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+)
+@pytest.mark.parametrize(
+    ("checkpoint", "requires_recovery"),
+    (
+        pytest.param("outcome-staged", False, id="outcome-stage"),
+        pytest.param("publication-after-mutation", True, id="journal-publication"),
+        pytest.param("outcome-after-mutation", True, id="recovery-publication"),
+        pytest.param("active-after-mutation", True, id="active-publication"),
+        pytest.param("active-after-evidence", True, id="active-evidence"),
+    ),
+)
+def test_finalize_handled_signal_preserves_transaction_ownership(
+    csr_workspace: CsrWorkspace,
+    process_signal: signal.Signals,
+    checkpoint: str,
+    requires_recovery: bool,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace, artifact, action="finalize", result="activated"
+    )
+    arguments = candidate_arguments(
+        csr_workspace,
+        "finalize",
+        manifest_digest,
+        evidence,
+        signature,
+    )
+    interrupted = csr_workspace.runner(
+        arguments,
+        env=environment(
+            csr_workspace.env,
+            PLATFORM_PKI_CANDIDATE_SIGNAL_AT=checkpoint,
+            PLATFORM_PKI_CANDIDATE_SIGNAL=str(process_signal.value),
+        ),
+        timeout=120,
+    )
+
+    assert interrupted.status == 128 + process_signal.value
+    assert f"interrupted by {process_signal.name}" in interrupted.stderr
+    journal = csr_workspace.pki / "state/csr/finalization-recovery-journal"
+    outcome_stages = list(
+        (csr_workspace.pki / "state/csr/outcomes/external").glob(
+            f".platform-pki-csr-outcome.{REQUEST_ID}.*"
+        )
+    )
+    active_stages = list(
+        (csr_workspace.pki / "state/csr/active").glob(
+            ".platform-pki-active.external.*"
+        )
+    )
+    if not requires_recovery:
+        assert not journal.exists()
+        assert not outcome_stages
+        assert not active_stages
+        assert not (
+            csr_workspace.pki / f"state/csr/outcomes/external/{REQUEST_ID}"
+        ).exists()
+        assert_result(
+            csr_workspace.runner(arguments, env=csr_workspace.env, timeout=120),
+            0,
+        )
+        return
+
+    assert journal.is_file()
+    assert "requires explicit recovery" in interrupted.stderr
+    recovered = csr_workspace.runner(
+        [RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
+        env=csr_workspace.env,
+        timeout=120,
+    )
+    assert_result(recovered, 0)
+    assert not journal.exists()
+    assert (
+        csr_workspace.pki / f"state/csr/outcomes/external/{REQUEST_ID}"
+    ).is_dir()
+    assert (csr_workspace.pki / "state/csr/active/external").is_file()
+
+
+def test_finalize_signal_after_active_stage_assignment_cleans_both_stages(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace, artifact, action="finalize", result="activated"
+    )
+    interrupted = csr_workspace.runner(
+        candidate_arguments(
+            csr_workspace,
+            "finalize",
+            manifest_digest,
+            evidence,
+            signature,
+        ),
+        env=environment(
+            csr_workspace.env,
+            PLATFORM_PKI_CANDIDATE_SIGNAL_AT="active-staged",
+            PLATFORM_PKI_CANDIDATE_SIGNAL=str(signal.SIGTERM.value),
+        ),
+        timeout=120,
+    )
+
+    assert interrupted.status == 128 + signal.SIGTERM
+    assert not (
+        csr_workspace.pki / "state/csr/finalization-recovery-journal"
+    ).exists()
+    assert not list(
+        (csr_workspace.pki / "state/csr/outcomes/external").glob(
+            f".platform-pki-csr-outcome.{REQUEST_ID}.*"
+        )
+    )
+    assert not list(
+        (csr_workspace.pki / "state/csr/active").glob(
+            ".platform-pki-active.external.*"
+        )
+    )
+
+
+def test_finalize_cleanup_preserves_replaced_active_stage(
+    csr_workspace: CsrWorkspace,
+    process_starter,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace, artifact, action="finalize", result="activated"
+    )
+    marker = csr_workspace.artifacts / "active-cleanup.pause"
+    release = csr_workspace.artifacts / "active-cleanup.release"
+    process = process_starter(
+        candidate_arguments(
+            csr_workspace,
+            "finalize",
+            manifest_digest,
+            evidence,
+            signature,
+        ),
+        env=environment(
+            csr_workspace.env,
+            PLATFORM_PKI_CANDIDATE_FAIL_AT="publication-before-mutation",
+            PLATFORM_PKI_CANDIDATE_PAUSE_AT="cleanup-before-unlink",
+            PLATFORM_PKI_CANDIDATE_PAUSE_MARKER=os.fspath(marker),
+            PLATFORM_PKI_CANDIDATE_PAUSE_RELEASE=os.fspath(release),
+        ),
+        timeout=120,
+    )
+    wait_for_path(marker, process)
+    stages = list((csr_workspace.pki / "state/csr/active").glob(
+        ".platform-pki-active.external.*"
+    ))
+    assert len(stages) == 1
+    stage = stages[0]
+    saved = csr_workspace.artifacts / "original-active-stage"
+    stage.rename(saved)
+    write_private(stage, "foreign active stage\n")
+    release.touch()
+    result = process.wait()
+
+    assert result.status == 1
+    assert "retained for inspection" in result.stderr
+    assert stage.read_text() == "foreign active stage\n"
+    assert saved.is_file()
+
+
+def test_finalize_rechecks_exact_inventory_before_journal_publication(
+    csr_workspace: CsrWorkspace,
+    process_starter,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace, artifact, action="finalize", result="activated"
+    )
+    marker = csr_workspace.artifacts / "inventory-recheck.pause"
+    release = csr_workspace.artifacts / "inventory-recheck.release"
+    process = process_starter(
+        candidate_arguments(
+            csr_workspace,
+            "finalize",
+            manifest_digest,
+            evidence,
+            signature,
+        ),
+        env=environment(
+            csr_workspace.env,
+            PLATFORM_PKI_CANDIDATE_PAUSE_AT="publication-before-mutation",
+            PLATFORM_PKI_CANDIDATE_PAUSE_MARKER=os.fspath(marker),
+            PLATFORM_PKI_CANDIDATE_PAUSE_RELEASE=os.fspath(release),
+        ),
+        timeout=120,
+    )
+    wait_for_path(marker, process)
+    inventory = csr_workspace.pki / "inventory/services.yml"
+    write_private(inventory, inventory.read_text().replace("days: 35", "days: 36"))
+    release.touch()
+    result = process.wait()
+
+    assert result.status == 1
+    assert "historical evidence changed during validation" in result.stderr
+    assert not (
+        csr_workspace.pki / "state/csr/finalization-recovery-journal"
+    ).exists()
+    assert not (
+        csr_workspace.pki / f"state/csr/outcomes/external/{REQUEST_ID}"
+    ).exists()
+
+
 def test_abandon_not_activated_is_not_active(csr_workspace: CsrWorkspace) -> None:
     artifact, manifest_digest = prepare(csr_workspace)
     evidence, signature = write_evidence(
@@ -411,7 +915,7 @@ def test_finalize_recovery_resumes_outcome_and_active_pointer(
     )
     crashed = csr_workspace.runner(
         [
-            CANDIDATE,
+            *CANDIDATE_COMMAND,
             "finalize",
             "external",
             "--request-id",
@@ -531,7 +1035,7 @@ def test_recovery_rejects_source_tampering(csr_workspace: CsrWorkspace) -> None:
     )
     crashed = csr_workspace.runner(
         [
-            CANDIDATE, "finalize", "external", "--request-id", REQUEST_ID,
+            *CANDIDATE_COMMAND, "finalize", "external", "--request-id", REQUEST_ID,
             "--artifact-manifest-sha256", manifest_digest,
             "--evidence-file", evidence, "--evidence-signature", signature,
             "--yes", "--namespace", csr_workspace.namespace,

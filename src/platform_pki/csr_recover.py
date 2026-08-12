@@ -1,4 +1,4 @@
-"""Non-public operational recovery for CSR candidate finalization."""
+"""Operational recovery engines for CSR signing and candidate finalization."""
 
 from __future__ import annotations
 
@@ -624,6 +624,16 @@ def _checkpoint(
     pause(point)
 
 
+class _CandidateFaultHook(FaultHook):
+    def __call__(self, point: str) -> None:
+        if self.crash_at == point:
+            os.kill(os.getpid(), 9)
+        if self.signal_at == point:
+            os.kill(os.getpid(), self.signum)
+        if self.failure_at == point:
+            _die(f"Injected CSR candidate failure at {point}")
+
+
 def _publish_outcome(
     journal: FinalizationJournal,
     state: _OutcomeState,
@@ -849,6 +859,40 @@ def _recover_finalization_locked(
     )
     stream.flush()
     return 0
+
+
+def recover_finalization_locked(
+    pki_dir: str,
+    *,
+    transaction: str | None = None,
+    output: TextIO | None = None,
+    fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
+    pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+) -> int:
+    """Resume finalization while the caller holds the full export lock profile."""
+
+    if not isinstance(pki_dir, str) or not os.path.isabs(pki_dir):
+        raise ValueError("pki_dir must be an absolute text path")
+    if transaction is not None and (
+        not isinstance(transaction, str)
+        or _TRANSACTION.fullmatch(transaction) is None
+    ):
+        raise ValueError("transaction must be a canonical CSR transaction or None")
+    if output is not None and (
+        not callable(getattr(output, "write", None))
+        or not callable(getattr(output, "flush", None))
+    ):
+        raise TypeError("output must be a writable text stream or None")
+    if not callable(fault_hook) or not callable(pause_hook):
+        raise TypeError("recovery hooks must be callable")
+    stream = sys.stdout if output is None else output
+    return _recover_finalization_locked(
+        pki_dir,
+        transaction=transaction,
+        stream=stream,
+        fault_hook=fault_hook,
+        pause_hook=pause_hook,
+    )
 
 
 def recover_finalization(
@@ -2884,12 +2928,31 @@ def recovery_hooks(environment: Mapping[str, str]) -> tuple[FaultHook, PauseHook
     crash_at = environment.get("PLATFORM_PKI_CSR_RECOVER_CRASH_AT")
     if not crash_at:
         crash_at = environment.get("PLATFORM_PKI_CANDIDATE_CRASH_AT")
+    failure_at = environment.get("PLATFORM_PKI_CSR_RECOVER_FAIL_AT")
+    if not failure_at:
+        failure_at = environment.get("PLATFORM_PKI_CANDIDATE_FAIL_AT")
+    signal_at = environment.get("PLATFORM_PKI_CSR_RECOVER_SIGNAL_AT")
+    if not signal_at:
+        signal_at = environment.get("PLATFORM_PKI_CANDIDATE_SIGNAL_AT")
+    signal_value = environment.get("PLATFORM_PKI_CSR_RECOVER_SIGNAL")
+    if not signal_value:
+        signal_value = environment.get("PLATFORM_PKI_CANDIDATE_SIGNAL", "15")
+    pause_at = environment.get("PLATFORM_PKI_CSR_RECOVER_PAUSE_AT")
+    if not pause_at:
+        pause_at = environment.get("PLATFORM_PKI_CANDIDATE_PAUSE_AT")
     return (
-        FaultHook(crash_at=crash_at),
+        _CandidateFaultHook(
+            crash_at=crash_at,
+            signal_at=signal_at,
+            failure_at=failure_at,
+            signum=int(signal_value),
+        ),
         PauseHook(
-            pause_at=environment.get("PLATFORM_PKI_CSR_RECOVER_PAUSE_AT"),
-            marker=environment.get("PLATFORM_PKI_CSR_RECOVER_PAUSE_MARKER"),
-            release=environment.get("PLATFORM_PKI_CSR_RECOVER_PAUSE_RELEASE"),
+            pause_at=pause_at,
+            marker=environment.get("PLATFORM_PKI_CSR_RECOVER_PAUSE_MARKER")
+            or environment.get("PLATFORM_PKI_CANDIDATE_PAUSE_MARKER"),
+            release=environment.get("PLATFORM_PKI_CSR_RECOVER_PAUSE_RELEASE")
+            or environment.get("PLATFORM_PKI_CANDIDATE_PAUSE_RELEASE"),
         ),
     )
 

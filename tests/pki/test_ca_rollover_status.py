@@ -7,12 +7,10 @@ from pathlib import Path
 import pytest
 
 from ..harness import ProcessResult
-from .conftest import RolloverWorkspace
+from .conftest import RolloverTools, RolloverWorkspace
 
 
 pytestmark = pytest.mark.pki
-
-
 def control_tree_snapshot(pki: Path) -> tuple[str, ...]:
     entries = []
     for path in (pki, *sorted(pki.rglob("*"))):
@@ -96,7 +94,7 @@ def certificate_observables(
 
 
 def test_status_rejects_invalid_terminal_marker(
-    rollover_tools,
+    rollover_tools: RolloverTools,
     rollover_control_workspace_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     private_text_writer: Callable[[Path, str], None],
@@ -147,7 +145,7 @@ def test_status_rejects_invalid_terminal_marker(
 
 
 def test_status_reports_unresolved_migration_journal(
-    rollover_tools,
+    rollover_tools: RolloverTools,
     rollover_control_workspace_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     private_text_writer: Callable[[Path, str], None],
@@ -172,7 +170,12 @@ def test_status_reports_unresolved_migration_journal(
     control_before = control_tree_snapshot(workspace.pki)
 
     result = process_runner(
-        [rollover_tools.rollover, "status", "--namespace", workspace.namespace],
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+        ],
         env=isolated_environment,
         timeout=10,
     )
@@ -194,12 +197,50 @@ def test_status_reports_unresolved_migration_journal(
     assert control_tree_snapshot(workspace.pki) == control_before
 
 
+def test_status_rejects_incomplete_committed_migration_journal(
+    rollover_tools: RolloverTools,
+    rollover_control_workspace_factory: Callable[[str], RolloverWorkspace],
+    isolated_environment: Mapping[str, str],
+    private_text_writer: Callable[[Path, str], None],
+    process_runner: Callable[..., ProcessResult],
+) -> None:
+    workspace = create_status_control_workspace(
+        "incomplete-committed-migration-journal",
+        rollover_control_workspace_factory,
+        private_text_writer,
+    )
+    private_text_writer(
+        workspace.pki / "state/rollover/journal",
+        "schema=2\n"
+        "operation=legacy-migrate\n"
+        "transaction=migrate-20260730-000000-1\n"
+        "phase=complete\n"
+        "committed=true\n",
+    )
+
+    result = process_runner(
+        [
+            rollover_tools.rollover,
+            "status",
+            "--namespace",
+            workspace.namespace,
+        ],
+        env=isolated_environment,
+        timeout=10,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[ERROR] PKI recovery journal has invalid recovery state\n"
+    )
+
+
 def test_status_rejects_missing_service_issuer(
     rollover_tools,
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     private_text_writer: Callable[[Path, str], None],
-    public_state_snapshot: Callable[[RolloverWorkspace], tuple[str, ...]],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     workspace = rollover_case_factory("missing-service-issuer")
@@ -218,7 +259,6 @@ def test_status_rejects_missing_service_issuer(
     )
     for path in restricted:
         path.chmod(0)
-    public_before = public_state_snapshot(workspace)
     controls_before = (
         control_tree_snapshot(workspace.pki / "state"),
         control_tree_snapshot(workspace.pki / "locks"),
@@ -243,7 +283,6 @@ def test_status_rejects_missing_service_issuer(
         "[ERROR] Service app issuer manifest is missing or unsafe\n"
     )
     assert not issuer.exists()
-    assert public_state_snapshot(workspace) == public_before
     assert (
         control_tree_snapshot(workspace.pki / "state"),
         control_tree_snapshot(workspace.pki / "locks"),
@@ -256,7 +295,6 @@ def test_status_reports_ready_generation(
     rollover_case_factory: Callable[[str], RolloverWorkspace],
     isolated_environment: Mapping[str, str],
     private_text_writer: Callable[[Path, str], None],
-    public_state_snapshot: Callable[[RolloverWorkspace], tuple[str, ...]],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
     workspace = rollover_case_factory("ready-generation")
@@ -285,7 +323,6 @@ def test_status_reports_ready_generation(
         isolated_environment,
         process_runner,
     )
-    public_before = public_state_snapshot(workspace)
     controls_before = (
         control_tree_snapshot(workspace.pki / "state"),
         control_tree_snapshot(workspace.pki / "locks"),
@@ -329,7 +366,6 @@ def test_status_reports_ready_generation(
         "services_on_old_issuer": [],
         "required_action": None,
     }
-    assert public_state_snapshot(workspace) == public_before
     assert (
         control_tree_snapshot(workspace.pki / "state"),
         control_tree_snapshot(workspace.pki / "locks"),

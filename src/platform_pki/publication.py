@@ -1039,6 +1039,7 @@ def publish_no_clobber(
     destination_name: str | os.PathLike[str],
     *,
     readiness: TreeReadiness | None = None,
+    pre_publish_check: Callable[[], None] | None = None,
     fault_hook: Hook = DEFAULT_FAULT_HOOK,
     pause_hook: Hook = DEFAULT_PAUSE_HOOK,
 ) -> PublicationResult:
@@ -1057,6 +1058,8 @@ def publish_no_clobber(
         raise PublicationPolicyError()
     if expected_source.kind == "regular" and readiness is not None:
         raise PublicationPolicyError()
+    if pre_publish_check is not None and not callable(pre_publish_check):
+        raise TypeError("pre_publish_check must be callable or None")
 
     source_pin = _pin_directory(source_parent)
     try:
@@ -1114,6 +1117,31 @@ def publish_no_clobber(
         _destination_absent(destination_pin, destination)
         _recheck_parent(source_pin)
         _recheck_parent(destination_pin)
+        if pre_publish_check is not None:
+            pre_publish_check()
+            if expected_source.kind == "regular":
+                if (
+                    _prepare_regular_source(
+                        source_pin,
+                        source,
+                        expected_source,
+                        descriptor,
+                    )
+                    != regular_readiness
+                ):
+                    raise PublicationIdentityError()
+            else:
+                assert readiness is not None
+                _validate_tree_source(
+                    source_pin,
+                    source,
+                    expected_source,
+                    readiness,
+                    descriptor,
+                )
+            _destination_absent(destination_pin, destination)
+            _recheck_parent(source_pin)
+            _recheck_parent(destination_pin)
         _renameat2(
             source_pin,
             source,
@@ -1614,6 +1642,45 @@ def replace_exact(
         )
         if pre_exchange_check is not None:
             pre_exchange_check()
+            if expected_source.kind == "regular":
+                if (
+                    _prepare_regular_source(
+                        source_pin, source, expected_source, source_fd
+                    )
+                    != source_regular
+                    or _prepare_regular_source(
+                        destination_pin,
+                        destination,
+                        expected_destination,
+                        destination_fd,
+                    )
+                    != destination_regular
+                ):
+                    raise PublicationIdentityError()
+            else:
+                assert source_readiness is not None
+                assert destination_readiness is not None
+                _validate_tree_source(
+                    source_pin,
+                    source,
+                    expected_source,
+                    source_readiness,
+                    source_fd,
+                )
+                _validate_tree_source(
+                    destination_pin,
+                    destination,
+                    expected_destination,
+                    destination_readiness,
+                    destination_fd,
+                )
+            if (
+                _stat_at(source_pin, source) != expected_source
+                or _stat_at(destination_pin, destination) != expected_destination
+            ):
+                raise PublicationIdentityError()
+            _recheck_parent(source_pin)
+            _recheck_parent(destination_pin)
         _renameat2(
             source_pin,
             source,

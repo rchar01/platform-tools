@@ -353,6 +353,51 @@ def test_csr_candidate_rejects_invalid_workers_before_tests(
     assert not log.exists()
 
 
+def test_csr_trust_install_runs_with_bounded_workers(
+    tmp_path: Path, process_runner
+) -> None:
+    log, env = _fake_pytest_python(tmp_path)
+
+    result = process_runner(
+        [
+            "make",
+            "--no-print-directory",
+            "test-pki-csr-trust-install",
+            "PKI_PYTEST_WORKERS=3",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.status == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "-m pytest -n 3 --dist load --durations=20 "
+        "tests/pki/test_csr_trust_install.py"
+    ]
+
+
+@pytest.mark.parametrize("value", ["", "0", "5", "auto"])
+def test_csr_trust_install_rejects_invalid_workers_before_tests(
+    tmp_path: Path, process_runner, value: str
+) -> None:
+    log, env = _fake_pytest_python(tmp_path)
+
+    result = process_runner(
+        [
+            "make",
+            "--no-print-directory",
+            "test-pki-csr-trust-install",
+            f"PKI_PYTEST_WORKERS={value}",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.status == 2
+    assert "PKI_PYTEST_WORKERS must be an integer from 1 through 4" in result.stderr
+    assert not log.exists()
+
+
 @pytest.mark.parametrize(
     ("worker_env", "expected_jobs", "expected_workers"),
     [

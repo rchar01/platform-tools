@@ -197,8 +197,10 @@ def _public_state_snapshot(workspace: RolloverWorkspace) -> tuple[str, ...]:
 
     entries = []
     for path in sorted(state_root.rglob("*")):
-        metadata = path.lstat()
         relative = path.relative_to(workspace.pki).as_posix()
+        if relative == "state/service" or relative.startswith("state/service/"):
+            continue
+        metadata = path.lstat()
         mode = stat.S_IMODE(metadata.st_mode)
         if stat.S_ISDIR(metadata.st_mode):
             if not any(pattern.fullmatch(relative) for pattern in PUBLIC_STATE_DIRECTORIES):
@@ -240,8 +242,8 @@ def _csr_workspace_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
-def _authenticate_csr_seed_intermediate_transaction(seed: Path) -> str:
-    reservation = seed / "namespace/pki/state/generation-reservations/g1-i1"
+def _authenticate_seed_intermediate_transaction(pki_dir: Path) -> str:
+    reservation = pki_dir / "state/generation-reservations/g1-i1"
     data = b""
     try:
         with OpenedFile(
@@ -276,7 +278,9 @@ def _authenticate_csr_seed_intermediate_transaction(seed: Path) -> str:
 
 @pytest.fixture(scope="session")
 def _csr_workspace_seed_transaction(_csr_workspace_seed: Path) -> str:
-    return _authenticate_csr_seed_intermediate_transaction(_csr_workspace_seed)
+    return _authenticate_seed_intermediate_transaction(
+        _csr_workspace_seed / "namespace/pki"
+    )
 
 
 def _validate_csr_seed_rollover_journal(
@@ -302,10 +306,9 @@ def _validate_csr_seed_rollover_journal(
         )
 
 
-def _authenticate_csr_seed_rollover_journal(
-    seed: Path, expected_transaction: str
+def _authenticate_seed_rollover_journal(
+    pki_dir: Path, expected_transaction: str
 ) -> bytes:
-    pki_dir = seed / "namespace/pki"
     journal = pki_dir / "state/rollover/journal"
     data = b""
     try:
@@ -368,8 +371,8 @@ def csr_workspace_seed_copy(
 ) -> Callable[..., None]:
     def copy(destination: Path, *, source: Path | None = None) -> None:
         source = _csr_workspace_seed if source is None else source
-        source_journal = _authenticate_csr_seed_rollover_journal(
-            source, _csr_workspace_seed_transaction
+        source_journal = _authenticate_seed_rollover_journal(
+            source / "namespace/pki", _csr_workspace_seed_transaction
         )
         _copy_csr_seed_tree(source, destination, rebase_journal=False)
         journal = destination / "namespace/pki/state/rollover/journal"
@@ -534,16 +537,32 @@ def rollover_case_factory(
 ) -> Callable[[str], RolloverWorkspace]:
     def create(name: str) -> RolloverWorkspace:
         _validate_case_name(name)
+        expected_transaction = _authenticate_seed_intermediate_transaction(
+            _rollover_seed.pki
+        )
+        source_journal = _authenticate_seed_rollover_journal(
+            _rollover_seed.pki, expected_transaction
+        )
         destination = tmp_path / "cases" / name
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         copy_tree(_rollover_seed.root, destination)
-        return RolloverWorkspace(
+        workspace = RolloverWorkspace(
             root=destination,
             namespace=destination / "ns",
             pki=destination / "ns/pki",
             private_repo=destination / "private",
             passphrase_file=destination / "passphrase",
         )
+        journal = workspace.pki / "state/rollover/journal"
+        journal_stat = journal.lstat()
+        if not stat.S_ISREG(journal_stat.st_mode) or stat.S_ISLNK(
+            journal_stat.st_mode
+        ):
+            raise ValueError(f"Copied terminal bootstrap journal is unsafe: {journal}")
+        if journal.read_bytes() != source_journal:
+            raise ValueError(f"Copied terminal bootstrap journal changed: {journal}")
+        journal.unlink()
+        return workspace
 
     return create
 

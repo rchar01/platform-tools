@@ -489,6 +489,38 @@ def test_replace_emits_only_the_exact_replacement_checkpoint_inventory(
     ]
 
 
+@pytest.mark.parametrize("operand", ("source", "destination"))
+def test_replace_revalidates_operands_after_final_authorization(
+    tmp_path: Path,
+    operand: str,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source_expected = _write(source, b"new")
+    destination_expected = _write(destination, b"old")
+    selected = source if operand == "source" else destination
+
+    def replace_operand() -> None:
+        selected.unlink()
+        _write(selected, b"competitor")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationIdentityError):
+            replace_exact(
+                parent,
+                "source",
+                source_expected,
+                parent,
+                "destination",
+                destination_expected,
+                pre_exchange_check=replace_operand,
+            )
+
+    assert selected.read_bytes() == b"competitor"
+    other = destination if operand == "source" else source
+    assert other.read_bytes() == (b"old" if operand == "source" else b"new")
+
+
 def test_atomic_write_replaces_only_explicit_exact_destination(tmp_path: Path) -> None:
     destination = tmp_path / "destination"
     expected = _write(destination, b"old")
@@ -1561,6 +1593,113 @@ def test_no_clobber_rejects_source_and_destination_checkpoint_races(
                     fault_hook=compete,
                 )
         assert not (case / "destination").exists() or race == "destination"
+
+
+def test_no_clobber_runs_final_authorization_after_hooks_before_rename(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    expected = _write(source, b"source")
+    observed: list[str] = []
+
+    with OpenedDirectory(tmp_path) as parent:
+        publish_no_clobber(
+            parent,
+            "source",
+            expected,
+            parent,
+            "destination",
+            pre_publish_check=lambda: observed.append("authorization"),
+            fault_hook=observed.append,
+        )
+
+    assert observed == [
+        "publication-before-mutation",
+        "authorization",
+        "publication-after-mutation",
+        "publication-before-parent-fsync",
+        "publication-after-parent-fsync",
+        "publication-before-final-validation",
+        "publication-after-final-validation",
+    ]
+
+
+def test_no_clobber_final_authorization_failure_publishes_nothing(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    expected = _write(source, b"source")
+
+    def reject() -> None:
+        raise RuntimeError("rejected")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(RuntimeError, match="rejected"):
+            publish_no_clobber(
+                parent,
+                "source",
+                expected,
+                parent,
+                "destination",
+                pre_publish_check=reject,
+            )
+
+    assert source.read_bytes() == b"source"
+    assert not (tmp_path / "destination").exists()
+
+
+def test_no_clobber_revalidates_source_after_final_authorization(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    expected = _write(source, b"source")
+
+    def replace_source() -> None:
+        source.unlink()
+        _write(source, b"replacement")
+
+    with OpenedDirectory(tmp_path) as parent:
+        with pytest.raises(PublicationIdentityError):
+            publish_no_clobber(
+                parent,
+                "source",
+                expected,
+                parent,
+                "destination",
+                pre_publish_check=replace_source,
+            )
+
+    assert source.read_bytes() == b"replacement"
+    assert not (tmp_path / "destination").exists()
+
+
+def test_no_clobber_revalidates_tree_after_final_authorization(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir(mode=0o700)
+    _write(source / "value", b"original")
+    expected = _identity(source)
+
+    with OpenedDirectory(tmp_path) as parent:
+        readiness = _tree_readiness(parent, source, "source")
+
+        def mutate_source() -> None:
+            (source / "value").write_bytes(b"changed!")
+
+        with pytest.raises(PublicationTreeError):
+            publish_no_clobber(
+                parent,
+                "source",
+                expected,
+                parent,
+                "destination",
+                readiness=readiness,
+                pre_publish_check=mutate_source,
+            )
+
+    assert (source / "value").read_bytes() == b"changed!"
+    assert not (tmp_path / "destination").exists()
 
 
 def test_no_clobber_rejects_canonical_parent_replacement(tmp_path: Path) -> None:

@@ -27,14 +27,20 @@ EXPECTED_MEMBERS = (
     "platform_pki/_version.py",
     "platform_pki/backup.py",
     "platform_pki/ca_passphrase_verify.py",
+    "platform_pki/ca_rollover_migrate.py",
+    "platform_pki/ca_rollover_prepare.py",
     "platform_pki/ca_rollover_recover.py",
     "platform_pki/ca_rollover_recovery.py",
+    "platform_pki/ca_rollover_status.py",
+    "platform_pki/certificate_export.py",
     "platform_pki/cli.py",
     "platform_pki/compat.py",
+    "platform_pki/csr_candidate.py",
     "platform_pki/csr_history.py",
     "platform_pki/csr_protocol.py",
     "platform_pki/csr_recover.py",
     "platform_pki/csr_recovery.py",
+    "platform_pki/csr_trust_install.py",
     "platform_pki/custody_report.py",
     "platform_pki/errors.py",
     "platform_pki/export_ansible.py",
@@ -278,13 +284,25 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         assert result.stderr.startswith(
             "[ERROR] Private repository ancestor "
         )
+    elif route.unified_route == ("csr-trust-install",):
+        assert result.stderr.startswith(
+            "[ERROR] CSR trust source directory is missing or unsafe: "
+        )
     elif route.unified_route == ("ca-rollover", "recover"):
         assert result.stderr == "[ERROR] Recovery transaction ID is invalid\n"
     elif route.unified_route in {
         ("ca-passphrase-verify",),
         ("backup",),
+        ("certificate-export", "publish"),
+        ("certificate-export", "resolve"),
         ("custody-report",),
+        ("csr-candidate", "verify"),
+        ("csr-candidate", "finalize"),
+        ("csr-candidate", "abandon"),
         ("csr-recover",),
+        ("ca-rollover", "migrate"),
+        ("ca-rollover", "status"),
+        ("ca-rollover", "prepare"),
         ("list-expiry",),
         ("print-cert",),
         ("root-create",),
@@ -419,6 +437,7 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     operational_descriptions = {
         "init": "Create the local outside-Git PKI working directory",
         "inventory-install": "Install private-Git service inventory into local PKI state",
+        "csr-trust-install": "Install reviewed host-local CSR signing trust",
         "csr-recover": "Recover an authenticated host-local CSR signing transaction",
         "list-expiry": "List expiry dates for generated service certificates",
         "print-cert": "Print readable details for a generated service certificate",
@@ -432,10 +451,25 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
         "custody-report": "Report PKI encryption, custody, and backup-policy findings",
         "ca-passphrase-verify": "Verify active CA key passphrases and certificate matches",
     }
-    if contract.unified_route in operational_descriptions:
+    if contract.unified_route == "certificate-export":
+        expected_usage = (
+            f"{contract.compatibility_name} - Publish or resolve an immutable "
+            "certificate-only CSR export\n"
+        )
+    elif contract.unified_route == "csr-candidate":
+        expected_usage = (
+            f"{contract.compatibility_name} - Verify, finalize, or abandon "
+            "authenticated CSR candidate evidence\n"
+        )
+    elif contract.unified_route in operational_descriptions:
         expected_usage = (
             f"{contract.compatibility_name} - "
             f"{operational_descriptions[contract.unified_route]}\n"
+        )
+    elif contract.unified_route == "ca-rollover":
+        expected_usage = (
+            "platform-pki-ca-rollover - Prepare or inspect generation-aware CA "
+            "rollover state\n"
         )
     elif contract.nested_commands:
         expected_usage = f"Usage: {contract.compatibility_name} COMMAND [OPTIONS]\n"
@@ -472,11 +506,19 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
     )
     assert unavailable.status == 1
     assert unavailable.stdout == ""
-    if contract.unified_route == "csr-recover":
+    if contract.unified_route in {
+        "certificate-export",
+        "csr-candidate",
+        "csr-recover",
+    }:
         assert unavailable.stderr.startswith(
             "[ERROR] PKI directory does not exist; run platform-pki-init first: "
         )
-    elif contract.unified_route in operational_descriptions:
+    elif contract.unified_route == "csr-trust-install":
+        assert unavailable.stderr.startswith(
+            "[ERROR] CSR trust source directory is missing or unsafe: "
+        )
+    elif contract.unified_route in {*operational_descriptions, "ca-rollover"}:
         assert unavailable.stderr == "[ERROR] platform-pki-common.sh not found\n"
     else:
         assert "not available in the Python foundation" in unavailable.stderr
@@ -491,13 +533,25 @@ def test_copied_compatibility_name_dispatches_outside_checkout(
             cwd=tmp_path,
         )
         _assert_success(nested_help)
-        assert nested_help.stdout.startswith(
-            render_usage(
-                contract.compatibility_name,
-                ROUTE_SPECS[(contract.unified_route, nested)],
-                compatibility=True,
+        if contract.unified_route in {"certificate-export", "csr-candidate"}:
+            descriptions = {
+                "publish": "Publish one exact pending CSR response as an immutable export",
+                "resolve": "Resolve one digest-pinned immutable certificate export",
+                "verify": "Verify one exact candidate and report accepted historical state",
+                "finalize": "Accept authenticated activation and validation evidence",
+                "abandon": "Record authenticated non-activation or rollback evidence",
+            }
+            assert nested_help.stdout.startswith(
+                f"{contract.compatibility_name} {nested} - {descriptions[nested]}\n"
             )
-        )
+        else:
+            assert nested_help.stdout.startswith(
+                render_usage(
+                    contract.compatibility_name,
+                    ROUTE_SPECS[(contract.unified_route, nested)],
+                    compatibility=True,
+                )
+            )
 
 
 def test_unknown_copied_invocation_name_fails_closed_before_actions(

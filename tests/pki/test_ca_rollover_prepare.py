@@ -45,8 +45,7 @@ def _assert_rejected_before_transaction(
     journal = workspace.pki / "state/rollover/journal"
     issuer_before = active_issuer.read_bytes()
     issuer_metadata_before = _file_metadata(active_issuer)
-    journal_before = journal.read_bytes()
-    journal_metadata_before = _file_metadata(journal)
+    assert not journal.exists()
     receipt_digest_before = sha256(receipt.read_bytes()).digest()
     receipt_metadata_before = _file_metadata(receipt)
     public_state_before = public_state_snapshot(workspace)
@@ -59,8 +58,7 @@ def _assert_rejected_before_transaction(
     assert public_state_snapshot(workspace) == public_state_before
     assert active_issuer.read_bytes() == issuer_before
     assert _file_metadata(active_issuer) == issuer_metadata_before
-    assert journal.read_bytes() == journal_before
-    assert _file_metadata(journal) == journal_metadata_before
+    assert not journal.exists()
     assert not (workspace.pki / "state/active-rollover").exists()
     assert not (workspace.pki / "state/rollover/recovery-required").exists()
     assert not tuple((workspace.pki / "state/rollovers").iterdir())
@@ -195,10 +193,7 @@ def test_root_prepare_rejects_before_transaction(
     if use_symlink:
         private_repo = workspace.root / "private-link"
         private_repo.symlink_to(workspace.private_repo, target_is_directory=True)
-        expected_error = (
-            "Private repository path component must not be a symlink: "
-            f"{private_repo}"
-        )
+        expected_error = f"Private repository ancestor is unsafe: {private_repo}"
 
     command: list[str | Path] = [
         rollover_tools.rollover,

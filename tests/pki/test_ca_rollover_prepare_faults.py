@@ -12,8 +12,6 @@ from .conftest import RolloverTools, RolloverWorkspace
 
 
 pytestmark = pytest.mark.pki
-
-
 VALID_TRUST_CONSUMERS = """consumers:
   managed-cluster:
     kind: managed
@@ -182,8 +180,7 @@ def test_prepare_child_kill_requires_rollback(
         cp_wrapper,
         """#!/usr/bin/env bash
 "$REAL_CP" "$@" || exit $?
-destination=${!#}
-[[ ${KILL_CHILD:-} != cp || $destination != */state/rollover/* ]] || kill -KILL "$$"
+[[ ${KILL_CHILD:-} != cp ]] || kill -KILL "$$"
 """,
     )
     _write_executable(
@@ -212,10 +209,9 @@ subcommand=${1:-}
             or "openssl",
         }
     )
+    command = _prepare_command(rollover_tools, workspace, receipt, rollover_type)
     failed = process_runner(
-        _prepare_command(
-            rollover_tools, workspace, receipt, rollover_type
-        ),
+        command,
         env=environment,
         timeout=120,
     )

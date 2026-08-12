@@ -7,7 +7,7 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, Mapping
+from typing import Callable, Literal, Mapping
 
 from .csr_protocol import (
     CsrOperation,
@@ -20,17 +20,22 @@ from .csr_protocol import (
     parse_csr_response,
     parse_csr_terminal,
     validate_request_approval_binding,
+    validate_response_candidate_binding,
 )
+from .csr_recovery import CANDIDATE_SOURCE_PATHS
 from .filesystem import (
+    ABSENT,
     DirectoryIdentity,
     DirectoryPolicy,
     FileIdentity,
     FilePolicy,
     FilesystemError,
+    MetadataEntry,
     OpenedDirectory,
     OpenedFile,
+    walk_metadata,
 )
-from .inventory import InventoryService
+from .inventory import Inventory, InventoryError, InventoryService, parse_inventory
 from .records import OrderedRecord, RecordError, RecordSpec
 from .subprocesses import ProcessResult, run_process
 
@@ -104,6 +109,17 @@ _SCHEMA2_POLICY_PREFIX = (
     "deployment_max_age_seconds=86400",
     "clock_skew_seconds=300",
 )
+_SCHEMA1_POLICY_PREFIX = (
+    "schema=1",
+    "request_namespace=platform-pki-csr-request-v1",
+    "approval_namespace=platform-pki-csr-approval-v1",
+    "response_namespace=platform-pki-csr-response-v1",
+    "request_max_age_seconds=604800",
+    "sole_operator_min_delay_seconds=86400",
+    "approval_max_age_seconds=86400",
+    "clock_skew_seconds=300",
+)
+_SCHEMA1_TRUST_FILES = _SCHEMA2_TRUST_FILES - frozenset(("deployers.allowed_signers",))
 
 
 class CsrHistoryError(ValueError):
@@ -119,6 +135,146 @@ class CsrHistoryAuthentication:
     root_action: str
     root_state: str
     resulting_active_request_id: str
+    operation: CsrOperation
+    certificate_sha256: str
+    certificate_spki_sha256: str
+    intermediate_sha256: str
+    response_sha256: str
+    artifact_manifest_sha256: str
+    deployment_sha256: str
+    deployment_signature_sha256: str
+    deployers_sha256: str
+    decision_sha256: str
+    decision: OrderedRecord
+    activation_epoch: str
+    rollback_hold_until_epoch: str
+    updated_epoch: str
+    active: OrderedRecord | None
+    active_identity: FileIdentity | None
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrRetainedHistoryAuthentication:
+    """Globally authenticated retained history plus its exact final recheck."""
+
+    request_ids: frozenset[str]
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrPendingResponseAuthentication:
+    """Authenticated pending response bytes plus their exact source recheck."""
+
+    response: OrderedRecord
+    candidate: OrderedRecord
+    files: Mapping[str, bytes]
+    response_sha256: str
+    response_signature_sha256: str
+    certificate_sha256: str
+    certificate_spki_sha256: str
+    chain_sha256: str
+    fullchain_sha256: str
+    candidate_directory: DirectoryIdentity
+    response_directory: DirectoryIdentity
+    transaction_directory: DirectoryIdentity
+    candidate_files: Mapping[str, FileIdentity]
+    response_files: Mapping[str, FileIdentity]
+    response_trust_path: str
+    response_trust_identity: FileIdentity
+    response_trust_sha256: str
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrCandidateSourceAuthentication:
+    """Authenticated pending candidate, export, and retained signing sources."""
+
+    response: OrderedRecord
+    candidate: OrderedRecord
+    artifact: OrderedRecord
+    request: OrderedRecord
+    approval: OrderedRecord
+    source_directories: Mapping[str, DirectoryIdentity]
+    source_files: Mapping[str, FileIdentity]
+    source_digests: Mapping[str, str]
+    transaction_path: str
+    transaction_identity: DirectoryIdentity
+    response_trust_path: str
+    response_trust_identity: FileIdentity
+    response_trust_sha256: str
+    candidate_sha256: str
+    artifact_manifest_sha256: str
+    response_sha256: str
+    response_signature_sha256: str
+    certificate_sha256: str
+    certificate_spki_sha256: str
+    chain_sha256: str
+    fullchain_sha256: str
+    issuer_intermediate_sha256: str
+    current_cert_sha256: str
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrFreshDeploymentAuthentication:
+    """Fresh authenticated deployment bytes and current deployer trust."""
+
+    deployment: OrderedRecord
+    deployment_bytes: bytes
+    signature_bytes: bytes
+    deployers_bytes: bytes
+    deployment_sha256: str
+    deployment_signature_sha256: str
+    deployers_sha256: str
+    deployers_identity: FileIdentity
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrManagedPredecessorAuthentication:
+    """Authenticated managed migration predecessor and preservation recheck."""
+
+    certificate_sha256: str
+    certificate_spki_sha256: str
+    intermediate_sha256: str
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrOptionalActiveAuthentication:
+    """Authenticated active history, including an exact absent-state recheck."""
+
+    history: CsrHistoryAuthentication | None
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
+class CsrCandidateInventoryAuthentication:
+    """One exact parsed inventory snapshot and its source recheck."""
+
+    service: InventoryService
     _recheck: Callable[[], None]
 
     def __call__(self) -> None:
@@ -140,6 +296,7 @@ class _File:
 class _Directory:
     path: str
     identity: DirectoryIdentity
+    entries: frozenset[str]
     files: Mapping[str, _File]
 
 
@@ -153,7 +310,10 @@ class _Outcome:
     response_sha256: str
     artifact_sha256: str
     deployment_sha256: str
+    deployment_signature_sha256: str
+    deployers_sha256: str
     decision_sha256: str
+    decision: OrderedRecord
     activation_epoch: str
     rollback_hold_until_epoch: str
     updated_epoch: str
@@ -191,13 +351,22 @@ class _Evidence:
         self.files.append(result)
         return result
 
-    def tree(self, path: str, names: frozenset[str], label: str) -> _Directory:
+    def tree(
+        self,
+        path: str,
+        names: frozenset[str],
+        label: str,
+        *,
+        unsafe_message: str | None = None,
+    ) -> _Directory:
         files: dict[str, _File] = {}
         identity: DirectoryIdentity | None = None
         try:
             with OpenedDirectory(path, policy=_DIRECTORY) as directory:
                 if frozenset(os.listdir(directory.fileno())) != names:
-                    raise CsrHistoryError(f"{label} has unexpected entries")
+                    raise CsrHistoryError(
+                        unsafe_message or f"{label} has unexpected entries"
+                    )
                 for name in sorted(names):
                     with directory.open_file(name, policy=_FILE) as opened:
                         data = opened.read(_FILE.max_size or 0)
@@ -206,11 +375,25 @@ class _Evidence:
                         )
                 identity = directory.recheck().directory
         except FilesystemError:
-            raise CsrHistoryError(f"{label} is unsafe") from None
+            raise CsrHistoryError(unsafe_message or f"{label} is unsafe") from None
         assert identity is not None
-        result = _Directory(path, identity, files)
+        result = _Directory(path, identity, names, files)
         self.directories.append(result)
         self.files.extend(files.values())
+        return result
+
+    def directory(self, path: str, label: str) -> _Directory:
+        identity: DirectoryIdentity | None = None
+        entries: frozenset[str] = frozenset()
+        try:
+            with OpenedDirectory(path, policy=_DIRECTORY) as directory:
+                entries = frozenset(os.listdir(directory.fileno()))
+                identity = directory.recheck().directory
+        except FilesystemError:
+            raise CsrHistoryError(f"{label} is unsafe") from None
+        assert identity is not None
+        result = _Directory(path, identity, entries, {})
+        self.directories.append(result)
         return result
 
     def recheck(self) -> None:
@@ -235,7 +418,7 @@ class _Evidence:
                     policy=_DIRECTORY,
                     expected_identity=item.identity,
                 ) as directory:
-                    if frozenset(os.listdir(directory.fileno())) != frozenset(item.files):
+                    if frozenset(os.listdir(directory.fileno())) != item.entries:
                         raise CsrHistoryError("CSR historical evidence changed during validation")
                     directory.recheck()
         except FilesystemError:
@@ -243,6 +426,7 @@ class _Evidence:
 
 
 def _record(item: _File, spec: RecordSpec, label: str) -> OrderedRecord:
+    parent_identity: DirectoryIdentity | None = None
     try:
         return spec.parse(item.data)
     except RecordError as error:
@@ -288,6 +472,20 @@ def _allowed_signers(
     return keys
 
 
+def _retained_allowed_signers(
+    item: _File, principal: str, label: str, *, sole: bool = False
+) -> None:
+    data = item.data
+    if (
+        not data
+        or not data.endswith(b"\n")
+        or data.endswith(b"\n\n")
+        or any(byte < 32 and byte != 10 or byte > 126 for byte in data)
+    ):
+        raise CsrHistoryError(f"{label} is not canonical")
+    _allowed_signers(item, principal, label, sole=sole)
+
+
 def _schema2_trust(evidence: _Evidence, pki_dir: str) -> tuple[_Directory, str, str]:
     trust = evidence.tree(
         f"{pki_dir}/inventory/csr-trust",
@@ -308,6 +506,43 @@ def _schema2_trust(evidence: _Evidence, pki_dir: str) -> tuple[_Directory, str, 
     )
     if approver is None or response is None:
         raise CsrHistoryError("Installed schema-2 CSR trust policy is invalid")
+    return trust, approver.group(1), response.group(1)
+
+
+def _installed_signing_trust(
+    evidence: _Evidence, pki_dir: str
+) -> tuple[_Directory, str, str]:
+    policy_path = f"{pki_dir}/inventory/csr-trust/policy"
+    policy = evidence.file(policy_path, "Installed CSR trust policy")
+    try:
+        lines = policy.data.decode("ascii").splitlines()
+    except UnicodeDecodeError:
+        raise CsrHistoryError("Installed CSR trust policy is invalid") from None
+    if tuple(lines[:8]) == _SCHEMA1_POLICY_PREFIX and len(lines) == 10:
+        names = _SCHEMA1_TRUST_FILES
+        principal_offset = 8
+    elif tuple(lines[:10]) == _SCHEMA2_POLICY_PREFIX and len(lines) == 12:
+        names = _SCHEMA2_TRUST_FILES
+        principal_offset = 10
+    else:
+        raise CsrHistoryError("Installed CSR trust policy is invalid")
+    trust = evidence.tree(
+        f"{pki_dir}/inventory/csr-trust", names, "Installed CSR trust"
+    )
+    if trust.files["policy"].data != policy.data:
+        raise CsrHistoryError("Installed CSR trust policy changed during validation")
+    approver = re.fullmatch(
+        r"approver_principal=([a-z0-9][a-z0-9.-]*)",
+        lines[principal_offset],
+        re.ASCII,
+    )
+    response = re.fullmatch(
+        r"response_principal=([a-z0-9][a-z0-9.-]*)",
+        lines[principal_offset + 1],
+        re.ASCII,
+    )
+    if approver is None or response is None:
+        raise CsrHistoryError("Installed CSR trust policy is invalid")
     return trust, approver.group(1), response.group(1)
 
 
@@ -545,6 +780,77 @@ def _verify_certificate_chain(
         raise CsrHistoryError("Historical certificate chain verification failed") from None
     if not isinstance(result, ProcessResult) or result.status:
         raise CsrHistoryError("Historical certificate chain verification failed")
+
+
+def _require_ca_profile(
+    certificate: _File,
+    path_length: int,
+    environment: Mapping[str, str],
+    label: str,
+) -> None:
+    constraints = _x509_output(
+        certificate,
+        ("-noout", "-ext", "basicConstraints"),
+        environment,
+        f"{label} Basic Constraints",
+    )
+    usage = _x509_output(
+        certificate,
+        ("-noout", "-ext", "keyUsage"),
+        environment,
+        f"{label} Key Usage",
+    )
+    if constraints != (
+        "X509v3 Basic Constraints: critical\n"
+        f"    CA:TRUE, pathlen:{path_length}\n"
+    ).encode("ascii"):
+        raise CsrHistoryError(
+            f"{label} must have critical CA:TRUE Basic Constraints with pathlen:{path_length}"
+        )
+    if usage != b"X509v3 Key Usage: critical\n    Certificate Sign, CRL Sign\n":
+        raise CsrHistoryError(
+            f"{label} must have critical Certificate Sign and CRL Sign Key Usage only"
+        )
+
+
+def _require_ca_self_signature(
+    certificate: _File,
+    environment: Mapping[str, str],
+    label: str,
+) -> None:
+    result: ProcessResult | None = None
+    try:
+        with OpenedFile(
+            certificate.path,
+            policy=FilePolicy(
+                owner=_OWNER,
+                mode=certificate.identity.permissions,
+                links=1,
+                max_size=_FILE.max_size,
+            ),
+            expected_identity=certificate.identity,
+        ) as opened:
+            result = run_process(
+                (
+                    "openssl",
+                    "verify",
+                    "-check_ss_sig",
+                    "-CAfile",
+                    f"/proc/self/fd/{opened.fileno()}",
+                    f"/proc/self/fd/{opened.fileno()}",
+                ),
+                env=environment,
+                pass_fds=(opened.fileno(),),
+                timeout=30.0,
+                term_grace=1.0,
+                stdout_limit=1024 * 1024,
+                stderr_limit=1024 * 1024,
+            )
+            opened.recheck()
+    except FilesystemError:
+        raise CsrHistoryError(f"{label} self-signature is invalid") from None
+    if not isinstance(result, ProcessResult) or result.status:
+        raise CsrHistoryError(f"{label} self-signature is invalid")
 
 
 def _x509_output(
@@ -823,6 +1129,486 @@ def _validate_deployment(
         raise CsrHistoryError("Rolled-back abandonment evidence is inconsistent")
 
 
+def authenticate_pending_response(
+    pki_dir: str,
+    service: InventoryService,
+    request_id: str,
+    environment: Mapping[str, str],
+    *,
+    pause_hook: Callable[[str], None] | None = None,
+) -> CsrPendingResponseAuthentication:
+    """Authenticate one exact pending response for immutable export."""
+
+    if _REQUEST_ID.fullmatch(request_id) is None:
+        raise CsrHistoryError("Certificate export request ID is invalid")
+    if service.key_custody != "host-local" or service.target is None:
+        raise CsrHistoryError("Certificate-only CSR export requires key_custody: host-local")
+    target = service.target
+    evidence = _Evidence()
+    candidate_path = f"{pki_dir}/state/csr/candidates/{service.name}/{request_id}"
+    response_path = f"{pki_dir}/state/csr/responses/{service.name}/{request_id}"
+    if not os.path.isdir(candidate_path) or os.path.islink(candidate_path):
+        raise CsrHistoryError(
+            f"CSR candidate artifact must be a non-symlink directory: {candidate_path}"
+        )
+    if not os.path.isdir(response_path) or os.path.islink(response_path):
+        raise CsrHistoryError(
+            f"CSR response artifact must be a non-symlink directory: {response_path}"
+        )
+    candidate = evidence.tree(
+        candidate_path,
+        frozenset(
+            ("candidate", "tls.crt", "ca-chain.crt", "fullchain.crt", "response", "response.sig")
+        ),
+        "CSR candidate artifact",
+        unsafe_message=f"CSR candidate artifact has unexpected or unsafe entries: {candidate_path}",
+    )
+    response_tree = evidence.tree(
+        response_path,
+        frozenset(("tls.crt", "ca-chain.crt", "fullchain.crt", "response", "response.sig")),
+        "CSR response artifact",
+        unsafe_message=f"CSR response artifact has unexpected or unsafe entries: {response_path}",
+    )
+    for name in ("tls.crt", "ca-chain.crt", "fullchain.crt", "response", "response.sig"):
+        if candidate.files[name].data != response_tree.files[name].data:
+            raise CsrHistoryError(
+                f"{name} differs between the pending candidate and response"
+            )
+    try:
+        response = parse_csr_response(response_tree.files["response"].data)
+        candidate_record = parse_csr_candidate(candidate.files["candidate"].data)
+        validate_response_candidate_binding(response, candidate_record)
+    except CsrProtocolError as error:
+        raise CsrHistoryError(str(error)) from None
+    values = response.record
+    if values["request_id"] != request_id or candidate_record.record["request_id"] != request_id:
+        raise CsrHistoryError("CSR artifact request ID does not match the requested export")
+    if values["service"] != service.name or candidate_record.record["service"] != service.name:
+        raise CsrHistoryError("CSR artifact service does not match the requested export")
+    if values["target"] != target or candidate_record.record["target"] != target:
+        raise CsrHistoryError("CSR artifact target does not match current inventory")
+
+    response_sha = response_tree.files["response"].digest
+    signature_sha = response_tree.files["response.sig"].digest
+    certificate_sha = response_tree.files["tls.crt"].digest
+    chain_sha = response_tree.files["ca-chain.crt"].digest
+    fullchain_sha = response_tree.files["fullchain.crt"].digest
+    certificate_spki = _spki(response_tree.files["tls.crt"], environment)
+    if (
+        candidate_record.record["response_sha256"] != response_sha
+        or candidate_record.record["response_signature_sha256"] != signature_sha
+        or values["certificate_sha256"] != certificate_sha
+        or values["certificate_spki_sha256"] != certificate_spki
+        or values["csr_spki_sha256"] != certificate_spki
+        or values["chain_sha256"] != chain_sha
+    ):
+        raise CsrHistoryError("CSR candidate does not bind the exact signed response")
+
+    transaction_path = f"{pki_dir}/state/csr/transactions/csr-{request_id}"
+    transaction = evidence.directory(
+        transaction_path, "CSR signing transaction directory"
+    )
+    response_trust = evidence.file(
+        f"{transaction_path}/responses.allowed_signers",
+        "Retained CSR response trust snapshot",
+    )
+    _retained_allowed_signers(
+        response_trust,
+        values["response_principal"],
+        "Retained CSR response trust",
+        sole=True,
+    )
+    if pause_hook is not None:
+        pause_hook("retained-trust-opened")
+    try:
+        evidence.recheck()
+    except CsrHistoryError:
+        raise CsrHistoryError(
+            "Retained CSR response trust snapshot changed while being copied"
+        ) from None
+    _verify_signature(
+        response_trust,
+        response_tree.files["response.sig"],
+        response_tree.files["response"],
+        values["response_principal"],
+        "platform-pki-csr-response-v1",
+        environment,
+        "CSR response",
+        sole=True,
+    )
+
+    issuer_root = values["issuer_root"]
+    issuer_intermediate = values["issuer_intermediate"]
+    evidence.directory(
+        f"{pki_dir}/authorities/roots/{issuer_root}",
+        "CSR response root generation",
+    )
+    evidence.directory(
+        f"{pki_dir}/authorities/intermediates/{issuer_intermediate}",
+        "CSR response intermediate generation",
+    )
+    root_certificate = evidence.file(
+        f"{pki_dir}/authorities/roots/{issuer_root}/certs/root-ca.crt",
+        "CSR response root certificate",
+        public=True,
+    )
+    intermediate_certificate = evidence.file(
+        f"{pki_dir}/authorities/intermediates/{issuer_intermediate}/certs/intermediate-ca.crt",
+        "CSR response intermediate certificate",
+        public=True,
+    )
+    _require_ca_profile(root_certificate, 1, environment, "CSR response root certificate")
+    _require_ca_self_signature(root_certificate, environment, "CSR response root certificate")
+    _require_ca_profile(
+        intermediate_certificate, 0, environment, "CSR response intermediate certificate"
+    )
+    _verify_certificate_chain(
+        response_tree.files["tls.crt"],
+        intermediate_certificate,
+        root_certificate,
+        environment,
+    )
+    _certificate_binding(
+        response_tree.files["tls.crt"],
+        values["serial"],
+        response.not_before_epoch,
+        response.not_after_epoch,
+        environment,
+    )
+    if response_tree.files["ca-chain.crt"].data != intermediate_certificate.data + root_certificate.data:
+        raise CsrHistoryError("CSR response CA chain does not match its issuer generations")
+    if response_tree.files["fullchain.crt"].data != response_tree.files["tls.crt"].data + intermediate_certificate.data:
+        raise CsrHistoryError("CSR response full chain does not match its leaf and intermediate")
+    _current_certificate_profile(
+        response_tree.files["tls.crt"], intermediate_certificate, service, environment
+    )
+    evidence.recheck()
+
+    return CsrPendingResponseAuthentication(
+        response=values,
+        candidate=candidate_record.record,
+        files={name: response_tree.files[name].data for name in response_tree.files},
+        response_sha256=response_sha,
+        response_signature_sha256=signature_sha,
+        certificate_sha256=certificate_sha,
+        certificate_spki_sha256=certificate_spki,
+        chain_sha256=chain_sha,
+        fullchain_sha256=fullchain_sha,
+        candidate_directory=candidate.identity,
+        response_directory=response_tree.identity,
+        transaction_directory=transaction.identity,
+        candidate_files={name: item.identity for name, item in candidate.files.items()},
+        response_files={name: item.identity for name, item in response_tree.files.items()},
+        response_trust_path=response_trust.path,
+        response_trust_identity=response_trust.identity,
+        response_trust_sha256=response_trust.digest,
+        _recheck=evidence.recheck,
+    )
+
+
+def authenticate_candidate_source(
+    pki_dir: str,
+    service: InventoryService,
+    request_id: str,
+    environment: Mapping[str, str],
+) -> CsrCandidateSourceAuthentication:
+    """Authenticate the complete pending source set used by candidate decisions."""
+
+    pending = authenticate_pending_response(pki_dir, service, request_id, environment)
+    if service.target is None:
+        raise CsrHistoryError("CSR candidate command requires key_custody: host-local")
+    target = service.target
+    evidence = _Evidence()
+    artifact_path = (
+        f"{pki_dir}/export/certificates/v1/artifacts/{service.name}/{request_id}"
+    )
+    artifact = evidence.tree(
+        artifact_path,
+        frozenset(
+            (
+                "artifact",
+                "tls.crt",
+                "ca-chain.crt",
+                "fullchain.crt",
+                "response",
+                "response.sig",
+            )
+        ),
+        "Certificate export artifact",
+    )
+    artifact_record = _record(
+        artifact.files["artifact"], _ARTIFACT_SPEC, "Certificate export manifest"
+    )
+    for name in ("tls.crt", "ca-chain.crt", "fullchain.crt", "response", "response.sig"):
+        if artifact.files[name].data != pending.files[name]:
+            raise CsrHistoryError(f"{name} differs across immutable CSR artifacts")
+    response = pending.response
+    if (
+        artifact_record["kind"] != "certificate-export"
+        or artifact_record["service"] != service.name
+        or artifact_record["request_id"] != request_id
+        or artifact_record["operation"] != response["operation"]
+        or artifact_record["target"] != target
+        or artifact_record["source_kind"] != "csr-response"
+        or artifact_record["source_response_sha256"] != pending.response_sha256
+        or artifact_record["source_response_signature_sha256"]
+        != pending.response_signature_sha256
+        or artifact_record["certificate_sha256"] != pending.certificate_sha256
+        or artifact_record["certificate_spki_sha256"]
+        != pending.certificate_spki_sha256
+        or artifact_record["chain_sha256"] != pending.chain_sha256
+        or artifact_record["fullchain_sha256"] != pending.fullchain_sha256
+        or artifact_record["candidate_state"] != "pending"
+        or artifact_record["deployment_state"] != "unfinalized"
+    ):
+        raise CsrHistoryError("Certificate export source binding failed")
+    for field in (
+        "issuer_root",
+        "issuer_intermediate",
+        "serial",
+        "not_before_epoch",
+        "not_after_epoch",
+        "response_principal",
+        "created_epoch",
+    ):
+        if artifact_record[field] != response[field]:
+            raise CsrHistoryError(
+                f"Certificate export does not bind response field: {field}"
+            )
+
+    transaction_path = f"{pki_dir}/state/csr/transactions/csr-{request_id}"
+    transaction = evidence.directory(
+        transaction_path, "CSR signing transaction directory"
+    )
+    retained_request = evidence.file(
+        f"{transaction_path}/request", "Retained CSR request"
+    )
+    retained_request_signature = evidence.file(
+        f"{transaction_path}/request.sig", "Retained CSR request signature"
+    )
+    retained_approval = evidence.file(
+        f"{transaction_path}/approval", "Retained CSR approval"
+    )
+    retained_approval_signature = evidence.file(
+        f"{transaction_path}/approval.sig", "Retained CSR approval signature"
+    )
+    retained_csr = evidence.file(f"{transaction_path}/tls.csr", "Retained CSR")
+    response_trust = evidence.file(
+        f"{transaction_path}/responses.allowed_signers",
+        "Retained CSR response trust",
+    )
+    replay_request = evidence.file(
+        f"{pki_dir}/state/csr/replay/requests/{request_id}",
+        "CSR request replay record",
+    )
+    replay_nonce = evidence.file(
+        f"{pki_dir}/state/csr/replay/nonces/{response['nonce']}",
+        "CSR nonce replay record",
+    )
+    terminal = evidence.file(
+        f"{transaction_path}/terminal", "CSR signing terminal record"
+    )
+    inventory = evidence.file(
+        f"{pki_dir}/inventory/services.yml", "Current service inventory", public=True
+    )
+    try:
+        request = parse_csr_request(retained_request.data)
+        approval = parse_csr_approval(retained_approval.data)
+        request_replay = parse_csr_replay_request(replay_request.data)
+        nonce_replay = parse_csr_replay_nonce(replay_nonce.data)
+        terminal_record = parse_csr_terminal(terminal.data)
+    except CsrProtocolError as error:
+        raise CsrHistoryError(str(error)) from None
+    if (
+        retained_request.digest != response["request_sha256"]
+        or retained_approval.digest != response["approval_sha256"]
+        or retained_csr.digest != response["csr_sha256"]
+        or inventory.digest != response["inventory_sha256"]
+        or request.record["request_id"] != request_id
+        or request.record["nonce"] != response["nonce"]
+        or request.record["operation"] != response["operation"]
+        or request.record["service"] != service.name
+        or request.record["target"] != target
+        or request.record["requester_principal"] != target
+        or request.record["response_principal"] != response["response_principal"]
+        or request.record["inventory_sha256"] != response["inventory_sha256"]
+        or request.record["csr_sha256"] != response["csr_sha256"]
+        or request.record["csr_spki_sha256"] != response["csr_spki_sha256"]
+        or request_replay.record["request_id"] != request_id
+        or request_replay.record["nonce"] != response["nonce"]
+        or request_replay.record["operation"] != response["operation"]
+        or request_replay.record["service"] != service.name
+        or request_replay.record["target"] != target
+        or request_replay.record["request_sha256"] != retained_request.digest
+        or request_replay.record["approval_sha256"] != retained_approval.digest
+        or request_replay.record["outcome"] != "reserved"
+        or nonce_replay.record["nonce"] != response["nonce"]
+        or nonce_replay.record["request_id"] != request_id
+        or nonce_replay.record["request_sha256"] != retained_request.digest
+        or nonce_replay.record["outcome"] != "reserved"
+        or terminal_record.record["transaction"] != f"csr-{request_id}"
+        or terminal_record.record["request_id"] != request_id
+        or terminal_record.record["operation"] != response["operation"]
+        or terminal_record.record["service"] != service.name
+        or terminal_record.record["outcome"] != "published"
+        or not terminal_record.committed
+        or _spki(retained_csr, environment, certificate=False)
+        != response["csr_spki_sha256"]
+    ):
+        raise CsrHistoryError("Retained CSR transaction binding failed")
+    signing_trust, approver_principal, _response_principal = _installed_signing_trust(
+        evidence, pki_dir
+    )
+    if approval.record["approver_principal"] != approver_principal:
+        raise CsrHistoryError("Retained CSR approval principal does not match policy")
+    requester_keys = _allowed_signers(
+        signing_trust.files["requesters.allowed_signers"],
+        request.record["requester_principal"],
+        "Installed CSR requester trust",
+    )
+    approver_keys = _allowed_signers(
+        signing_trust.files["approvers.allowed_signers"],
+        approval.record["approver_principal"],
+        "Installed CSR approver trust",
+        sole=True,
+    )
+    try:
+        validate_request_approval_binding(
+            request,
+            approval,
+            signer_keys_match=(
+                requester_keys[request.record["requester_principal"]]
+                == approver_keys[approval.record["approver_principal"]]
+            ),
+        )
+    except CsrProtocolError as error:
+        raise CsrHistoryError(str(error)) from None
+    _verify_signature(
+        signing_trust.files["requesters.allowed_signers"],
+        retained_request_signature,
+        retained_request,
+        request.record["requester_principal"],
+        "platform-pki-csr-request-v1",
+        environment,
+        "Retained CSR request",
+    )
+    _verify_signature(
+        signing_trust.files["approvers.allowed_signers"],
+        retained_approval_signature,
+        retained_approval,
+        approval.record["approver_principal"],
+        "platform-pki-csr-approval-v1",
+        environment,
+        "Retained CSR approval",
+        sole=True,
+    )
+    _retained_allowed_signers(
+        response_trust,
+        response["response_principal"],
+        "Retained CSR response trust",
+        sole=True,
+    )
+    _verify_signature(
+        response_trust,
+        _File(
+            f"{pki_dir}/state/csr/responses/{service.name}/{request_id}/response.sig",
+            pending.response_files["response.sig"],
+            pending.files["response.sig"],
+        ),
+        _File(
+            f"{pki_dir}/state/csr/responses/{service.name}/{request_id}/response",
+            pending.response_files["response"],
+            pending.files["response"],
+        ),
+        response["response_principal"],
+        "platform-pki-csr-response-v1",
+        environment,
+        "CSR response",
+        sole=True,
+    )
+
+    source_directories = {
+        "candidate": pending.candidate_directory,
+        "response": pending.response_directory,
+        "artifact": artifact.identity,
+    }
+    source_files: dict[str, FileIdentity] = {}
+    source_digests: dict[str, str] = {}
+    source_groups = {
+        "candidate": pending.candidate_files,
+        "response": pending.response_files,
+        "artifact": {name: item.identity for name, item in artifact.files.items()},
+    }
+    source_bytes = {
+        "candidate": {
+            **pending.files,
+            "candidate": pending.candidate.to_bytes(),
+        },
+        "response": pending.files,
+        "artifact": {name: item.data for name, item in artifact.files.items()},
+    }
+    for key, root, name in CANDIDATE_SOURCE_PATHS:
+        source_files[key] = source_groups[root][name]
+        source_digests[key] = hashlib.sha256(source_bytes[root][name]).hexdigest()
+
+    def recheck() -> None:
+        pending()
+        evidence.recheck()
+
+    recheck()
+    return CsrCandidateSourceAuthentication(
+        response=response,
+        candidate=pending.candidate,
+        artifact=artifact_record,
+        request=request.record,
+        approval=approval.record,
+        source_directories=source_directories,
+        source_files=source_files,
+        source_digests=source_digests,
+        transaction_path=transaction_path,
+        transaction_identity=transaction.identity,
+        response_trust_path=response_trust.path,
+        response_trust_identity=response_trust.identity,
+        response_trust_sha256=response_trust.digest,
+        candidate_sha256=source_digests["candidate_candidate"],
+        artifact_manifest_sha256=artifact.files["artifact"].digest,
+        response_sha256=pending.response_sha256,
+        response_signature_sha256=pending.response_signature_sha256,
+        certificate_sha256=pending.certificate_sha256,
+        certificate_spki_sha256=pending.certificate_spki_sha256,
+        chain_sha256=pending.chain_sha256,
+        fullchain_sha256=pending.fullchain_sha256,
+        issuer_intermediate_sha256=hashlib.sha256(
+            artifact.files["ca-chain.crt"].data.split(b"-----END CERTIFICATE-----\n", 1)[0]
+            + b"-----END CERTIFICATE-----\n"
+        ).hexdigest(),
+        current_cert_sha256=request.record["current_cert_sha256"],
+        _recheck=recheck,
+    )
+
+
+def authenticate_candidate_inventory(
+    pki_dir: str,
+    service_name: str,
+) -> CsrCandidateInventoryAuthentication:
+    """Parse one exact inventory snapshot and pin it through publication."""
+
+    evidence = _Evidence()
+    path = f"{pki_dir}/inventory/services.yml"
+    source = evidence.file(path, "Current service inventory", public=True)
+    try:
+        inventory = parse_inventory(source.data)
+    except InventoryError as error:
+        raise CsrHistoryError(str(error)) from None
+    service = next(
+        (item for item in inventory.services if item.name == service_name), None
+    )
+    if service is None:
+        raise CsrHistoryError(f"Service is not defined in {path}: {service_name}")
+    evidence.recheck()
+    return CsrCandidateInventoryAuthentication(service, evidence.recheck)
+
+
 def _authenticate_history(
     pki_dir: str,
     service: InventoryService,
@@ -831,7 +1617,10 @@ def _authenticate_history(
     root_request_id: str | None = None,
     request_current_certificate_sha256: str | None = None,
     current_certificate_path: str | None = None,
+    trust_mode: Literal["installed", "retained"] = "installed",
 ) -> CsrHistoryAuthentication:
+    if trust_mode not in ("installed", "retained"):
+        raise ValueError("trust_mode is invalid")
     if service.target is None or service.validation_boundary_sha256 is None or service.rollback_hold_seconds is None:
         raise CsrHistoryError("Host-local inventory lacks deployment trust scalars")
     target = service.target
@@ -839,6 +1628,7 @@ def _authenticate_history(
     rollback_hold_seconds = int(service.rollback_hold_seconds, 10)
     evidence = _Evidence()
     active: OrderedRecord | None = None
+    active_identity: FileIdentity | None = None
     if root_request_id is None:
         if (request_current_certificate_sha256 is None) != (
             current_certificate_path is None
@@ -853,6 +1643,7 @@ def _authenticate_history(
         active = _record(
             active_file, _ACTIVE_SPEC, "Host-local active accepted-evidence pointer"
         )
+        active_identity = active_file.identity
         if (
             active["service"] != service.name
             or active["target"] != target
@@ -875,7 +1666,13 @@ def _authenticate_history(
     ):
         raise ValueError("terminal history authentication arguments are invalid")
 
-    trust, approver_principal, response_principal = _schema2_trust(evidence, pki_dir)
+    trust: _Directory | None = None
+    approver_principal: str | None = None
+    response_principal: str | None = None
+    if trust_mode == "installed":
+        trust, approver_principal, response_principal = _installed_signing_trust(
+            evidence, pki_dir
+        )
     if active is not None:
         if request_current_certificate_sha256 is not None:
             assert current_certificate_path is not None
@@ -1066,59 +1863,72 @@ def _authenticate_history(
                 raise CsrHistoryError(
                     "Retained CSR transaction identity binding failed"
                 )
-            if (
-                approval.record["approver_principal"] != approver_principal
-                or response_record["response_principal"] != response_principal
-            ):
-                raise CsrHistoryError(
-                    "Retained CSR signer principals do not match installed schema-2 trust policy"
-                )
-            requester_keys = _allowed_signers(
-                trust.files["requesters.allowed_signers"],
-                request.record["requester_principal"],
-                "Installed CSR requester trust",
-            )
-            approver_keys = _allowed_signers(
-                trust.files["approvers.allowed_signers"],
-                approval.record["approver_principal"],
-                "Installed CSR approver trust",
-                sole=True,
-            )
             try:
+                signer_keys_match: bool | None = None
+                if trust is not None:
+                    if (
+                        approval.record["approver_principal"]
+                        != approver_principal
+                        or response_record["response_principal"]
+                        != response_principal
+                    ):
+                        raise CsrHistoryError(
+                            "Retained CSR signer principals do not match installed schema-2 trust policy"
+                        )
+                    requester_keys = _allowed_signers(
+                        trust.files["requesters.allowed_signers"],
+                        request.record["requester_principal"],
+                        "Installed CSR requester trust",
+                    )
+                    approver_keys = _allowed_signers(
+                        trust.files["approvers.allowed_signers"],
+                        approval.record["approver_principal"],
+                        "Installed CSR approver trust",
+                        sole=True,
+                    )
+                    signer_keys_match = (
+                        requester_keys[request.record["requester_principal"]]
+                        == approver_keys[approval.record["approver_principal"]]
+                    )
                 validate_request_approval_binding(
                     request,
                     approval,
-                    signer_keys_match=(
-                        requester_keys[request.record["requester_principal"]]
-                        == approver_keys[approval.record["approver_principal"]]
-                    ),
+                    signer_keys_match=signer_keys_match,
                 )
             except CsrProtocolError as error:
                 raise CsrHistoryError(str(error)) from None
-            _verify_signature(
-                trust.files["requesters.allowed_signers"],
-                retained_request_signature,
-                retained_request,
-                request.record["requester_principal"],
-                "platform-pki-csr-request-v1",
-                environment,
-                "Retained CSR request",
-            )
-            _verify_signature(
-                trust.files["approvers.allowed_signers"],
-                retained_approval_signature,
-                retained_approval,
-                approval.record["approver_principal"],
-                "platform-pki-csr-approval-v1",
-                environment,
-                "Retained CSR approval",
-                sole=True,
-            )
-            _require_trust_root(
-                response_trust,
-                trust.files["responses.allowed_signers"],
-                "Retained CSR response trust",
-            )
+            if trust is not None:
+                _verify_signature(
+                    trust.files["requesters.allowed_signers"],
+                    retained_request_signature,
+                    retained_request,
+                    request.record["requester_principal"],
+                    "platform-pki-csr-request-v1",
+                    environment,
+                    "Retained CSR request",
+                )
+                _verify_signature(
+                    trust.files["approvers.allowed_signers"],
+                    retained_approval_signature,
+                    retained_approval,
+                    approval.record["approver_principal"],
+                    "platform-pki-csr-approval-v1",
+                    environment,
+                    "Retained CSR approval",
+                    sole=True,
+                )
+                _require_trust_root(
+                    response_trust,
+                    trust.files["responses.allowed_signers"],
+                    "Retained CSR response trust",
+                )
+            else:
+                _retained_allowed_signers(
+                    response_trust,
+                    response_record["response_principal"],
+                    "Retained CSR response trust",
+                    sole=True,
+                )
             _verify_signature(
                 response_trust,
                 response_tree.files["response.sig"],
@@ -1170,7 +1980,11 @@ def _authenticate_history(
                 raise CsrHistoryError("Historical certificate chain does not match its issuer")
             if response_tree.files["fullchain.crt"].data != response_tree.files["tls.crt"].data + intermediate_certificate.data:
                 raise CsrHistoryError("Historical certificate full chain is invalid")
-            if active is not None and request_id == root_request_id:
+            if (
+                trust_mode == "installed"
+                and active is not None
+                and request_id == root_request_id
+            ):
                 _current_certificate_profile(
                     response_tree.files["tls.crt"],
                     intermediate_certificate,
@@ -1181,11 +1995,18 @@ def _authenticate_history(
             deployment_sha = outcome.files["deployment"].digest
             deployment_signature_sha = outcome.files["deployment.sig"].digest
             deployers_sha = outcome.files["deployers.allowed_signers"].digest
-            _require_trust_root(
-                outcome.files["deployers.allowed_signers"],
-                trust.files["deployers.allowed_signers"],
-                "Retained CSR deployer trust",
-            )
+            if trust is not None:
+                _require_trust_root(
+                    outcome.files["deployers.allowed_signers"],
+                    trust.files["deployers.allowed_signers"],
+                    "Retained CSR deployer trust",
+                )
+            else:
+                _retained_allowed_signers(
+                    outcome.files["deployers.allowed_signers"],
+                    target,
+                    "Retained CSR deployer trust",
+                )
             _verify_signature(
                 outcome.files["deployers.allowed_signers"],
                 outcome.files["deployment.sig"],
@@ -1385,7 +2206,10 @@ def _authenticate_history(
                 response_sha,
                 artifact_sha,
                 deployment_sha,
+                deployment_signature_sha,
+                deployers_sha,
                 outcome.files["decision"].digest,
+                decision,
                 deployment["activation_epoch"],
                 deployment["rollback_hold_until_epoch"],
                 deployment["created_epoch"],
@@ -1408,6 +2232,22 @@ def _authenticate_history(
             accepted.action,
             accepted.state,
             accepted.resulting_active_request_id,
+            accepted.operation,
+            accepted.certificate_sha256,
+            accepted.certificate_spki_sha256,
+            accepted.intermediate_sha256,
+            accepted.response_sha256,
+            accepted.artifact_sha256,
+            accepted.deployment_sha256,
+            accepted.deployment_signature_sha256,
+            accepted.deployers_sha256,
+            accepted.decision_sha256,
+            accepted.decision,
+            accepted.activation_epoch,
+            accepted.rollback_hold_until_epoch,
+            accepted.updated_epoch,
+            None,
+            None,
             evidence.recheck,
         )
     if accepted.action != "finalize" or accepted.state != "finalized":
@@ -1437,6 +2277,22 @@ def _authenticate_history(
         accepted.action,
         accepted.state,
         accepted.resulting_active_request_id,
+        accepted.operation,
+        accepted.certificate_sha256,
+        accepted.certificate_spki_sha256,
+        accepted.intermediate_sha256,
+        accepted.response_sha256,
+        accepted.artifact_sha256,
+        accepted.deployment_sha256,
+        accepted.deployment_signature_sha256,
+        accepted.deployers_sha256,
+        accepted.decision_sha256,
+        accepted.decision,
+        accepted.activation_epoch,
+        accepted.rollback_hold_until_epoch,
+        accepted.updated_epoch,
+        active,
+        active_identity,
         evidence.recheck,
     )
 
@@ -1483,3 +2339,582 @@ def authenticate_terminal_outcome(
         environment,
         root_request_id=request_id,
     )
+
+
+def authenticate_retained_terminal_outcome(
+    pki_dir: str,
+    service: InventoryService,
+    request_id: str,
+    environment: Mapping[str, str],
+) -> CsrHistoryAuthentication:
+    """Authenticate one terminal solely through its immutable retained signer roots."""
+
+    return _authenticate_history(
+        pki_dir,
+        service,
+        environment,
+        root_request_id=request_id,
+        trust_mode="retained",
+    )
+
+
+def authenticate_optional_active_history(
+    pki_dir: str,
+    service: InventoryService,
+    environment: Mapping[str, str],
+) -> CsrOptionalActiveAuthentication:
+    """Authenticate current active history or the exact absence of its pointer."""
+
+    path = f"{pki_dir}/state/csr/active/{service.name}"
+    if os.path.lexists(path):
+        history = _authenticate_history(
+            pki_dir, service, environment, trust_mode="retained"
+        )
+        return CsrOptionalActiveAuthentication(history, history)
+    active_parent = f"{pki_dir}/state/csr/active"
+    parent_path = active_parent if os.path.lexists(active_parent) else f"{pki_dir}/state/csr"
+    parent_identity: DirectoryIdentity | None = None
+    try:
+        with OpenedDirectory(parent_path, policy=_DIRECTORY) as parent:
+            parent_identity = parent.recheck().directory
+            absent_name = service.name if parent_path == active_parent else "active"
+            if parent.identity_at(absent_name) is not ABSENT:
+                raise CsrHistoryError(
+                    "Host-local active accepted-evidence pointer is unsafe"
+                )
+    except FilesystemError:
+        raise CsrHistoryError(
+            "CSR active accepted-evidence directory is unsafe"
+        ) from None
+    assert parent_identity is not None
+
+    def recheck() -> None:
+        try:
+            with OpenedDirectory(
+                parent_path, policy=_DIRECTORY, expected_identity=parent_identity
+            ) as parent:
+                if parent_path == active_parent:
+                    if parent.identity_at(service.name) is ABSENT:
+                        return
+                elif parent.identity_at("active") is ABSENT:
+                    return
+                else:
+                    with parent.open_directory("active", policy=_DIRECTORY) as active:
+                        if active.identity_at(service.name) is ABSENT:
+                            return
+        except FilesystemError:
+            pass
+        raise CsrHistoryError(
+            "Host-local active accepted-evidence pointer changed during validation"
+        )
+
+    recheck()
+    return CsrOptionalActiveAuthentication(None, recheck)
+
+
+def authenticate_managed_predecessor(
+    pki_dir: str,
+    service: InventoryService,
+    expected_certificate_sha256: str,
+    environment: Mapping[str, str],
+) -> CsrManagedPredecessorAuthentication:
+    """Authenticate and pin the managed trees retained by a migration decision."""
+
+    evidence = _Evidence()
+    certificate = evidence.file(
+        f"{pki_dir}/services/{service.name}/certs/tls.crt",
+        "Managed migration predecessor certificate",
+        public=True,
+    )
+    chain = evidence.file(
+        f"{pki_dir}/services/{service.name}/chain/ca-chain.crt",
+        "Managed migration predecessor chain",
+        public=True,
+    )
+    issuer_file = evidence.file(
+        f"{pki_dir}/services/{service.name}/issuer",
+        "Managed migration predecessor issuer",
+    )
+    issuer = _record(issuer_file, _ISSUER_SPEC, "Managed migration predecessor issuer")
+    root = evidence.file(
+        f"{pki_dir}/authorities/roots/{issuer['root']}/certs/root-ca.crt",
+        "Managed migration predecessor root",
+        public=True,
+    )
+    intermediate = evidence.file(
+        f"{pki_dir}/authorities/intermediates/{issuer['intermediate']}/certs/intermediate-ca.crt",
+        "Managed migration predecessor intermediate",
+        public=True,
+    )
+    if certificate.digest != expected_certificate_sha256:
+        raise CsrHistoryError(
+            "Managed migration predecessor does not match the request current certificate"
+        )
+    if chain.data != intermediate.data + root.data:
+        raise CsrHistoryError(
+            "Managed migration predecessor chain does not match its issuer"
+        )
+    _verify_certificate_chain(certificate, intermediate, root, environment)
+
+    preserved: list[
+        tuple[str, DirectoryIdentity | None, tuple[MetadataEntry, ...]]
+    ] = []
+    for path in (
+        f"{pki_dir}/services/{service.name}",
+        f"{pki_dir}/export/ansible/services/{service.name}",
+    ):
+        if not os.path.lexists(path):
+            preserved.append((path, None, ()))
+            continue
+        try:
+            with OpenedDirectory(path, policy=_DIRECTORY) as root_directory:
+                entries = tuple(walk_metadata(root_directory, xdev=True))
+                if any(item.kind not in {"directory", "regular"} for item in entries):
+                    raise CsrHistoryError(
+                        f"Managed migration preservation entry is unsafe: {path}"
+                    )
+                preserved.append((path, root_directory.recheck().directory, entries))
+        except FilesystemError:
+            raise CsrHistoryError(
+                f"Managed migration preservation root is unsafe: {path}"
+            ) from None
+
+    def recheck() -> None:
+        evidence.recheck()
+        for path, identity, entries in preserved:
+            if identity is None:
+                if os.path.lexists(path):
+                    raise CsrHistoryError(
+                        f"Managed migration directory identity changed: {path}"
+                    )
+                continue
+            try:
+                with OpenedDirectory(
+                    path, policy=_DIRECTORY, expected_identity=identity
+                ) as directory:
+                    if tuple(walk_metadata(directory, xdev=True)) != entries:
+                        raise CsrHistoryError(
+                            f"Managed migration directory identity changed: {path}"
+                        )
+            except FilesystemError:
+                raise CsrHistoryError(
+                    f"Managed migration directory identity changed: {path}"
+                ) from None
+
+    recheck()
+    return CsrManagedPredecessorAuthentication(
+        certificate.digest,
+        _spki(certificate, environment),
+        intermediate.digest,
+        recheck,
+    )
+
+
+def authenticate_fresh_deployment(
+    pki_dir: str,
+    service: InventoryService,
+    source: CsrCandidateSourceAuthentication,
+    action: Literal["finalize", "abandon"],
+    evidence_path: str,
+    signature_path: str,
+    environment: Mapping[str, str],
+    *,
+    predecessor_kind: str,
+    predecessor_certificate_sha256: str,
+    predecessor_intermediate_sha256: str,
+    retained_outcome: CsrHistoryAuthentication | None = None,
+    now: int | None = None,
+) -> CsrFreshDeploymentAuthentication:
+    """Authenticate supplied evidence against current or retained deployer trust."""
+
+    if action not in ("finalize", "abandon"):
+        raise ValueError("candidate action is invalid")
+    if (
+        service.target is None
+        or service.validation_boundary_sha256 is None
+        or service.rollback_hold_seconds is None
+    ):
+        raise CsrHistoryError("Host-local inventory lacks deployment trust scalars")
+    evidence = _Evidence()
+    deployment_file = evidence.file(evidence_path, "Deployment evidence", public=True)
+    signature_file = evidence.file(
+        signature_path, "Deployment evidence signature", public=True
+    )
+    if not 0 < len(deployment_file.data) <= 1024 * 1024 or not 0 < len(
+        signature_file.data
+    ) <= 1024 * 1024:
+        raise CsrHistoryError("Deployment evidence input has invalid size")
+    deployment = _record(deployment_file, _DEPLOYMENT_SPEC, "Deployment evidence")
+    if retained_outcome is None:
+        policy_path = f"{pki_dir}/inventory/csr-trust/policy"
+        schema2 = False
+        try:
+            with OpenedFile(policy_path, policy=_FILE) as policy:
+                schema2 = policy.read(_FILE.max_size or 0).startswith(b"schema=2\n")
+        except FilesystemError:
+            schema2 = False
+        if not schema2:
+            raise CsrHistoryError(
+                "Candidate finalization and abandonment require CSR trust policy schema 2"
+            )
+        trust, _approver, _response = _schema2_trust(evidence, pki_dir)
+        deployers = trust.files["deployers.allowed_signers"]
+    else:
+        deployers = evidence.file(
+            f"{pki_dir}/state/csr/outcomes/{service.name}/"
+            f"{source.response['request_id']}/deployers.allowed_signers",
+            "Retained CSR deployer trust",
+        )
+        if deployers.digest != retained_outcome.deployers_sha256:
+            raise CsrHistoryError("Retained CSR deployer trust binding failed")
+        _retained_allowed_signers(
+            deployers, service.target, "Retained CSR deployer trust"
+        )
+    _verify_signature(
+        deployers,
+        signature_file,
+        deployment_file,
+        service.target,
+        "platform-pki-csr-deployment-v1",
+        environment,
+        "Deployment evidence",
+    )
+    response = source.response
+    if deployment["nonce"] != response["nonce"]:
+        raise CsrHistoryError("Deployment evidence nonce binding failed")
+    if (
+        deployment["request_id"] != response["request_id"]
+        or deployment["artifact_request_id"] != response["request_id"]
+        or deployment["service"] != service.name
+        or deployment["target"] != service.target
+        or deployment["deployment_principal"] != service.target
+        or deployment["operation"] != response["operation"]
+        or deployment["action"] != action
+        or deployment["request_sha256"] != response["request_sha256"]
+        or deployment["response_sha256"] != source.response_sha256
+        or deployment["response_signature_sha256"]
+        != source.response_signature_sha256
+        or deployment["candidate_sha256"] != source.candidate_sha256
+        or deployment["artifact_manifest_sha256"]
+        != source.artifact_manifest_sha256
+        or deployment["certificate_sha256"] != source.certificate_sha256
+        or deployment["certificate_spki_sha256"]
+        != source.certificate_spki_sha256
+        or deployment["chain_sha256"] != source.chain_sha256
+        or deployment["fullchain_sha256"] != source.fullchain_sha256
+    ):
+        raise CsrHistoryError("Deployment evidence source binding failed")
+    current = int(datetime.datetime.now(datetime.UTC).timestamp()) if now is None else now
+    created = _epoch(deployment["created_epoch"], "Deployment created_epoch")
+    expires = _epoch(deployment["expires_epoch"], "Deployment expires_epoch")
+    if (
+        expires <= created
+        or expires - created > 86400
+        or current + 300 < created
+        or current > expires + 300
+    ):
+        raise CsrHistoryError("Deployment evidence is outside its allowed validity interval")
+    _validate_deployment(
+        deployment,
+        CsrOperation(response["operation"]),
+        action,
+        source.certificate_sha256,
+        source.certificate_spki_sha256,
+        source.issuer_intermediate_sha256,
+        service.validation_boundary_sha256,
+        int(service.rollback_hold_seconds, 10),
+        predecessor_kind,
+        predecessor_certificate_sha256,
+        predecessor_intermediate_sha256,
+    )
+
+    def recheck() -> None:
+        source()
+        if retained_outcome is not None:
+            retained_outcome()
+        evidence.recheck()
+
+    recheck()
+    return CsrFreshDeploymentAuthentication(
+        deployment,
+        deployment_file.data,
+        signature_file.data,
+        deployers.data,
+        deployment_file.digest,
+        signature_file.digest,
+        deployers.digest,
+        deployers.identity,
+        recheck,
+    )
+
+
+_HISTORY_ROOTS = (
+    "state/csr",
+    "export/certificates/v1/artifacts",
+    "authorities/roots",
+    "authorities/intermediates",
+    "services",
+    "export/ansible/services",
+)
+@dataclass(frozen=True, slots=True)
+class _HistoryStateSnapshot:
+    pki_dir: str
+    roots: tuple[
+        tuple[str, DirectoryIdentity | None, tuple[MetadataEntry, ...]], ...
+    ]
+    inventory: _File | None
+
+    def recheck(self) -> None:
+        current = _snapshot_history_state(self.pki_dir)
+        if current.roots != self.roots or (
+            (current.inventory is None) != (self.inventory is None)
+            or (
+                current.inventory is not None
+                and self.inventory is not None
+                and (
+                    current.inventory.identity != self.inventory.identity
+                    or current.inventory.data != self.inventory.data
+                )
+            )
+        ):
+            raise CsrHistoryError(
+                "CSR historical state changed before trust publication"
+            )
+
+
+def _snapshot_history_state(pki_dir: str) -> _HistoryStateSnapshot:
+    roots: list[
+        tuple[str, DirectoryIdentity | None, tuple[MetadataEntry, ...]]
+    ] = []
+    for relative in _HISTORY_ROOTS:
+        path = f"{pki_dir}/{relative}"
+        if not os.path.lexists(path):
+            roots.append((relative, None, ()))
+            continue
+        try:
+            with OpenedDirectory(path) as root:
+                entries = tuple(walk_metadata(root, xdev=True))
+                if any(
+                    item.kind not in {"directory", "regular"}
+                    or any("\n" in name or "\t" in name for name in item.relative)
+                    for item in entries
+                ):
+                    raise CsrHistoryError(
+                        "CSR historical state contains an unsafe entry"
+                    )
+                roots.append((relative, root.recheck().directory, entries))
+        except FilesystemError:
+            raise CsrHistoryError("CSR historical state is unsafe") from None
+    inventory_path = f"{pki_dir}/inventory/services.yml"
+    inventory = (
+        _Evidence().file(inventory_path, "Current service inventory")
+        if os.path.lexists(inventory_path)
+        else None
+    )
+    return _HistoryStateSnapshot(pki_dir, tuple(roots), inventory)
+
+
+def _directory_names(path: str, label: str) -> tuple[str, ...]:
+    try:
+        with OpenedDirectory(path, policy=_DIRECTORY) as directory:
+            names = tuple(sorted(os.listdir(directory.fileno())))
+            directory.recheck()
+            return names
+    except (OSError, FilesystemError):
+        raise CsrHistoryError(f"{label} is unsafe") from None
+    raise AssertionError("unreachable")
+
+
+def authenticate_retained_history(
+    pki_dir: str,
+    environment: Mapping[str, str],
+) -> CsrRetainedHistoryAuthentication:
+    """Authenticate every retained terminal using its persisted immutable trust."""
+
+    before = _snapshot_history_state(pki_dir)
+    if before.inventory is None:
+        inventory = Inventory(())
+    else:
+        try:
+            inventory = parse_inventory(before.inventory.data)
+        except InventoryError as error:
+            raise CsrHistoryError(str(error)) from None
+    services = {service.name: service for service in inventory.services}
+    candidates_root = f"{pki_dir}/state/csr/candidates"
+    outcomes_root = f"{pki_dir}/state/csr/outcomes"
+    active_root = f"{pki_dir}/state/csr/active"
+    coordinates: list[tuple[str, str]] = []
+    coordinate_set: set[tuple[str, str]] = set()
+    request_ids: set[str] = set()
+
+    candidate_services = (
+        _directory_names(candidates_root, "CSR candidate state directory")
+        if os.path.lexists(candidates_root)
+        else ()
+    )
+    for service_name in candidate_services:
+        service = services.get(service_name)
+        if service is None:
+            raise CsrHistoryError(
+                f"Retained CSR candidate service is absent from current inventory: {service_name}"
+            )
+        if service.key_custody != "host-local":
+            raise CsrHistoryError(
+                f"Retained CSR candidate service is not host-local in current inventory: {service_name}"
+            )
+        names = _directory_names(
+            f"{candidates_root}/{service_name}", "CSR candidate service directory"
+        )
+        if not names:
+            raise CsrHistoryError(
+                f"CSR candidate service directory is unexpectedly empty: {service_name}"
+            )
+        for request_id in names:
+            if _REQUEST_ID.fullmatch(request_id) is None:
+                raise CsrHistoryError(
+                    f"CSR candidate state contains an invalid request ID: {request_id}"
+                )
+            if request_id in request_ids:
+                raise CsrHistoryError(
+                    f"CSR candidate request ID is ambiguous across services: {request_id}"
+                )
+            request_ids.add(request_id)
+            coordinate = (service_name, request_id)
+            coordinates.append(coordinate)
+            coordinate_set.add(coordinate)
+
+    outcome_coordinates: set[tuple[str, str]] = set()
+    outcome_services = (
+        _directory_names(outcomes_root, "CSR outcome state directory")
+        if os.path.lexists(outcomes_root)
+        else ()
+    )
+    for service_name in outcome_services:
+        service = services.get(service_name)
+        if service is None:
+            raise CsrHistoryError(
+                f"Retained CSR outcome service is absent from current inventory: {service_name}"
+            )
+        if service.key_custody != "host-local":
+            raise CsrHistoryError(
+                f"Retained CSR outcome service is not host-local in current inventory: {service_name}"
+            )
+        names = _directory_names(
+            f"{outcomes_root}/{service_name}", "CSR outcome service directory"
+        )
+        if not names:
+            raise CsrHistoryError(
+                f"CSR outcome service directory is unexpectedly empty: {service_name}"
+            )
+        for request_id in names:
+            if _REQUEST_ID.fullmatch(request_id) is None:
+                raise CsrHistoryError(
+                    f"CSR outcome state contains an invalid request ID: {request_id}"
+                )
+            coordinate = (service_name, request_id)
+            if coordinate not in coordinate_set:
+                raise CsrHistoryError(
+                    f"CSR outcome has no matching retained candidate: {service_name}/{request_id}"
+                )
+            outcome_coordinates.add(coordinate)
+
+    terminal: dict[tuple[str, str], CsrHistoryAuthentication] = {}
+    finalized: set[tuple[str, str]] = set()
+    superseded: set[tuple[str, str]] = set()
+    for coordinate in coordinates:
+        service_name, request_id = coordinate
+        if coordinate not in outcome_coordinates:
+            raise CsrHistoryError(
+                f"CSR trust replacement is blocked by pending candidate: {service_name}/{request_id}"
+            )
+        authentication = _authenticate_history(
+            pki_dir,
+            services[service_name],
+            environment,
+            root_request_id=request_id,
+            trust_mode="retained",
+        )
+        terminal[coordinate] = authentication
+        if authentication.root_state == "finalized":
+            finalized.add(coordinate)
+            response_evidence = _Evidence()
+            try:
+                response = parse_csr_response(
+                    response_evidence.file(
+                        f"{pki_dir}/state/csr/responses/{service_name}/{request_id}/response",
+                        "Historical CSR response",
+                    ).data
+                )
+            except CsrProtocolError as error:
+                raise CsrHistoryError(str(error)) from None
+            if response.operation is CsrOperation.RENEW:
+                decision_evidence = _Evidence()
+                decision = _record(
+                    decision_evidence.file(
+                        f"{outcomes_root}/{service_name}/{request_id}/decision",
+                        "Historical CSR decision",
+                    ),
+                    _DECISION_SPEC,
+                    "Historical CSR decision",
+                )
+                superseded.add((service_name, decision["predecessor_request_id"]))
+
+    heads: dict[str, str] = {}
+    for service_name, request_id in finalized - superseded:
+        if service_name in heads:
+            raise CsrHistoryError(
+                f"CSR terminal history has multiple active finalized heads: {service_name}"
+            )
+        heads[service_name] = request_id
+
+    active_services = (
+        _directory_names(active_root, "CSR active accepted-evidence directory")
+        if os.path.lexists(active_root)
+        else ()
+    )
+    active_requests: dict[str, str] = {}
+    active_authentications: list[CsrHistoryAuthentication] = []
+    for service_name in active_services:
+        service = services.get(service_name)
+        if service is None or service.key_custody != "host-local":
+            raise CsrHistoryError(
+                f"CSR active accepted-evidence pointer is orphaned: {service_name}"
+            )
+        active_authentication = _authenticate_history(
+            pki_dir, service, environment, trust_mode="retained"
+        )
+        active_authentications.append(active_authentication)
+        active_requests[service_name] = active_authentication.root_request_id
+    if active_requests != heads:
+        raise CsrHistoryError(
+            "CSR terminal history active pointer is missing or conflicting"
+        )
+
+    after = _snapshot_history_state(pki_dir)
+    if after.roots != before.roots or (
+        (after.inventory is None) != (before.inventory is None)
+        or (
+            after.inventory is not None
+            and before.inventory is not None
+            and (
+                after.inventory.identity != before.inventory.identity
+                or after.inventory.data != before.inventory.data
+            )
+        )
+    ):
+        raise CsrHistoryError(
+            "CSR candidate or outcome state changed during trust validation"
+        )
+
+    rechecks = tuple(terminal.values())
+    active_rechecks = tuple(active_authentications)
+
+    def recheck() -> None:
+        before.recheck()
+        for authentication in rechecks:
+            authentication()
+        for authentication in active_rechecks:
+            authentication()
+
+    recheck()
+    return CsrRetainedHistoryAuthentication(frozenset(request_ids), recheck)
