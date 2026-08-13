@@ -4,13 +4,17 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v2.3.0 - 2026-08-13
+
 - All maintained PKI routes and current-release `platform-pki-*` compatibility
   commands are now Python zipapps. PKI Bashly workspaces and installed shell
   libraries have been retired, so `make install` now publishes only PKI
   templates under the shared-data directory. Immutable final-Bash executables,
   libraries, and required source fragments remain test-only evidence under
   `tests/pki/oracles/`. Compatibility command names remain supported until the
-  approved next major release.
+  approved next major release. New operator commands, documentation, and
+  automation should use the unified `platform-pki <command>` interface. PKI
+  execution requires Python 3.14 or newer on each target host.
 - `platform-pki-service-issue` and `platform-pki service-issue` now share one
   Python handler for managed issuance and authenticated host-local issue or
   migration. Managed schema-1 transactions can now be recovered through the

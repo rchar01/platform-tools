@@ -12,6 +12,11 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../Makefile`](../Makefile): Supported local entry points. Run `make help` to see them.
 - [`development.md`](./development.md): Separate Podman development and test images, Bashly generation, shell linting, and generated-file verification.
 
+PKI documentation recommends the unified `platform-pki <command>` form for new
+usage. Installed `platform-pki-*` compatibility aliases remain supported
+throughout the v2 release series and are scheduled for removal at the next major
+release.
+
 ## Docs In This Tree
 
 - [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
@@ -57,6 +62,10 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../bin/platform-proxmox-vm-cleanup`](../bin/platform-proxmox-vm-cleanup): Safe single-VM Proxmox cleanup helper.
 - [`../bin/platform-proxmox-vm-snapshot`](../bin/platform-proxmox-vm-snapshot): Safe Proxmox VE 9 development snapshot helper.
 - [`../bin/platform-pki`](../bin/platform-pki): Unified Python PKI interface with shared runtime, filesystem, fork-safe ordered advisory-lock, and bounded Linux durable-publication primitives for every maintained PKI route.
+
+The following files are supported v2 compatibility aliases; new usage should
+call the corresponding unified route:
+
 - [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
 - [`../bin/platform-pki-csr-trust-install`](../bin/platform-pki-csr-trust-install): Strict public-trust installer for authenticated host-local CSR signing.
 - [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Python-backed deterministic recovery for interrupted host-local CSR signing or candidate finalization.

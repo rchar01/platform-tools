@@ -159,8 +159,10 @@ Tasks:
 
 - [x] Inventory every PKI command form and source-defined option, including
   runtime-only option relationships and duplicate rejection fields.
-- [ ] Inventory remaining output, status, parser edge-case, runtime dependency,
-  and installed-asset contracts.
+- [ ] Extend the machine-readable output, status, runtime-dependency, and
+  installed-asset inventory beyond the three pilot commands. Parser-edge and
+  per-command focused behavior are already covered; this documentation expansion
+  is not a runtime-migration blocker.
 - [x] Execute shared help precedence, equals-form, abbreviation, stream/status,
   and no-state parser edges across all 24 retained leaf routes.
 - [x] Freeze the first migration tranche's output/status semantics,
@@ -180,7 +182,7 @@ Tasks:
   private copies of the same initialized state.
 - [x] Define Bash-oracle retention: keep each migrated command's final Bash
   source in-tree through Phase 8 and record its exact pre-cutover commit.
-- [ ] Record and preserve each command's final Bash implementation as it is cut
+- [x] Record and preserve each command's final Bash implementation as it is cut
   over.
 
 Validation gate:
@@ -435,11 +437,11 @@ platform-pki-csr-candidate
 
 Tasks:
 
-- [ ] Model transaction phases and legal transitions with enums and typed state.
-- [ ] Preserve exact existing journal serialization and state paths.
-- [ ] Preserve pre-commit rollback and post-commit resume behavior.
-- [ ] Preserve CA database backup, mutation, restoration, and identity checks.
-- [ ] Preserve replay consumption, immutable candidates, retained response trust,
+- [x] Model transaction phases and legal transitions with enums and typed state.
+- [x] Preserve exact existing journal serialization and state paths.
+- [x] Preserve pre-commit rollback and post-commit resume behavior.
+- [x] Preserve CA database backup, mutation, restoration, and identity checks.
+- [x] Preserve replay consumption, immutable candidates, retained response trust,
   exports, outcomes, active pointers, and historical authentication.
 - [x] Add non-public structural and semantic CSR signing/finalization journal
   models without changing public dispatch or recovery mutation.
@@ -461,7 +463,7 @@ Tasks:
 - [x] Add a non-public managed issue/renew schema-1 transaction model with exact
   paths, ordered pre/post/stage/backup evidence, reverse pre-commit rollback,
   cleanup-only post-commit recovery, archive/key variants, and terminal cleanup.
-- [ ] Migrate each public command as a whole; do not dispatch custody modes to
+- [x] Migrate each public command as a whole; do not dispatch custody modes to
   different implementation languages.
 
 Required recovery matrix:
@@ -475,11 +477,12 @@ Required recovery matrix:
 
 Validation gate:
 
-- [ ] Every Bash crash checkpoint can be recovered by Python.
-- [ ] Every Python crash checkpoint can be recovered by Python.
-- [ ] Python rejects unresolved or unsupported transaction state before each
+- [x] Every supported final-Bash persisted crash checkpoint can be recovered by
+  Python.
+- [x] Every Python crash checkpoint can be recovered by Python.
+- [x] Python rejects unresolved or unsupported transaction state before each
   affected operation reads or mutates operational snapshots.
-- [ ] Successful, invalid, no-op, replay, signal, race, and recovery state trees
+- [x] Successful, invalid, no-op, replay, signal, race, and recovery state trees
   match the frozen compatibility contract.
 
 CSR-recover checkpoint:
@@ -754,12 +757,12 @@ recovery requires a major-version decision.
 
 Every command cutover must include:
 
-- [ ] `make verify`
-- [ ] `make test-command-contract`
-- [ ] `make test-installed-tools`
-- [ ] The command's focused Make target.
-- [ ] Bash/Python differential success and failure scenarios.
-- [ ] State-tree comparison including paths, types, modes, links, digests,
+- `make verify`
+- `make test-command-contract`
+- `make test-installed-tools`
+- The command's focused Make target.
+- Bash/Python differential success and failure scenarios.
+- State-tree comparison including paths, types, modes, links, digests,
   canonical bytes, and expected identity relationships.
 
 Transaction cutovers must additionally include:
@@ -768,16 +771,17 @@ These are later command-specific operational integration gates. Phase 2
 primitive completion does not satisfy them or provide a generic recovery
 protocol.
 
-- [ ] Bash interrupted state recovered by Python.
-- [ ] Python interrupted state recovered by Python.
-- [ ] Source and destination replacement races.
-- [ ] Signals before and after the commit boundary.
-- [ ] No-op, replay, retry, rollback, and resume behavior.
-- [ ] Installed-layout execution with isolated imports and runtime paths.
+- Bash interrupted state recovered by Python.
+- Python interrupted state recovered by Python.
+- Source and destination replacement races.
+- Signals before and after the commit boundary.
+- No-op, replay, retry, rollback, and resume behavior.
+- Installed-layout execution with isolated imports and runtime paths.
 
 Use focused checks during development. Run `make container-check` once as the
 final acceptance gate for each releasable tranche rather than repeatedly during
-implementation.
+implementation. Every completed cutover met these recurring criteria, and the
+Phase 8 progress entry records the final aggregate acceptance run.
 
 ## Risks
 
@@ -793,14 +797,16 @@ implementation.
 - Forward-only package migration requires release documentation to state that
   older Bash implementations must not be used with Python-written transaction
   state and are not guaranteed to interpret it.
-- Target-host Python 3.14 availability remains a release-readiness check.
+- Every deployment target that executes a PKI command must provide Python 3.14
+  or newer before installing v2.3.0. Target provisioning is owned by the
+  deployment environment rather than this tool repository.
 
 ## Open Questions
 
-- [ ] Which supported target hosts need Python 3.14 provisioned before the first
-  Python-backed release?
-- [ ] How long should the final Bash implementation remain in the repository as
-  a differential oracle after each command migrates?
+- [x] Require deployment owners to provision Python 3.14 or newer on every host
+  that executes a PKI command before installing v2.3.0.
+- [x] Retain recorded final-Bash commits, release tags, source extracts, and
+  executable oracles indefinitely as historical compatibility evidence.
 
 ## Progress Log
 

@@ -29,6 +29,11 @@ a currently executable full lifecycle. Canonical references:
 If this document conflicts with either canonical PKI document, stop. Do not
 change field order, substitute a signature, or invent a helper command.
 
+Command templates use the recommended unified `platform-pki <command>`
+interface. The corresponding `platform-pki-*` executable names remain supported
+throughout the v2 release series and are scheduled for removal at the next major
+release.
+
 ## Inert Command Convention
 Every command block is a template, not a script. A consequential block starts
 with a guard such as:
@@ -116,15 +121,15 @@ to make a retry pass.
 Existing commands establish only part of preflight:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate authorization required}" && platform-pki-ca-rollover status --namespace "${DEV_NAMESPACE:?current development namespace required}" --format json
+: "${PKI_LIVE_AUTHORIZATION:?separate authorization required}" && platform-pki ca-rollover status --namespace "${DEV_NAMESPACE:?current development namespace required}" --format json
 ```
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate authorization required}" && platform-pki-ca-passphrase-verify --namespace "${DEV_NAMESPACE:?current development namespace required}" --root-pass-file "${DEV_ROOT_PASS_FILE:?mode-600 secret mount required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate authorization required}" && platform-pki ca-passphrase-verify --namespace "${DEV_NAMESPACE:?current development namespace required}" --root-pass-file "${DEV_ROOT_PASS_FILE:?mode-600 secret mount required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}"
 ```
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate backup authorization required}" && platform-pki-backup --namespace "${DEV_NAMESPACE:?current development namespace required}" --age-recipient "${DEV_BACKUP_AGE_RECIPIENT:?reviewed recipient required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate backup authorization required}" && platform-pki backup --namespace "${DEV_NAMESPACE:?current development namespace required}" --age-recipient "${DEV_BACKUP_AGE_RECIPIENT:?reviewed recipient required}"
 ```
 
 Do not use `--allow-plain-backup`. Never delete a journal to pass preflight.
@@ -424,11 +429,11 @@ backdating or skipped review. Sign/verify under
 
 ## Phase 4: Existing Migration Signer
 There is no migration helper. After the selection gate and separate CA mutation
-authorization, use exact existing `platform-pki-service-issue`; do not pass
+authorization, use exact existing `platform-pki service-issue`; do not pass
 `--current-cert-file`, `--days`, or `--rotate-key`:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate CA signing authorization required}" && platform-pki-service-issue registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}" --csr-file "${REQUEST_DIR:?protected request directory required}/tls.csr" --request-file "${REQUEST_DIR:?protected request directory required}/request" --request-signature "${REQUEST_DIR:?protected request directory required}/request.sig" --approval-file "${APPROVAL_DIR:?protected approval directory required}/approval" --approval-signature "${APPROVAL_DIR:?protected approval directory required}/approval.sig" --response-key "${DEV_RESPONSE_KEY:?protected response key required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate CA signing authorization required}" && platform-pki service-issue registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}" --csr-file "${REQUEST_DIR:?protected request directory required}/tls.csr" --request-file "${REQUEST_DIR:?protected request directory required}/request" --request-signature "${REQUEST_DIR:?protected request directory required}/request.sig" --approval-file "${APPROVAL_DIR:?protected approval directory required}/approval" --approval-signature "${APPROVAL_DIR:?protected approval directory required}/approval.sig" --response-key "${DEV_RESPONSE_KEY:?protected response key required}"
 ```
 
 It consumes request ID/nonce before CA mutation, preserves managed state, and
@@ -439,11 +444,11 @@ action.
 Publish and digest-pin the exact six-file export:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate export authorization required}" && platform-pki-certificate-export publish registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate export authorization required}" && platform-pki certificate-export publish registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}"
 ```
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate export authorization required}" && platform-pki-certificate-export resolve registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --manifest-sha256 "${ARTIFACT_MANIFEST_SHA256:?exact digest required}" --format path
+: "${PKI_LIVE_AUTHORIZATION:?separate export authorization required}" && platform-pki certificate-export resolve registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --manifest-sha256 "${ARTIFACT_MANIFEST_SHA256:?exact digest required}" --format path
 ```
 
 The response batch uploads exactly six files, never trust:
@@ -595,14 +600,14 @@ Supplemental files do not replace signed deployment fields.
 Verify signer state, then independently recheck live target state:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate verification authorization required}" && platform-pki-csr-candidate verify registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --format json
+: "${PKI_LIVE_AUTHORIZATION:?separate verification authorization required}" && platform-pki csr-candidate verify registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --format json
 ```
 
 Output includes `live_state_claimed:false`. With separate finalization
 authorization, use a TTY and do not add `--yes`:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate finalization authorization required}" && platform-pki-csr-candidate finalize registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --artifact-manifest-sha256 "${ARTIFACT_MANIFEST_SHA256:?exact digest required}" --evidence-file "${EVIDENCE_DIR:?protected evidence directory required}/deployment" --evidence-signature "${EVIDENCE_DIR:?protected evidence directory required}/deployment.sig"
+: "${PKI_LIVE_AUTHORIZATION:?separate finalization authorization required}" && platform-pki csr-candidate finalize registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --artifact-manifest-sha256 "${ARTIFACT_MANIFEST_SHA256:?exact digest required}" --evidence-file "${EVIDENCE_DIR:?protected evidence directory required}/deployment" --evidence-signature "${EVIDENCE_DIR:?protected evidence directory required}/deployment.sig"
 ```
 
 Finalization records historical evidence; it performs no deployment/discovery.
@@ -610,20 +615,19 @@ Finalization records historical evidence; it performs no deployment/discovery.
 ## Implemented Versus Manual
 | Existing command | Implemented boundary |
 | --- | --- |
-| `platform-pki-ca-rollover status` | CA/recovery status, not target state. |
-| `platform-pki-ca-passphrase-verify` | Point-in-time active CA key check. |
-| `platform-pki-backup` | Protected archive/receipt, not restore proof. |
-| `platform-pki-csr-trust-install` | Reviewed signer public trust installation. |
-| `platform-pki-service-issue` | Authenticated issue/migration pending candidate. |
-| `platform-pki-service-renew` | Authenticated renewal from accepted predecessor. |
-| `platform-pki-csr-recover` | Exact signing or resume-only finalization recovery. |
-| `platform-pki-certificate-export publish/resolve` | Exact six-file digest-pinned export. |
-| `platform-pki-csr-candidate verify/finalize/abandon` | Historical authenticated decisions; no live action. |
+| `platform-pki ca-rollover status` | CA/recovery status, not target state. |
+| `platform-pki ca-passphrase-verify` | Point-in-time active CA key check. |
+| `platform-pki backup` | Protected archive/receipt, not restore proof. |
+| `platform-pki csr-trust-install` | Reviewed signer public trust installation. |
+| `platform-pki service-issue` | Authenticated issue/migration pending candidate. |
+| `platform-pki service-renew` | Authenticated renewal from accepted predecessor. |
+| `platform-pki csr-recover` | Exact signing or resume-only finalization recovery. |
+| `platform-pki certificate-export publish/resolve` | Exact six-file digest-pinned export. |
+| `platform-pki csr-candidate verify/finalize/abandon` | Historical authenticated decisions; no live action. |
 
-The service issue and renew compatibility commands share their Python handlers
-with unified `platform-pki service-issue` and `platform-pki service-renew`.
-Host-local interruption recovery remains `platform-pki csr-recover`; managed
-renewal uses unified-only `platform-pki service-recover`.
+The v2 compatibility aliases share the same Python handlers. Host-local
+interruption recovery remains `platform-pki csr-recover`; managed renewal uses
+unified-only `platform-pki service-recover`.
 
 | Manual/future operation | Status |
 | --- | --- |
@@ -646,7 +650,7 @@ state, preserve current version, generate fresh key/CSR/ID/nonce, set
 `operation=renew`, and bind exact current accepted certificate:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate renewal authorization required}" && platform-pki-service-renew registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}" --csr-file "${REQUEST_DIR:?renewal request directory required}/tls.csr" --request-file "${REQUEST_DIR:?renewal request directory required}/request" --request-signature "${REQUEST_DIR:?renewal request directory required}/request.sig" --approval-file "${APPROVAL_DIR:?renewal approval directory required}/approval" --approval-signature "${APPROVAL_DIR:?renewal approval directory required}/approval.sig" --response-key "${DEV_RESPONSE_KEY:?protected response key required}" --current-cert-file "${CURRENT_CERT_FILE:?exact accepted certificate required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate renewal authorization required}" && platform-pki service-renew registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}" --csr-file "${REQUEST_DIR:?renewal request directory required}/tls.csr" --request-file "${REQUEST_DIR:?renewal request directory required}/request" --request-signature "${REQUEST_DIR:?renewal request directory required}/request.sig" --approval-file "${APPROVAL_DIR:?renewal approval directory required}/approval" --approval-signature "${APPROVAL_DIR:?renewal approval directory required}/approval.sig" --response-key "${DEV_RESPONSE_KEY:?protected response key required}" --current-cert-file "${CURRENT_CERT_FILE:?exact accepted certificate required}"
 ```
 
 Do not use `--days` or `--rotate-key`. Repeat exact export, constrained transport,
@@ -685,7 +689,7 @@ rollback_hold_until_epoch=<at-least-created_epoch-plus-1209600>
 Sign/transfer complete evidence and invoke interactively without `--yes`:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate abandonment authorization required}" && platform-pki-csr-candidate abandon registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --artifact-manifest-sha256 "${ARTIFACT_MANIFEST_SHA256:?exact digest required}" --evidence-file "${EVIDENCE_DIR:?protected evidence directory required}/deployment" --evidence-signature "${EVIDENCE_DIR:?protected evidence directory required}/deployment.sig"
+: "${PKI_LIVE_AUTHORIZATION:?separate abandonment authorization required}" && platform-pki csr-candidate abandon registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --request-id "${REQUEST_ID:?exact request ID required}" --artifact-manifest-sha256 "${ARTIFACT_MANIFEST_SHA256:?exact digest required}" --evidence-file "${EVIDENCE_DIR:?protected evidence directory required}/deployment" --evidence-signature "${EVIDENCE_DIR:?protected evidence directory required}/deployment.sig"
 ```
 
 Abandonment is not revocation and deletes nothing.
@@ -694,7 +698,7 @@ Abandonment is not revocation and deletes nothing.
 Signing recovery uses exact journaled transaction and response key when required:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate signing recovery authorization required}" && platform-pki-csr-recover --namespace "${DEV_NAMESPACE:?current development namespace required}" --transaction "csr-${REQUEST_ID:?journaled request ID required}" --response-key "${DEV_RESPONSE_KEY:?exact protected response key required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate signing recovery authorization required}" && platform-pki csr-recover --namespace "${DEV_NAMESPACE:?current development namespace required}" --transaction "csr-${REQUEST_ID:?journaled request ID required}" --response-key "${DEV_RESPONSE_KEY:?exact protected response key required}"
 ```
 
 Omit `--response-key` only if journaled signature exists. Without `--yes`, confirm
@@ -704,7 +708,7 @@ post-commit recovery never rolls back/re-signs and resumes exact publication.
 Finalization recovery uses no transaction/response key and is resume-only:
 
 ```bash
-: "${PKI_LIVE_AUTHORIZATION:?separate finalization recovery authorization required}" && platform-pki-csr-recover --namespace "${DEV_NAMESPACE:?current development namespace required}"
+: "${PKI_LIVE_AUTHORIZATION:?separate finalization recovery authorization required}" && platform-pki csr-recover --namespace "${DEV_NAMESPACE:?current development namespace required}"
 ```
 
 Do not use `--yes`; confirm `recover candidate finalization`. It never inverts a

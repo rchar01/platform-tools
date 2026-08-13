@@ -1,6 +1,11 @@
 # OpenSSL PKI Helpers
 
-The `platform-pki-*` commands manage a small internal OpenSSL PKI for platform TLS certificates.
+The unified `platform-pki <command>` interface manages a small internal OpenSSL
+PKI for platform TLS certificates. Starting with v2.3.0, use unified routes for
+new operator commands, documentation, and automation. The corresponding
+`platform-pki-*` executable names remain supported throughout the v2 release
+series and dispatch to the same Python handlers; they are scheduled for removal
+at the next major release. `platform-pki service-recover` is unified-only.
 
 Generated CA keys, service keys, CSRs, issued certificates, CA database files, exports, and backups live outside Git under:
 
@@ -49,7 +54,7 @@ See `../README.md` for the canonical repository requirements. This section lists
 
 Required:
 
-- `bash`
+- Python 3.14 or newer on every host that runs a PKI command
 - `openssl`
 - util-linux `flock` and Linux procfs at `/proc` for stable operation-lock identity checks
 - `tar` with `--no-wildcards` support for safe backup directory exclusions
@@ -59,7 +64,7 @@ Required:
 
 Backup encryption requires `age`.
 
-If `age` is unavailable, `platform-pki-backup` refuses to create an unencrypted archive unless `--allow-plain-backup` is passed explicitly.
+If `age` is unavailable, `platform-pki backup` refuses to create an unencrypted archive unless `--allow-plain-backup` is passed explicitly.
 
 ## Install
 
@@ -78,7 +83,7 @@ make install \
   SHARE_DIR="$PWD/.tools/share/platform-tools"
 ```
 
-If `platform-pki-init` cannot find its templates, set:
+If `platform-pki init` cannot find its templates, set:
 
 ```bash
 export PLATFORM_TOOLS_SHARE_DIR="$PWD/.tools/share/platform-tools"
@@ -87,7 +92,7 @@ export PLATFORM_TOOLS_SHARE_DIR="$PWD/.tools/share/platform-tools"
 ## Initialize PKI State
 
 ```bash
-platform-pki-init
+platform-pki init
 ```
 
 This initializes the following working-tree layout. CA material, service
@@ -148,7 +153,7 @@ as current state.
 Use a temporary namespace for testing:
 
 ```bash
-platform-pki-init --namespace /tmp/platform-pki-test
+platform-pki init --namespace /tmp/platform-pki-test
 ```
 
 The initializer creates only `inventory/services.yml.example`; it does not
@@ -178,7 +183,7 @@ directory descriptors.
 Create the root CA:
 
 ```bash
-platform-pki-root-create \
+platform-pki root-create \
   --name "Platform Example Root CA" \
   --org "Platform Example" \
   --country "PL"
@@ -186,7 +191,7 @@ platform-pki-root-create \
 
 The root key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_ROOT_DAYS`, or 3650 when that environment variable is unset.
-The compatibility command and `platform-pki root-create` use one Python
+The v2 compatibility alias `platform-pki-root-create` uses the same Python
 transaction writer. PKI paths must be ASCII because they are persisted in the
 canonical schema-3 recovery journal; passphrase files are bound to OpenSSL
 through inherited descriptors rather than child path arguments.
@@ -198,12 +203,12 @@ interrupted allocation remains permanently `abandoned`, so a retry allocates
 the next root ID instead of reusing key identity under the old ID.
 Another root is refused while that bootstrap root exists. `--force` cannot
 replace a completed bootstrap root, an active issuer, or state with descendants;
-future generation changes use `platform-pki-ca-rollover`.
+future generation changes use `platform-pki ca-rollover`.
 
 For isolated test namespaces only, use:
 
 ```bash
-platform-pki-root-create \
+platform-pki root-create \
   --namespace /tmp/platform-pki-test \
   --name "Platform Example Root CA" \
   --org "Platform Example" \
@@ -214,7 +219,7 @@ platform-pki-root-create \
 Create the intermediate CA:
 
 ```bash
-platform-pki-intermediate-create \
+platform-pki intermediate-create \
   --name "Platform Example Intermediate CA" \
   --org "Platform Example" \
   --country "PL"
@@ -223,8 +228,8 @@ platform-pki-intermediate-create \
 The first clean bootstrap allocates immutable intermediate generation `g1-i1`.
 Its key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_INTERMEDIATE_DAYS`, or 1825 when that environment variable is
-unset. The compatibility command and `platform-pki intermediate-create` use one
-Python schema-3 writer. Both passphrases reach only the applicable OpenSSL
+unset. The v2 compatibility alias `platform-pki-intermediate-create` uses the
+same Python schema-3 writer. Both passphrases reach only the applicable OpenSSL
 children through fresh inherited descriptors. Intermediate state and the root
 database update are staged privately from exact identity-checked root sources.
 After the allocated intermediate verifies against the exact bootstrap root, the command publishes
@@ -268,7 +273,7 @@ chain. If publication is partial or consistency cannot be established, restore
 the complete affected transaction state from a known-good protected backup.
 Only after proving that no operation is active and the published state is
 consistent or restored should an operator resolve the journal and securely
-remove reviewed staging material. Re-run `platform-pki-ca-rollover status` and
+remove reviewed staging material. Re-run `platform-pki ca-rollover status` and
 the relevant verification commands before resuming CA mutations.
 
 For isolated test namespaces only, use
@@ -281,13 +286,13 @@ For non-interactive automation, provide passphrases through restricted files ins
 # /run/secrets/platform-pki-root-pass
 # /run/secrets/platform-pki-intermediate-pass
 
-platform-pki-root-create \
+platform-pki root-create \
   --name "Platform Example Root CA" \
   --org "Platform Example" \
   --country "PL" \
   --root-pass-file /run/secrets/platform-pki-root-pass
 
-platform-pki-intermediate-create \
+platform-pki intermediate-create \
   --name "Platform Example Intermediate CA" \
   --org "Platform Example" \
   --country "PL" \
@@ -324,7 +329,7 @@ archive it decrypts, and do not reuse either CA passphrase for backups.
 Verify candidate CA passphrase files against the active generation:
 
 ```bash
-platform-pki-ca-passphrase-verify \
+platform-pki ca-passphrase-verify \
   --root-pass-file /run/secrets/platform-pki-root-pass \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
@@ -338,7 +343,7 @@ all requested checks succeed. Failures suppress raw OpenSSL diagnostics, and
 passphrases are passed through inherited descriptors rather than argv or the
 environment. The command writes no persistent receipt; a successful run is
 point-in-time evidence and does not prove offline custody or future recovery.
-The compatibility command and `platform-pki ca-passphrase-verify` use the same
+The v2 compatibility alias `platform-pki-ca-passphrase-verify` uses the same
 Python 3.14 handler. Public keys are compared in bounded memory, so verification
 creates no temporary public-key files or cleanup state.
 
@@ -353,8 +358,8 @@ Service certificates are issued from:
 Install the canonical private-Git source after initialization:
 
 ```bash
-platform-pki-inventory-install
-platform-pki-inventory-install --private-repo /absolute/path/to/platform-private
+platform-pki inventory-install
+platform-pki inventory-install --private-repo /absolute/path/to/platform-private
 ```
 
 The default private repository is exactly `../platform-private`, resolved from
@@ -410,11 +415,11 @@ PKI initialization:
 
 ```bash
 platform-pki csr-trust-install
-platform-pki-csr-trust-install
-platform-pki-csr-trust-install --private-repo /absolute/path/to/platform-private
+platform-pki csr-trust-install --private-repo /absolute/path/to/platform-private
 ```
 
-The unified and compatibility forms use the same Python handler.
+The v2 compatibility alias `platform-pki-csr-trust-install` uses the same Python
+handler.
 
 The source is `<private-repo>/pki/csr-trust`; the protected destination is
 `<pki-dir>/inventory/csr-trust`. The source directory must contain exactly:
@@ -524,12 +529,12 @@ closed.
 ## Authenticated Host-Local CSR Signing
 
 Host-local signing requires all protocol inputs in one invocation. Issue and
-migration use `platform-pki-service-issue`; renewal uses
-`platform-pki-service-renew` and additionally requires the exact current
+migration use `platform-pki service-issue`; renewal uses
+`platform-pki service-renew` and additionally requires the exact current
 certificate:
 
 ```bash
-platform-pki-service-issue external \
+platform-pki service-issue external \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
   --csr-file ./tls.csr \
   --request-file ./request \
@@ -538,7 +543,7 @@ platform-pki-service-issue external \
   --approval-signature ./approval.sig \
   --response-key /secure/offline-response
 
-platform-pki-service-renew external \
+platform-pki service-renew external \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
   --csr-file ./tls.csr \
   --request-file ./request \
@@ -549,10 +554,10 @@ platform-pki-service-renew external \
   --current-cert-file ./current-tls.crt
 ```
 
-The compatibility commands and unified `platform-pki service-issue` or
-`platform-pki service-renew` routes use the same Python handlers. Managed
-renewal recovery is unified-only through `platform-pki service-recover`; this
-host-local flow continues to recover through `platform-pki csr-recover`.
+The v2 compatibility aliases `platform-pki-service-issue` and
+`platform-pki-service-renew` use the same Python handlers. Managed renewal
+recovery is unified-only through `platform-pki service-recover`; this host-local
+flow continues to recover through `platform-pki csr-recover`.
 
 These inputs are current-user-owned, singly linked, non-writable-by-others
 regular files. Records are printable ASCII, ordered exactly as documented, and
@@ -663,7 +668,7 @@ If signing is interrupted, every normal PKI command rejects
 journal:
 
 ```bash
-platform-pki-csr-recover \
+platform-pki csr-recover \
   --transaction csr-0123456789abcdef0123456789abcdef \
   --response-key /secure/offline-response
 ```
@@ -699,7 +704,7 @@ Publish one explicit authenticated pending CSR response by exact service and
 request ID:
 
 ```bash
-platform-pki-certificate-export publish platform-example \
+platform-pki certificate-export publish platform-example \
   --request-id 0123456789abcdef0123456789abcdef
 ```
 
@@ -764,7 +769,7 @@ The manifest has one final newline and no publication timestamp. Record its
 reported digest and resolve only that exact artifact:
 
 ```bash
-platform-pki-certificate-export resolve platform-example \
+platform-pki certificate-export resolve platform-example \
   --request-id 0123456789abcdef0123456789abcdef \
   --manifest-sha256 <sha256>
 ```
@@ -781,11 +786,11 @@ inventory, never scans for another request, and never infers a `current` or
 These exports are explicitly pending and unfinalized. This command does not
 select a deployment candidate, finalize evidence, activate a certificate,
 modify managed-key state, delete a key, or change the existing mutable
-`platform-pki-export-ansible` workflow.
+`platform-pki export-ansible` workflow.
 
 ## Host-Local Candidate Decisions
 
-`platform-pki-csr-candidate verify SERVICE --request-id ID` validates the exact
+`platform-pki csr-candidate verify SERVICE --request-id ID` validates the exact
 immutable candidate, response, signing transaction, replay records, historical
 issuer, retained response trust, and explicit certificate export. Text and JSON
 status distinguish `pending`, `finalized`, and `abandoned`, plus `active` or
@@ -899,10 +904,10 @@ replay state, artifact pins, and separate operation approvals remain mandatory.
 ## Issue And Verify A Service Certificate
 
 ```bash
-platform-pki-service-issue \
+platform-pki service-issue \
   platform-example \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
-platform-pki-service-verify platform-example
+platform-pki service-verify platform-example
 ```
 
 Use `--min-days` to set the required remaining validity. Verification checks
@@ -920,12 +925,13 @@ Generated files:
 ~/.config/platform-infrastructure/pki/services/platform-example/openssl.cnf
 ```
 
-`platform-pki-service-issue` refuses to overwrite an existing service certificate. Use `platform-pki-service-renew` after the first issuance.
+`platform-pki service-issue` refuses to overwrite an existing service
+certificate. Use `platform-pki service-renew` after the first issuance.
 Issuance validates inventory, CA state, paths, ownership, modes, links, file
 types, and the next CA serial destination before mutation. It then holds the
 root and intermediate operation locks in fixed order while staging signing,
 publishing the service artifacts and intermediate database update, and running
-`platform-pki-service-verify`. Signing, publication, verification, and handled
+`platform-pki service-verify`. Signing, publication, verification, and handled
 signal failures restore identity-matched prior state. Existing private keys are
 reused by default; `--rotate-key` archives the old key only when the complete
 transaction commits.
@@ -950,7 +956,7 @@ Renewal archives the previous certificate material under:
 By default, renewal reuses the existing service private key:
 
 ```bash
-platform-pki-service-renew \
+platform-pki service-renew \
   platform-example \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
@@ -958,7 +964,7 @@ platform-pki-service-renew \
 Rotate the service private key explicitly when needed:
 
 ```bash
-platform-pki-service-renew platform-example --rotate-key
+platform-pki service-renew platform-example --rotate-key
 ```
 
 Renewal requires existing service private-key state and validates inventory,
@@ -971,8 +977,8 @@ service key, certificate files, and archive state. If a published destination
 is replaced by foreign state during recovery, that state and the locked staging
 directory are preserved for manual recovery rather than overwritten.
 
-`platform-pki-service-renew` and `platform-pki service-renew` run this same
-Python whole-command handler. An interrupted managed transaction is recovered
+The v2 compatibility alias `platform-pki-service-renew` runs this same Python
+whole-command handler. An interrupted managed transaction is recovered
 with exact transaction selection through `platform-pki service-recover`; an
 interrupted authenticated host-local transaction uses `platform-pki
 csr-recover`.
@@ -982,26 +988,26 @@ The renew command does not deploy anything to remote hosts. Deployment belongs i
 ## Print Certificate Details
 
 ```bash
-platform-pki-print-cert platform-example
+platform-pki print-cert platform-example
 ```
 
 The command prints subject, issuer, serial, validity dates, SANs, key usage, extended key usage, and SHA-256 fingerprint.
 
-Use `platform-pki-print-cert --help` for the generated command reference and
-`platform-pki-print-cert --version` for the installed platform-tools version.
+Use `platform-pki print-cert --help` for the generated command reference and
+`platform-pki --version` for the installed platform-tools version.
 
 ## Export For Ansible
 
 Export all generated inventory services by default:
 
 ```bash
-platform-pki-export-ansible --force
+platform-pki export-ansible --force
 ```
 
 Export only selected services by passing names:
 
 ```bash
-platform-pki-export-ansible platform-example --force
+platform-pki export-ansible platform-example --force
 ```
 
 Output layout:
@@ -1055,7 +1061,7 @@ with exports created by earlier versions.
 ### Why Two Controller Copies Exist
 
 Under the current managed-key workflow, `services/<service>/private/tls.key` is
-the controller's signing and renewal input. `platform-pki-export-ansible` makes
+the controller's signing and renewal input. `platform-pki export-ansible` makes
 a second key-bearing copy under `export/ansible/services/<service>/tls.key`
 because existing `platform-config` roles copy that export to the destination.
 Protected PKI backups include both trees because they preserve the complete
@@ -1072,21 +1078,21 @@ authorization and identity-bound evidence. Unlinking a current file does not
 erase copies retained in historical backups and must not be described as secure
 erasure.
 
-Use `platform-pki-export-ansible --help` for generated option details and
-`platform-pki-export-ansible --version` for the installed version.
+Use `platform-pki export-ansible --help` for generated option details and
+`platform-pki --version` for the installed version.
 
 ## Report Encryption And Custody
 
 Inspect the managed PKI layout without decrypting or parsing private keys:
 
 ```bash
-platform-pki-custody-report
+platform-pki custody-report
 ```
 
 Use schema-1 JSON for automation:
 
 ```bash
-platform-pki-custody-report --format json
+platform-pki custody-report --format json
 ```
 
 The report classifies root and intermediate authorities, controller service
@@ -1121,8 +1127,8 @@ field set plus the bound archive path, device, inode, size, mode, and owner. It
 does not hash the archive payload. Visible and hidden backup entries are both
 inspected, and orphan receipts are reported.
 
-The compatibility command and `platform-pki custody-report` invoke the same
-Python 3.14 handler. Recursive metadata and unexpected-key enumeration is
+The v2 compatibility alias `platform-pki-custody-report` invokes the same Python
+3.14 handler. Recursive metadata and unexpected-key enumeration is
 descriptor-relative, does not cross filesystems, follows no symlinks, and keeps
 private path names out of temporary files and report diagnostics. Receipt fields
 may be unordered and need no final newline; all 14 nonempty schema-2 fields must
@@ -1145,7 +1151,7 @@ offsite backup copy, isolated restore rehearsal, and target-host leaf custody.
 Exit status is 0 when there are no structural findings, 2 when findings exist,
 and 1 for parser, configuration, or unsafe-layout errors.
 
-`platform-pki-ca-passphrase-verify` intentionally remains separate from this
+`platform-pki ca-passphrase-verify` intentionally remains separate from this
 report. Supplying a passphrase changes the trust and secret-access boundary, and
 a prior successful check does not establish the report's current operational
 controls.
@@ -1171,13 +1177,13 @@ command reports the exact archive path and retains it for operator inspection.
 Use `age` recipient encryption for non-interactive backups:
 
 ```bash
-platform-pki-backup --age-recipient "$AGE_RECIPIENT"
+platform-pki backup --age-recipient "$AGE_RECIPIENT"
 ```
 
 If no `--age-recipient` is provided, `age` passphrase mode is used and prompts interactively:
 
 ```bash
-platform-pki-backup
+platform-pki backup
 ```
 
 Output path:
@@ -1191,11 +1197,11 @@ The default `~/.config/platform-infrastructure/pki/backups/` output directory is
 Plain unencrypted archives require an explicit override:
 
 ```bash
-platform-pki-backup --allow-plain-backup
+platform-pki backup --allow-plain-backup
 ```
 
-Use `platform-pki-backup --help` for generated option details and
-`platform-pki-backup --version` for the installed platform-tools version.
+Use `platform-pki backup --help` for generated option details and
+`platform-pki --version` for the installed platform-tools version.
 
 Plain backup output uses `.tar.gz` and still contains secrets. Keep it outside Git and move it to encrypted storage as soon as practical.
 
@@ -1205,7 +1211,7 @@ Normal CA and service commands require generation-aware state. On a legacy
 layout they safely prepare missing private control directories, acquire the
 required persistent locks, and stop with migration guidance before reading or
 mutating authority state. Inventory installation, protected backup, and
-`platform-pki-ca-rollover status|migrate` remain available so migration can be
+`platform-pki ca-rollover status|migrate` remain available so migration can be
 completed. Mixed legacy and generation authority paths are rejected as
 incomplete or ambiguous state.
 
@@ -1213,10 +1219,10 @@ First install the canonical inventory and create a new independent protected
 backup. Then inspect status and migrate with that backup's receipt:
 
 ```bash
-platform-pki-inventory-install
-platform-pki-backup --age-recipient "$AGE_RECIPIENT"
-platform-pki-ca-rollover status
-platform-pki-ca-rollover migrate \
+platform-pki inventory-install
+platform-pki backup --age-recipient "$AGE_RECIPIENT"
+platform-pki ca-rollover status
+platform-pki ca-rollover migrate \
   --backup-receipt /secure/path/platform-pki-....tar.gz.age.receipt
 ```
 
@@ -1228,7 +1234,7 @@ Resume or roll back an interrupted migration only through its exact journaled
 transaction ID:
 
 ```bash
-platform-pki-ca-rollover recover \
+platform-pki ca-rollover recover \
   --transaction migrate-20260730-120000-1234 \
   --action rollback \
   --yes
@@ -1302,7 +1308,7 @@ root; root preparation creates a new root and first intermediate and snapshots
 the reviewed private trust-consumer checklist:
 
 ```bash
-platform-pki-ca-rollover prepare \
+platform-pki ca-rollover prepare \
   --type intermediate \
   --backup-receipt /secure/path/platform-pki-....tar.gz.age.receipt \
   --intermediate-name "Platform G1-I2 Intermediate CA" \
@@ -1311,7 +1317,7 @@ platform-pki-ca-rollover prepare \
   --root-pass-file /run/secrets/platform-pki-root-pass \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 
-platform-pki-ca-rollover prepare \
+platform-pki ca-rollover prepare \
   --type root \
   --backup-receipt /secure/path/platform-pki-....tar.gz.age.receipt \
   --root-name "Platform G2 Root CA" \
@@ -1325,7 +1331,7 @@ platform-pki-ca-rollover prepare \
 
 Preparation leaves `state/active-issuer` unchanged. It publishes public
 candidate metadata under `state/rollovers/` and selects it through
-`state/active-rollover`; `platform-pki-ca-rollover status --format json`
+`state/active-rollover`; `platform-pki ca-rollover status --format json`
 provides machine-readable active, candidate, expiry, fingerprint, trust, and
 old-issuer service data. Status validates deterministic complete-tree manifests
 for the published candidates and rollover state, including object identity and
@@ -1358,7 +1364,7 @@ used for their final checked unlink.
 ## List Expiry
 
 ```bash
-platform-pki-list-expiry --warn-days 90 --critical-days 30
+platform-pki list-expiry --warn-days 90 --critical-days 30
 ```
 
 Exit codes:

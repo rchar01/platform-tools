@@ -10,6 +10,7 @@ import pytest
 pytestmark = pytest.mark.infrastructure
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+VERSION = (REPO_ROOT / "VERSION").read_text(encoding="ascii").strip()
 EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-python-infrastructure",
     "test-command-contract",
@@ -450,8 +451,8 @@ def test_development_container_wrapper_uses_bashly_image(
     assert "PLATFORM_TOOLS_DEV_CONTAINER=1" in run
     assert "PLATFORM_TOOLS_TEST_CONTAINER=1" not in run
     assert str(REPO_ROOT / "Containerfile.dev") in build
-    assert "localhost/platform-tools-dev:2.2.0" in build
-    assert "localhost/platform-tools-dev:2.2.0" in run
+    assert f"localhost/platform-tools-dev:{VERSION}" in build
+    assert f"localhost/platform-tools-dev:{VERSION}" in run
     assert not any("TEST_MAKE_JOBS=" in argument for argument in run)
     assert not any("PKI_PYTEST_WORKERS=" in argument for argument in run)
 

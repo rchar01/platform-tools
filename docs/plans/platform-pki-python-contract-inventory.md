@@ -327,9 +327,9 @@ Python-owned CSR, candidate, and certificate-export records use the exact ordere
 field tuples from `src/platform_pki/csr_protocol.py`,
 `src/platform_pki/csr_history.py`, and `src/platform_pki/csr_recovery.py`.
 Infrastructure tests compare those tuples with the frozen final candidate
-library. Exact executable extraction of the remaining literal and dynamically
-assembled writers, including schema values and final-newline behavior, remains a
-Phase 0 item.
+library. Source-backed tests extract the literal and dynamically assembled
+final-Bash writers and verify their schema values, field order, and exact final
+newline behavior against the runtime models.
 
 CA recovery field tuples are now authoritative in
 `src/platform_pki/ca_rollover_recovery.py` and are re-exported by
@@ -825,13 +825,10 @@ of the ordinary non-rollover Make pool.
 
 ## Open Items
 
-- Determine which target hosts require Python 3.14 provisioning.
 - Remove the Python compatibility zipapps at the approved next major-release
   boundary; the current release installs one deterministic zipapp under every
   supported compatibility name.
-- Freeze exact ordered fields, schema values, and final-newline behavior for the
-  remaining literal and dynamically assembled persisted-record writers.
-- Complete live schema-5 filesystem validation and mutation across the 206
-  declared keys and 13 runtime-added successful-copy identity keys.
 - Extend output/status, runtime-boundary, and installed-asset contracts from the
-  three pilot commands to the remaining PKI routes.
+  three pilot commands to the remaining PKI routes. This is a machine-readable
+  post-release documentation expansion, not a v2.3.0 release blocker; focused
+  runtime tests already cover every route.

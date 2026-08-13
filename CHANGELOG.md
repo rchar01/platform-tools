@@ -7,6 +7,8 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-13
+
 ### Added
 
 - Added the deterministic `platform-pki` Python 3.14 zipapp with isolated
@@ -39,7 +41,9 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   final-Bash executables, loaded libraries, and required source fragments remain
   immutable test evidence under `tests/pki/oracles/`. Installation continues to
   publish PKI templates, and compatibility names remain until the approved next
-  major release.
+  major release. New operator commands, documentation, and automation now use
+  the unified `platform-pki <command>` interface; target hosts require Python
+  3.14 or newer.
 - Changed `platform-pki-service-issue` and `platform-pki service-issue` to use
   one Python handler for managed issuance and authenticated host-local issue or
   migration. Added unified-only `platform-pki service-recover --transaction`

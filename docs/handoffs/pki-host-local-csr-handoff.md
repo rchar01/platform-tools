@@ -112,14 +112,15 @@ invocation consumes the installed public trust.
 The public signing path extends the existing transactional commands:
 
 ```text
-platform-pki-service-issue SERVICE --csr-file PATH <authenticated-request-inputs>
-platform-pki-service-renew SERVICE --csr-file PATH <authenticated-request-inputs>
+platform-pki service-issue SERVICE --csr-file PATH <authenticated-request-inputs>
+platform-pki service-renew SERVICE --csr-file PATH <authenticated-request-inputs>
 ```
 
-Both compatibility commands share their Python handlers with unified
-`platform-pki service-issue` and `platform-pki service-renew`. This host-local
-path retains `platform-pki csr-recover`; unified-only `service-recover` is for
-managed service transactions.
+New integrations should use the unified routes above. The corresponding
+`platform-pki-service-issue` and `platform-pki-service-renew` executable names
+remain supported throughout the v2 release series and share the same Python
+handlers. This host-local path retains `platform-pki csr-recover`; unified-only
+`service-recover` is for managed service transactions.
 
 `--csr-file` is allowed only for inventory `key_custody: host-local`, conflicts
 with `--rotate-key`, and never authorizes CSR-controlled names or extensions.
@@ -146,7 +147,7 @@ The response is an immutable certificate-only artifact containing the leaf,
 chain, response manifest, and response signature. It contains no leaf key, CA
 key, passphrase, private inventory snapshot, or mutable Ansible export.
 
-`platform-pki-certificate-export publish SERVICE --request-id ID` bridges one
+`platform-pki certificate-export publish SERVICE --request-id ID` bridges one
 explicit pending response into
 `export/certificates/v1/artifacts/<service>/<request-id>/`. It validates the
 exact source trees and the original signing transaction's retained response
@@ -156,7 +157,7 @@ trust snapshot, then publishes only `artifact`, `tls.crt`, `ca-chain.crt`,
 publication timestamp.
 
 Downstream automation must pin the reported artifact-manifest digest and call
-`platform-pki-certificate-export resolve` with the exact service, request ID,
+`platform-pki certificate-export resolve` with the exact service, request ID,
 and digest. The resolver never scans or infers `current` or `latest`; its result
 is not deployment evidence and does not authorize activation.
 
@@ -399,7 +400,7 @@ automation must enforce an empty-pending-state gate before rotation. A pending
 run fails if any target/controller snapshot changes. Rotation publishes and
 reviews new public trust, installs it atomically only after that gate, updates
 target/controller pins, and begins only new requests. No exchange-provided key
-becomes trusted. `platform-pki-csr-trust-install` now enforces the signer-side
+becomes trusted. `platform-pki csr-trust-install` now enforces the signer-side
 gate under the lifecycle lock: an actual schema-2 change requires every retained
 candidate to have a fully authenticated immutable finalized or abandoned
 outcome, while malformed, conflicting, or recovery-required state fails closed.
