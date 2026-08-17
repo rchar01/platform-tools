@@ -1601,6 +1601,21 @@ def test_migration_success_preserves_private_key_identities(
     assert not (workspace.pki / "state/rollover" / transaction).exists()
     assert not tuple(Path(isolated_environment["TMPDIR"]).iterdir())
 
+    verification = process_runner(
+        [
+            Path(__file__).parents[2] / "bin/platform-pki",
+            "service-verify",
+            "app",
+            "--namespace",
+            workspace.namespace,
+        ],
+        env=isolated_environment,
+        timeout=30,
+    )
+    assert verification.status == 0
+    assert verification.stdout == "[OK] Verified service certificate: app\n"
+    assert verification.stderr == ""
+
 
 def test_migration_prepares_missing_generation_destination_parents(
     rollover_tools: RolloverTools,

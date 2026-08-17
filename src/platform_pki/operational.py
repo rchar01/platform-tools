@@ -407,12 +407,16 @@ def require_terminal_rollover_history(
     elif isinstance(record, LegacyMigrationRecoveryRecord):
         terminal = (
             record.phase == "complete"
-            and record.recovery_action is not None
-            and record.recovery_action.value == "resume"
+            and (
+                record.recovery_action is None
+                or record.recovery_action.value == "resume"
+            )
+            and record.recovery_step in (None, "resume-provenance-done")
         ) or (
             record.phase == "rolled-back"
             and record.recovery_action is not None
             and record.recovery_action.value == "rollback"
+            and record.recovery_step == "rollback-provenance-done"
         )
     else:
         terminal = False
