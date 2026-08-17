@@ -860,7 +860,7 @@ def _recovery_status(
             f"phase={phase}\n"
             f"terminal_outcome={terminal_outcome}\n"
             f"required_action={action}\n"
-            "action=run platform-pki-ca-rollover recover --transaction "
+            "action=run platform-pki ca-rollover recover --transaction "
             f"{transaction} --action {action}\n",
             retained,
             required_absences,
@@ -905,7 +905,7 @@ def ca_rollover_status(parsed: ParseResult) -> int:
             else:
                 _emit(
                     "status=legacy\nrecovery_required=false\n"
-                    "action=run platform-pki-backup, then platform-pki-ca-rollover migrate\n",
+                    "action=run platform-pki backup, then platform-pki ca-rollover migrate\n",
                     retained,
                     required_absences,
                 )

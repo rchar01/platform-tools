@@ -234,7 +234,7 @@ def _assert_terminal_status(
         "phase=terminal-cleanup\n"
         f"terminal_outcome={outcome}\n"
         f"required_action={action}\n"
-        "action=run platform-pki-ca-rollover recover --transaction "
+        "action=run platform-pki ca-rollover recover --transaction "
         f"{transaction} --action {action}\n"
     )
 

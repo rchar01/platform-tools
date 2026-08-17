@@ -704,7 +704,7 @@ def test_migration_failure_boundary_rollback(
         f"phase={phase}\n"
         "terminal_outcome=none\n"
         "required_action=rollback\n"
-        "action=run platform-pki-ca-rollover recover --transaction "
+        "action=run platform-pki ca-rollover recover --transaction "
         f"{transaction} --action rollback\n"
     )
 
@@ -878,7 +878,7 @@ def test_migration_failure_boundary_resume(
         f"phase={phase}\n"
         "terminal_outcome=none\n"
         "required_action=rollback\n"
-        "action=run platform-pki-ca-rollover recover --transaction "
+        "action=run platform-pki ca-rollover recover --transaction "
         f"{transaction} --action rollback\n"
     )
 
@@ -1056,7 +1056,7 @@ def test_migration_unresolved_recovery_state(
         "phase=reserved\n"
         "terminal_outcome=none\n"
         "required_action=rollback\n"
-        "action=run platform-pki-ca-rollover recover --transaction "
+        "action=run platform-pki ca-rollover recover --transaction "
         f"{transaction} --action rollback\n"
     )
     recovery = process_runner(
@@ -1729,7 +1729,7 @@ def test_missing_generation_destination_preparation_is_safely_retryable(
     assert status.stdout == (
         "status=legacy\n"
         "recovery_required=false\n"
-        "action=run platform-pki-backup, then platform-pki-ca-rollover migrate\n"
+        "action=run platform-pki backup, then platform-pki ca-rollover migrate\n"
     )
     assert status.stderr == ""
 

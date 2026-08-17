@@ -190,7 +190,7 @@ def test_status_reports_unresolved_migration_journal(
         "phase=root-renamed\n"
         "terminal_outcome=none\n"
         "required_action=rollback\n"
-        "action=run platform-pki-ca-rollover recover --transaction "
+        "action=run platform-pki ca-rollover recover --transaction "
         "migrate-20260730-000000-1 --action rollback\n"
     )
     assert public_state_snapshot(workspace) == public_before
