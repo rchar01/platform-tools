@@ -13,11 +13,6 @@ from .pki.migration_contract import PKI_PARSER_ROUTES, ParserRouteContract
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text().strip()
 PTY_CAPTURE = ROOT / "tests/cli/pty-capture.py"
-CSR_RECOVER = ROOT / "bin/platform-pki-csr-recover"
-CSR_RECOVER_ORACLE = (
-    ROOT
-    / "tests/pki/oracles/platform-pki-csr-recover/platform-pki-csr-recover"
-)
 
 
 def make_variables(*names: str) -> dict[str, tuple[str, ...]]:
@@ -51,10 +46,14 @@ def make_variables(*names: str) -> dict[str, tuple[str, ...]]:
     return variables
 
 
-MAKE = make_variables("SHELL_TOOLS", "BASHLY_TOOLS", "PYTHON_TOOLS")
+MAKE = make_variables(
+    "SHELL_TOOLS", "BASHLY_TOOLS", "PYTHON_TOOLS", "PYTHON_ZIPAPPS", "LEGACY_PKI_ALIASES"
+)
 SHELL_TOOLS = MAKE["SHELL_TOOLS"]
 BASHLY_TOOLS = MAKE["BASHLY_TOOLS"]
 PYTHON_TOOLS = MAKE["PYTHON_TOOLS"]
+PYTHON_ZIPAPPS = MAKE["PYTHON_ZIPAPPS"]
+LEGACY_PKI_ALIASES = MAKE["LEGACY_PKI_ALIASES"]
 TOOLS = SHELL_TOOLS + PYTHON_TOOLS
 if set(SHELL_TOOLS) & set(PYTHON_TOOLS):
     raise RuntimeError("SHELL_TOOLS and PYTHON_TOOLS must not overlap")
@@ -96,39 +95,8 @@ def assert_parser_error(result: ProcessResult) -> None:
     assert result.stderr
 
 
-def test_csr_recover_compatibility_help_matches_frozen_bash_oracle(
-    process_runner: Callable[..., ProcessResult], clean_env: dict[str, str]
-) -> None:
-    for command in (CSR_RECOVER, CSR_RECOVER_ORACLE):
-        assert command.is_file() and os.access(command, os.X_OK)
-    direct = [
-        run(process_runner, clean_env, command, "--help")
-        for command in (CSR_RECOVER, CSR_RECOVER_ORACLE)
-    ]
-    assert direct[0].status == direct[1].status == 0
-    assert direct[0].stdout == direct[1].stdout
-    assert direct[0].stderr == direct[1].stderr == ""
-    for no_color in (None, "1"):
-        current_env = dict(clean_env)
-        if no_color is not None:
-            current_env["NO_COLOR"] = no_color
-        tty = [
-            run(process_runner, current_env, "python3", PTY_CAPTURE, command, "--help")
-            for command in (CSR_RECOVER, CSR_RECOVER_ORACLE)
-        ]
-        assert tty[0].status == tty[1].status == 0
-        assert tty[0].stdout == tty[1].stdout
-        assert tty[0].stderr == tty[1].stderr == ""
-        assert ("\x1b" in tty[0].stdout) is (no_color is None)
-
-
 def pki_route_argv(route: ParserRouteContract) -> tuple[Path | str, ...]:
-    if route.compatibility_executable is None:
-        return (ROOT / "bin/platform-pki", *route.unified_route)
-    return (
-        ROOT / "bin" / route.compatibility_executable,
-        *route.unified_route[1:],
-    )
+    return (ROOT / "bin/platform-pki", *route.unified_route)
 
 
 PKI_ROUTE_IDS = tuple("-".join(route.unified_route) for route in PKI_PARSER_ROUTES)
@@ -149,6 +117,16 @@ def test_shell_tool_is_bashly_generated(tool: str) -> None:
 @pytest.mark.parametrize("tool", BASHLY_TOOLS, ids=BASHLY_TOOLS)
 def test_bashly_tool_is_in_shell_inventory(tool: str) -> None:
     assert tool in SHELL_TOOLS
+
+
+def test_python_zipapp_inventory_is_unified_only() -> None:
+    assert PYTHON_ZIPAPPS == ("platform-pki",)
+    assert len(LEGACY_PKI_ALIASES) == 18
+    assert not set(LEGACY_PKI_ALIASES) & set(TOOLS)
+    for alias in LEGACY_PKI_ALIASES:
+        path = ROOT / "bin" / alias
+        assert not path.exists()
+        assert not path.is_symlink()
 
 
 @pytest.mark.parametrize("tool", TOOLS, ids=TOOLS)
@@ -210,6 +188,34 @@ def test_pki_nested_leaf_help(
     result = run(process_runner, clean_env, *pki_route_argv(route), flag)
     assert_success_stdout(result)
     assert "\x1b" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("route", "positional"),
+    (
+        (("print-cert",), "api"),
+        (("service-verify",), "api"),
+        (("certificate-export", "resolve"), "api"),
+        (("csr-candidate", "verify"), "api"),
+    ),
+    ids=("print-cert", "service-verify", "certificate-export", "csr-candidate"),
+)
+def test_pki_positional_prefix_before_help(
+    process_runner: Callable[..., ProcessResult],
+    clean_env: dict[str, str],
+    route: tuple[str, ...],
+    positional: str,
+) -> None:
+    result = run(
+        process_runner,
+        clean_env,
+        ROOT / "bin/platform-pki",
+        *route,
+        positional,
+        "--help",
+    )
+    assert_success_stdout(result)
+    assert result.stdout.startswith(f"Usage: platform-pki {' '.join(route)} ")
 
 
 @pytest.mark.parametrize("route", PKI_PARSER_ROUTES, ids=PKI_ROUTE_IDS)

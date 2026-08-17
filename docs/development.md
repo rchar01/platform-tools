@@ -75,8 +75,8 @@ guarantees.
 
 `make test-pki-csr-candidate` directly collects its candidate and finalization
 recovery modules with bounded `PKI_PYTEST_WORKERS` and pytest `--dist load`.
-The suite exercises the committed Python compatibility zipapp and retains the
-final Bash command only as a provenance-checked differential oracle. In the
+The suite exercises the committed Python zipapp and retains the final Bash
+command only as a provenance-checked differential oracle. In the
 pinned test image on 2026-08-12, the pre-cutover 99-test source-built suite took
 142.51 seconds with four workers. This measurement is diagnostic, not a
 performance guarantee.
@@ -94,6 +94,11 @@ metadata-preserving private copy with its managed OpenSSL paths rebased and
 fresh signed exchange timestamps, avoiding repeated root and intermediate
 creation while retaining per-test state and process isolation.
 
+`make test-pki-offline-csr` exercises the generated unified command with real
+OpenSSL and OpenSSH subprocesses, exact-directory publication, interactive PTY
+confirmation, protected approval and response keys, signer delegation, and the
+pre-journal rejection boundary.
+
 Python-migration contracts and semantic state-copy helpers live in
 `tests/pki/migration_contract.py` and `tests/pki/migration_harness.py`. Their
 infrastructure tests preserve hard-link relationships, compare within-tree
@@ -106,7 +111,7 @@ each command test must explicitly declare any output or content normalization.
 
 ## Generated CLI Artifacts
 
-Bashly-backed source for the six maintained non-PKI shell commands lives under
+Bashly-backed source for the seven maintained non-PKI shell commands lives under
 `bashly/<tool>/`. The corresponding `bin/<tool>` file is generated, committed,
 installed, and must not be edited by hand.
 
@@ -130,10 +135,10 @@ with the committed executable. It does not rewrite the working tree.
 executables so installed commands do not need Ruby, Bashly, or repository
 source files at runtime.
 
-The Python PKI source lives under `src/platform_pki/`. The unified command and
-all current-release `platform-pki-*` compatibility executables are committed
-standard-library-only zipapps and must not be edited by hand. Generate and
-verify them in the pinned Python 3.14 test image:
+The Python PKI source lives under `src/platform_pki/`. The sole production PKI
+artifact, `bin/platform-pki`, is a committed standard-library-only zipapp and
+must not be edited by hand. Generate and verify it in the pinned Python 3.14 test
+image:
 
 ```bash
 ./scripts/in-test-container make generate-python
@@ -148,12 +153,12 @@ verification before copying any command. The executable uses isolated Python
 startup (`-I -S`) so checkout modules, `PYTHONPATH`, and user or system site
 packages cannot alter application imports.
 
-`platform-pki` provides the unified hierarchy, help, version, and frozen
-25-route parser contract. Compatibility commands dispatch to the same Python
-handlers as their unified routes. Shared modules provide safe diagnostics, strict
-ordered `key=value` records, strict inventory parsing, and bounded exact-argv
-subprocess execution. The Make inventories distinguish the six remaining
-non-PKI Bashly tools from committed Python PKI zipapps.
+`platform-pki` provides the unified hierarchy, help, version, and 27-route parser
+contract. A copied or renamed archive still dispatches canonically as
+`platform-pki`; invocation filenames do not select routes. Shared modules provide
+safe diagnostics, strict ordered `key=value` records, strict inventory parsing,
+and bounded exact-argv subprocess execution. The Make inventories distinguish
+the seven non-PKI Bashly tools from the one committed Python PKI zipapp.
 
 Final PKI Bash executables, loaded libraries, and the source fragments still
 needed by historical contract tests live under `tests/pki/oracles/`. They are

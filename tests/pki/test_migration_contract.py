@@ -27,6 +27,7 @@ from .migration_contract import (
     CANDIDATE_RECORD_FIELDS,
     CANDIDATE_RESPONSE_FIELDS,
     CSR_DB_KEYS,
+    CURRENT_INSTALLED_ASSET_CONTRACTS,
     FAULT_HOOK_CONTRACTS,
     GENERATION_RESERVATION_BOOTSTRAP_CONSUMED_FIELDS,
     GENERATION_RESERVATION_MIGRATION_FIELDS,
@@ -35,14 +36,15 @@ from .migration_contract import (
     INTERMEDIATE_BOOTSTRAP_JOURNAL_FIELDS,
     INTERMEDIATE_BOOTSTRAP_PREFIX_FIELDS,
     INTERMEDIATE_BOOTSTRAP_RECOVERY_FIELDS,
+    HISTORICAL_ORACLE_ASSET_CONTRACTS,
     LEGACY_MIGRATION_CHECKPOINT_FIELDS,
     LEGACY_MIGRATION_JOURNAL_FIELDS,
     LEGACY_MIGRATION_RECOVERY_FIELDS,
     LOCK_ORDER,
     MIGRATION_QUARANTINE_NAMES,
-    PILOT_INSTALLED_ASSET_CONTRACTS,
-    PILOT_OUTPUT_STATUS_CONTRACTS,
-    PILOT_RUNTIME_DEPENDENCY_CONTRACTS,
+    OUTPUT_STATUS_CONTRACTS,
+    OUTPUT_STATUS_COVERED_ROUTES,
+    OUTPUT_STATUS_DEFERRED_ROUTES,
     PERSISTED_RECORD_CONTRACTS,
     PKI_COMMAND_CONTRACTS,
     PKI_DUPLICATE_OPTION_CONTRACTS,
@@ -59,6 +61,7 @@ from .migration_contract import (
     ROOT_BOOTSTRAP_JOURNAL_FIELDS,
     ROOT_BOOTSTRAP_RECOVERY_FIELDS,
     ROOT_DB_KEYS,
+    RUNTIME_DEPENDENCY_CONTRACTS,
     ParserRouteContract,
 )
 
@@ -322,7 +325,7 @@ def _expanded_shell_array(
 
 
 def test_command_contract_inventory_is_complete_and_unique() -> None:
-    assert len(PKI_COMMAND_CONTRACTS) == 19
+    assert len(PKI_COMMAND_CONTRACTS) == 20
     compatibility_names = [
         contract.compatibility_name
         for contract in PKI_COMMAND_CONTRACTS
@@ -341,11 +344,11 @@ def test_command_contract_inventory_is_complete_and_unique() -> None:
         contract.unified_route
         for contract in PKI_COMMAND_CONTRACTS
         if contract.compatibility_name is None
-    ] == ["service-recover"]
+    ] == ["offline-csr", "service-recover"]
 
 
 def test_python_command_map_matches_frozen_command_inventory() -> None:
-    commands = _literal_assignment("src/platform_pki/compat.py", "COMMANDS")
+    commands = _literal_assignment("src/platform_pki/routes.py", "COMMANDS")
     assert commands == {
         contract.unified_route: contract.nested_commands
         for contract in PKI_COMMAND_CONTRACTS
@@ -358,12 +361,7 @@ def test_command_inventory_matches_make_and_final_bash_source_oracles() -> None:
         for contract in PKI_COMMAND_CONTRACTS
         if contract.compatibility_name is not None
     }
-    maintained = {
-        name
-        for variable in ("SHELL_TOOLS", "PYTHON_ZIPAPPS")
-        for name in _make_words(variable)
-        if name.startswith("platform-pki-")
-    }
+    legacy_aliases = set(_make_words("LEGACY_PKI_ALIASES"))
     production_bashly = {
         definition.parents[1].name
         for definition in (ROOT / "bashly").glob("platform-pki-*/src/bashly.yml")
@@ -374,7 +372,8 @@ def test_command_inventory_matches_make_and_final_bash_source_oracles() -> None:
             "platform-pki-*/src/bashly.yml"
         )
     }
-    assert maintained == expected
+    assert legacy_aliases == expected
+    assert _make_words("PYTHON_ZIPAPPS") == ("platform-pki",)
     assert production_bashly == set()
     assert oracle_bashly == expected
     active_bashly = {
@@ -384,9 +383,9 @@ def test_command_inventory_matches_make_and_final_bash_source_oracles() -> None:
     }
     assert not active_bashly
     assert "platform-pki-service-renew" not in active_bashly
-    assert "platform-pki-service-renew" in _make_words("PYTHON_ZIPAPPS")
+    assert "platform-pki-service-renew" in legacy_aliases
     assert "platform-pki-csr-candidate" not in active_bashly
-    assert "platform-pki-csr-candidate" in _make_words("PYTHON_ZIPAPPS")
+    assert "platform-pki-csr-candidate" in legacy_aliases
 
 
 def test_all_lock_profiles_are_ordered_prefixes() -> None:
@@ -405,6 +404,7 @@ def test_nested_command_inventory_matches_current_command_families() -> None:
     assert nested == {
         "certificate-export": ("publish", "resolve"),
         "csr-candidate": ("verify", "finalize", "abandon"),
+        "offline-csr": ("approve", "sign"),
         "ca-rollover": ("migrate", "status", "prepare", "recover"),
     }
 
@@ -485,10 +485,19 @@ def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
     assert set(all_calls) == expected_calls
 
 
-def test_pilot_output_status_contracts_are_source_and_test_backed() -> None:
+def test_output_status_route_coverage_is_complete_and_disjoint() -> None:
+    routes = {route.unified_route for route in PKI_PARSER_ROUTES}
+    assert len(routes) == 27
+    assert len(OUTPUT_STATUS_COVERED_ROUTES) == 7
+    assert len(OUTPUT_STATUS_DEFERRED_ROUTES) == 20
+    assert OUTPUT_STATUS_COVERED_ROUTES.isdisjoint(OUTPUT_STATUS_DEFERRED_ROUTES)
+    assert OUTPUT_STATUS_COVERED_ROUTES | OUTPUT_STATUS_DEFERRED_ROUTES == routes
+
+
+def test_output_status_contracts_are_source_and_test_backed() -> None:
     routes = {route.unified_route for route in PKI_PARSER_ROUTES}
     scenarios = set()
-    for contract in PILOT_OUTPUT_STATUS_CONTRACTS:
+    for contract in OUTPUT_STATUS_CONTRACTS:
         assert contract.route in routes
         assert (contract.route, contract.scenario) not in scenarios
         scenarios.add((contract.route, contract.scenario))
@@ -511,42 +520,68 @@ def test_pilot_output_status_contracts_are_source_and_test_backed() -> None:
             assert fragment in _source(path)
         for path, function in contract.focused_tests:
             assert function in _function_names(path)
-    assert {contract.route for contract in PILOT_OUTPUT_STATUS_CONTRACTS} == {
-        ("print-cert",), ("list-expiry",), ("service-verify",)
-    }
+    assert {contract.route for contract in OUTPUT_STATUS_CONTRACTS} == OUTPUT_STATUS_COVERED_ROUTES
 
 
-def test_pilot_runtime_dependencies_are_unique_and_source_backed() -> None:
+def test_runtime_dependencies_are_unique_and_source_backed() -> None:
     routes = {route.unified_route for route in PKI_PARSER_ROUTES}
     keys = []
-    for contract in PILOT_RUNTIME_DEPENDENCY_CONTRACTS:
+    for contract in RUNTIME_DEPENDENCY_CONTRACTS:
         assert contract.route in routes
-        assert contract.requirement in {"required", "conditional", "optional-evidence"}
+        assert contract.requirement in {
+            "invoked", "checked-only", "optional-evidence", "platform-capability"
+        }
         assert contract.condition
         assert contract.capability
         assert contract.source_fragment in _source(contract.source)
         keys.append((contract.route, contract.program))
     assert len(keys) == len(set(keys))
+    assert {contract.route for contract in RUNTIME_DEPENDENCY_CONTRACTS} == OUTPUT_STATUS_COVERED_ROUTES
 
 
-def test_final_bash_assets_are_oracle_source_and_test_backed() -> None:
-    pilot_routes = {("print-cert",), ("list-expiry",), ("service-verify",)}
+def test_current_installed_assets_are_source_and_installed_test_backed() -> None:
     paths = []
-    for contract in PILOT_INSTALLED_ASSET_CONTRACTS:
+    for contract in CURRENT_INSTALLED_ASSET_CONTRACTS:
         paths.append(contract.path)
         assert contract.mode == 0o644
-        assert set(contract.consumers) == pilot_routes
-        assert contract.required_phase == "operational-only"
+        assert contract.consumers == (("init",),)
+        assert contract.required_phase == "initialization"
         assert contract.lookup_order == (
-            "PLATFORM_TOOLS_LIB_DIR",
-            "checkout-relative",
-            "PLATFORM_TOOLS_SHARE_DIR-or-XDG-user-share",
+            'PLATFORM_TOOLS_TEMPLATE_DIR + "/pki"',
+            'package-or-archive-relative checkout + "/templates/pki"',
+            'PLATFORM_TOOLS_SHARE_DIR-or-XDG-user-share + "/templates/pki"',
+            '"/usr/local/share/platform-tools/templates/pki"',
         )
         for path, fragment in contract.evidence:
             assert fragment in _source(path)
         for path, function in contract.focused_tests:
             assert function in _function_names(path)
-    assert paths == ["lib/platform-pki-common.sh"]
+        installed = ROOT / contract.path
+        assert installed.is_file() and not installed.is_symlink()
+        lookup_source = _source("src/platform_pki/init.py")
+        lookup_fragments = tuple(
+            fragment for path, fragment in contract.evidence
+            if path == "src/platform_pki/init.py" and "services.yml.example" not in fragment
+        )
+        assert tuple(lookup_source.index(fragment) for fragment in lookup_fragments) == tuple(
+            sorted(lookup_source.index(fragment) for fragment in lookup_fragments)
+        )
+    assert paths == ["templates/pki/services.yml.example"]
+
+
+def test_historical_shell_library_is_explicit_oracle_evidence_only() -> None:
+    assert all("platform-pki-common.sh" not in contract.path for contract in CURRENT_INSTALLED_ASSET_CONTRACTS)
+    assert len(HISTORICAL_ORACLE_ASSET_CONTRACTS) == 1
+    contract = HISTORICAL_ORACLE_ASSET_CONTRACTS[0]
+    assert contract.path == "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh"
+    assert contract.mode == 0o644
+    assert set(contract.consumers) == {("print-cert",), ("list-expiry",), ("service-verify",)}
+    oracle = ROOT / contract.path
+    assert oracle.is_file() and not oracle.is_symlink()
+    for path, fragment in contract.evidence:
+        assert fragment in _source(path)
+    for path, function in contract.focused_tests:
+        assert function in _function_names(path)
 
 
 def test_every_command_has_focused_verification() -> None:

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from src.platform_pki.csr_recovery import CSR_DB_KEYS, parse_signing_journal
-from src.platform_pki.service_issue import CSR_SIGNING_WRITER_CHECKPOINTS
+from src.platform_pki.service_issue import CSR_SIGNING_WRITER_CHECKPOINTS, _valid_days_interval
 
 from ..harness import ManagedProcess, ProcessResult, copy_tree, run_process
 from .migration_harness import (
@@ -49,6 +49,22 @@ ISSUE_ORACLE = ISSUE_ORACLE_ROOT / "platform-pki-service-issue"
 ISSUE_ORACLE_LIB = ISSUE_ORACLE_ROOT / "lib"
 REQUEST_ID = "0123456789abcdef0123456789abcdef"
 TRANSACTION = f"csr-{REQUEST_ID}"
+
+
+@pytest.mark.parametrize(
+    ("actual", "accepted"),
+    (
+        (35 * 86400 - 1, False),
+        (35 * 86400, True),
+        (35 * 86400 + 1, True),
+        (35 * 86400 + 300, True),
+        (35 * 86400 + 301, False),
+    ),
+)
+def test_planned_days_interval_allows_only_bounded_openssl_issuance_skew(
+    actual: int, accepted: bool
+) -> None:
+    assert _valid_days_interval(1_000_000, 1_000_000 + actual, "35") is accepted
 
 
 def _write(
@@ -407,7 +423,7 @@ def test_python_host_local_migration_preserves_managed_service_state(
     write_private(csr_workspace.pki / "inventory/services.yml", managed_inventory)
     managed = csr_workspace.runner(
         [
-            ISSUE,
+            *ISSUE,
             "external",
             "--namespace",
             csr_workspace.namespace,

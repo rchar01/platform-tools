@@ -86,12 +86,12 @@ def _default_namespace(environment: Mapping[str, str]) -> str:
     return f"{base}/platform-infrastructure"
 
 
-def _script_directory() -> str:
-    directory = os.path.dirname(sys.argv[0]) or "."
-    try:
-        return os.path.realpath(directory, strict=True)
-    except OSError:
-        return os.path.realpath(directory)
+def _checkout_directory() -> str:
+    package_directory = os.path.dirname(__file__)
+    archive_or_source = os.path.dirname(package_directory)
+    if os.path.isfile(archive_or_source):
+        return os.path.realpath(f"{os.path.dirname(archive_or_source)}/..")
+    return os.path.realpath(f"{package_directory}/../..")
 
 
 def _template_directory(environment: Mapping[str, str]) -> str:
@@ -101,7 +101,7 @@ def _template_directory(environment: Mapping[str, str]) -> str:
         candidates.append(f"{explicit}/pki")
     candidates.extend(
         (
-            f"{_script_directory()}/../templates/pki",
+            f"{_checkout_directory()}/templates/pki",
             f"{environment.get('PLATFORM_TOOLS_SHARE_DIR') or _user_share(environment)}/templates/pki",
             "/usr/local/share/platform-tools/templates/pki",
         )
@@ -345,7 +345,7 @@ def _copy_template(
 
 
 def initialize(parsed: ParseResult) -> int:
-    """Create or refresh the Bash-compatible private PKI working tree."""
+    """Create or refresh the private PKI working tree."""
 
     environment = dict(os.environ)
     namespace_value = parsed.values.get("--namespace")

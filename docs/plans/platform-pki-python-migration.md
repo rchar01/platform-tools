@@ -2,13 +2,18 @@
 
 ## Status
 
-All runtime migration phases are implemented. Every maintained PKI route and
-current-release `platform-pki-*` compatibility executable is Python-backed.
-Exact managed recovery is public through unified-only
-`platform-pki service-recover`. Phase 8 has retired production PKI Bashly
-workspaces and shell libraries while preserving immutable final-Bash evidence
-under `tests/pki/oracles/`. Migration remains forward-only: installing an older
-Bash release after Python has written state is unsupported.
+All runtime migration and next-major implementation phases are complete.
+Production packaging generates and installs one canonical PKI zipapp,
+`platform-pki`; all 18 v2 compatibility executables and invocation-name dispatch
+are removed. Exact managed recovery is public through
+`platform-pki service-recover`. Phase 8 retired production PKI Bashly workspaces
+and shell libraries while preserving immutable final-Bash evidence and
+historical mappings under `tests/pki/oracles/`. A copied or renamed archive
+still behaves as `platform-pki`. The v3 release gate remains pending on external
+downstream inventory, canary validation, and Python 3.14 target-host prerequisites;
+`VERSION` remains `2.3.0` until those blockers close. Migration remains
+forward-only: installing an older Bash release after Python has written state is
+unsupported.
 
 ## Goal
 
@@ -21,11 +26,11 @@ major release.
 ## Scope
 
 - Migrate all 18 existing `platform-pki-*` commands to shared Python code.
-- Preserve every existing executable name as a compatibility entry point until
-  all unified routes have migrated and passed acceptance.
+- Preserve every existing executable name as a compatibility entry point only
+  during the completed incremental migration.
 - Add a unified `platform-pki` command that dispatches to the same handlers.
-- Remove the `platform-pki-*` compatibility executables at the approved next
-  major-release boundary.
+- Remove the `platform-pki-*` compatibility executables at the approved
+  next-major implementation boundary.
 - Preserve existing OpenSSL, OpenSSH, `age`, `tar`, GNU `mv`, and locking
   subprocess boundaries where they remain necessary.
 - Preserve existing inventory, policy, record, journal, manifest, state-tree,
@@ -39,10 +44,11 @@ major release.
 
 - Do not rewrite cryptographic operations with a Python cryptography library.
 - Do not remove existing `platform-pki-*` commands before all unified routes
-  have migrated and the next major release is prepared.
+  have migrated and the next-major implementation boundary is prepared. This
+  condition is complete.
 - Do not convert persisted `key=value` records or journals to JSON during this
   migration.
-- Do not migrate the six non-PKI Bashly tools as part of this work.
+- Do not migrate the seven non-PKI Bashly tools as part of this work.
 - Do not adopt PEX, pipx, a virtual environment, or OS packages before the
   repository-native installation model is proven.
 - Do not weaken subprocess-backed integration, race, signal, descriptor, or
@@ -52,8 +58,9 @@ major release.
 
 - Preserve all existing `platform-pki-*` executable names during incremental
   migration.
-- Make `platform-pki` the sole installed PKI application in the next major
-  release after every route has migrated and passed final acceptance.
+- Make `platform-pki` the sole installed PKI application at the next-major
+  implementation boundary after every route has migrated and passed acceptance.
+  This decision is implemented; external release readiness remains pending.
 - Python must recover supported interrupted transactions written by the final
   Bash implementation.
 - Recovery compatibility is forward-only: the previous Bash release is not
@@ -102,7 +109,6 @@ src/platform_pki/
 ├── __init__.py
 ├── __main__.py
 ├── cli.py
-├── compat.py
 ├── errors.py
 ├── paths.py
 ├── records.py
@@ -116,11 +122,9 @@ src/platform_pki/
 └── transactions/
 ```
 
-After a compatibility route cuts over, its unified and compatibility interfaces
-must dispatch to the same handler. Approved leaf-level sequencing may
-temporarily expose a unified Python leaf while the retained compatibility
-executable remains Bash; compatibility launchers must not contain separate
-logic after their cutover.
+During migration, each cut-over compatibility route and its unified interface
+dispatched to the same handler. That temporary launcher boundary is now retired;
+production dispatch is unified-only.
 
 The frozen unified command mapping is:
 
@@ -129,12 +133,14 @@ platform-pki init
 platform-pki inventory-install
 platform-pki csr-trust-install
 platform-pki csr-recover
+platform-pki offline-csr
 platform-pki certificate-export
 platform-pki csr-candidate
 platform-pki root-create
 platform-pki intermediate-create
 platform-pki service-issue
 platform-pki service-renew
+platform-pki service-recover
 platform-pki service-verify
 platform-pki list-expiry
 platform-pki print-cert
@@ -146,9 +152,9 @@ platform-pki ca-rollover
 ```
 
 Existing nested subcommands and options follow the shallow command unchanged.
-For example, `platform-pki certificate-export publish` and
-`platform-pki ca-rollover prepare` dispatch to the same handlers as their
-existing compatibility commands.
+The current `offline-csr` leaves are `approve` and `sign`. For example,
+`platform-pki certificate-export publish` and `platform-pki ca-rollover prepare`
+dispatch to the same handlers as their historical compatibility commands.
 
 ## Phase 0: Freeze Contracts
 
@@ -159,14 +165,16 @@ Tasks:
 
 - [x] Inventory every PKI command form and source-defined option, including
   runtime-only option relationships and duplicate rejection fields.
-- [ ] Extend the machine-readable output, status, runtime-dependency, and
-  installed-asset inventory beyond the three pilot commands. Parser-edge and
-  per-command focused behavior are already covered; this documentation expansion
-  is not a runtime-migration blocker.
+- [ ] Extend the machine-readable output, status, and runtime-dependency
+  inventory from the seven covered routes to the 20 explicitly deferred parser
+  leaves. The current init template and historical oracle assets are separately
+  inventoried; this documentation expansion is not a runtime-migration blocker.
 - [x] Execute shared help precedence, equals-form, abbreviation, stream/status,
-  and no-state parser edges across all 24 retained leaf routes.
-- [x] Freeze the first migration tranche's output/status semantics,
-  migration-sensitive runtime boundaries, and common installed asset.
+  and no-state parser edges across all 27 current unified leaf routes while
+  preserving the historical 24-leaf v2 compatibility parser evidence.
+- [x] Freeze seven routes' output/status semantics and migration-sensitive
+  runtime boundaries, and separately inventory the current init template and
+  historical shell-library oracle evidence.
 - [x] Define and review the complete unified `platform-pki` command hierarchy.
 - [x] Establish Python 3.14 as the minimum supported runtime; target-host
   availability remains a release-readiness check.
@@ -662,17 +670,17 @@ Validation gate:
 ## Phase 8: Retire PKI Bash Implementations
 
 Goal: Remove obsolete PKI Bash implementation and runtime-library ownership
-after all unified routes use Python and pass final acceptance. Keep the
-Python-backed compatibility executables until the approved next major release.
+after all unified routes use Python and pass final acceptance, then complete the
+approved next-major unified-only production boundary.
 
 Tasks:
 
 - [x] Remove migrated PKI commands from `SHELL_TOOLS` and `BASHLY_TOOLS`.
 - [x] Add all Python-backed command names to the maintained Python inventory.
-- [ ] Remove all `platform-pki-*` compatibility launchers from the installed
-  tool inventory and retain only `platform-pki` at the next major-release
+- [x] Remove all `platform-pki-*` compatibility launchers from the installed
+  tool inventory and retain only `platform-pki` at the next-major implementation
   boundary.
-- [ ] Remove compatibility-name dispatch and update user-facing examples,
+- [x] Remove compatibility-name dispatch and update user-facing examples,
   installed-tool tests, release notes, and upgrade guidance to unified routes.
 - [x] Remove PKI Bashly workspaces only after the corresponding Python release
   has passed final acceptance.
@@ -690,6 +698,11 @@ Validation gate:
 - [x] Command inventory, installed tools, focused PKI suites, generated-file
   verification for remaining Bash tools, ShellCheck, and final container
   acceptance pass.
+- [x] Targeted next-major implementation evidence covers one generated/installed
+  PKI zipapp, absent alias artifacts, canonical renamed-copy behavior, and
+  pre-mutation install refusal for exact stale aliases.
+- [ ] Release gate: external downstream command inventory is reconciled, the
+  canary is accepted, and every PKI target host provides Python 3.14 or newer.
 
 ## Packaging and Installation
 
@@ -702,24 +715,25 @@ bin/platform-pki
 $INSTALL_DIR/platform-pki
 ```
 
-During incremental migration the repository also builds and installs
-`bin/platform-pki-*` compatibility launchers. They are intentionally absent
-from the final next-major layout above.
+During the completed incremental migration the repository also built and
+installed `bin/platform-pki-*` compatibility launchers. They are absent from the
+current next-major implementation layout above.
 
 Requirements:
 
 - Build the archive with stable member order, timestamps, modes, and content.
 - Include the application package and `__main__.py`, but not a Python runtime or
   third-party dependencies.
-- Embed the repository `VERSION` and verify it against every public launcher.
+- Embed the repository `VERSION` and verify it against `platform-pki`.
 - Use isolated Python startup and reject accidental imports from outside the
   archive.
-- Validate the complete zipapp before publishing compatibility launchers.
-- Dispatch compatibility commands and the unified CLI to the same handlers.
+- Validate the complete zipapp before installation.
+- Keep copied or renamed archives canonical; invocation names must not select a
+  legacy route.
 - Preserve custom `INSTALL_DIR`, `SHARE_DIR`, `PLATFORM_TOOLS_SHARE_DIR`, and
   existing shared-template lookup behavior.
-- Prove direct execution, copied installation, compatibility-name invocation,
-  signals, inherited descriptors, and subprocess behavior.
+- Prove direct execution, copied or renamed canonical behavior, signals,
+  inherited descriptors, and subprocess behavior.
 - Defer wheels, PEX, virtual environments, and OS packages until a concrete
   dependency or deployment requirement justifies them.
 
@@ -737,7 +751,7 @@ Use independently deployable releases rather than one large cutover:
 | Transactions | Authority, service, CSR, export, and candidate workflows |
 | Rollover | Status, migration, preparation, and recovery |
 | Cleanup | Retire PKI Bash sources and libraries |
-| Next major | Remove compatibility launchers and install only `platform-pki` |
+| Next-major implementation | Remove compatibility launchers and install only `platform-pki` |
 
 Each release must document:
 
@@ -790,7 +804,8 @@ Phase 8 progress entry records the final aggregate acceptance run.
 - A naive `pathlib` rewrite could weaken descriptor and TOCTOU protections.
 - Python exceptions or subprocess wrappers could expose secret-bearing
   arguments or diagnostics.
-- Mixed Bash/Python releases could create shared-package or journal-version skew.
+- Downgrading to mixed Bash/Python releases could create shared-package or
+  journal-version skew.
 - Parser compatibility requires more than default `argparse` behavior.
 - The current strict inventory language is not equivalent to general YAML
   loading.
@@ -798,8 +813,8 @@ Phase 8 progress entry records the final aggregate acceptance run.
   older Bash implementations must not be used with Python-written transaction
   state and are not guaranteed to interpret it.
 - Every deployment target that executes a PKI command must provide Python 3.14
-  or newer before installing v2.3.0. Target provisioning is owned by the
-  deployment environment rather than this tool repository.
+  or newer before the v3 release. Target provisioning is owned by the deployment
+  environment rather than this tool repository and remains a release blocker.
 
 ## Open Questions
 
@@ -807,6 +822,10 @@ Phase 8 progress entry records the final aggregate acceptance run.
   that executes a PKI command before installing v2.3.0.
 - [x] Retain recorded final-Bash commits, release tags, source extracts, and
   executable oracles indefinitely as historical compatibility evidence.
+- [ ] Reconcile every external downstream command inventory to unified routes.
+- [ ] Complete the release canary against the unified-only package.
+- [ ] Prove Python 3.14 or newer on every target host that executes a PKI
+  command.
 
 ## Progress Log
 
@@ -819,11 +838,11 @@ Phase 8 progress entry records the final aggregate acceptance run.
 | 2026-08-07 | Phase 0 harness foundation hardened and integrated. | `make test-python-infrastructure`: 95 passed; focused CSR copy/issuance checks: 2 passed; final patch review found no concrete issue. |
 | 2026-08-07 | Exhaustive Phase 0 parser-route and recovery-checkpoint inventories completed. | `tests/pki/test_migration_contract.py` source-normalizes 24 Bashly leaves, runtime option guards, literal and finite fault domains, and maintained pytest domains; focused infrastructure run: 18 passed. Differential execution and Bash-oracle retention remain open. |
 | 2026-08-07 | Differential execution foundation and Bash-oracle retention policy completed. | `run_differential_case` executes real commands on isolated private copies and compares normalized process observations, semantic trees, and identity-sensitive transitions; focused harness run: 16 passed. Per-command oracle commits are recorded at cutover. |
-| 2026-08-07 | Shared parser-edge behavior was frozen across all retained PKI leaves. | `tests/test_command_contract.py` drives help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the 24-route source-backed inventory. |
-| 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | Source- and test-backed inventories cover `print-cert`, `list-expiry`, and `service-verify`; exhaustive expansion to the remaining routes stays open. |
+| 2026-08-07 | Shared parser-edge behavior was frozen across all then-current PKI leaves. | `tests/test_command_contract.py` drove help, equals-form, abbreviation, action-order, stream/status, and no-state probes through the then-current compatibility-backed inventory; the current parser inventory has 27 leaves including unified-only `service-recover` and `offline-csr approve|sign`. |
+| 2026-08-07 | Pilot output, status, dependency, and installed-asset contracts were added. | The original source- and test-backed tranche covered `print-cert`, `list-expiry`, and `service-verify`; the current inventory covers seven routes and explicitly defers 20. |
 | 2026-08-07 | Minimum runtime raised to Python 3.14. | The pinned test image provides Python 3.14.7, avoiding an unverified older-runtime claim. |
-| 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, 24 unified help routes, installed-layout execution, and no-state parser behavior are covered in the pinned Python 3.14 test image. |
-| 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed 24-route parsing, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics pass 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remain unavailable. |
+| 2026-08-07 | Deterministic unified zipapp foundation added without command cutover. | Fixed-metadata standard-library archive, isolated `-I -S` startup, 18 copied compatibility names, then-current unified help coverage, installed-layout execution, and no-state parser behavior were covered in the pinned Python 3.14 test image. |
+| 2026-08-07 | Phase 1 shared parser and runtime primitives implemented. | Source-backed parsing for the then-current compatibility-backed inventory, strict records, C-locale inventory differentials, bounded process-group execution, protected inherited descriptors, and secret-safe diagnostics passed 429 focused tests. Final `make container-check`: 2,285 passed; operational handlers remained unavailable. |
 | 2026-08-07 | Phase 2 path, filesystem, and deterministic fault primitives implemented. | Lexical path policy, full-component descriptor bindings, exact identity and policy models, checked bounded reads, trusted ancestors, file and directory synchronization, and pinned pause controls pass 91 focused real-filesystem/process tests; locking and publication remain open. |
 | 2026-08-07 | Phase 2 ordered advisory-lock checkpoint implemented and independently hardened. | `acquire_pki_locks` provides descriptor-bound lifecycle-through-export prefix profiles, exact lock policy, no-state behavior, fork-safe descriptor/registry handling, validated anonymous `O_TMPFILE` no-clobber creation, thread-safe duplicate rejection, finite race hooks, primary-exception preservation, and reverse cleanup. The focused pinned-container suite passed 42 tests and the integrated foundation suite passed 562 tests across real Python/Python, Python/util-linux, fork, exec, descriptor-reuse, process-death, and replacement boundaries; general publication primitives remained open. |
 | 2026-08-07 | Bounded Phase 2 durable-publication checkpoint implemented and review-hardened. | Owned exact-byte stages, source-file synchronization/content observations, parent-bound immutable tree readiness, exact unlink, Linux no-clobber file/directory rename, file/directory exchange, absent-only atomic writes, operation-lifetime pins, and recursive tree synchronization have finite race hooks and retain ambiguous post-mutation state. The pinned focused suite passed 87 tests and the integrated foundation suite passed 649 tests; guarded existing-destination replacement remained open. |
@@ -863,6 +882,8 @@ Phase 8 progress entry records the final aggregate acceptance run.
 | 2026-08-12 | CSR candidate public cutover implemented and handled-signal ownership hardened. | Final Bash commit `24db7d54ca5c113fe763d4007c5dfef507dc23a6` is frozen with executable SHA-256 `03566a3917505e1999e52e2ece0f7a29313cd8869c4f968802e6525c8a3b5c95` and exact common, CSR-sign, and candidate-library provenance. Compatibility and unified `csr-candidate verify|finalize|abandon` share one Python handler. Frozen-oracle help and state-tree differentials cover all three actions. Handled SIGHUP, SIGINT, and SIGTERM are deferred across pre-journal stage ownership and durable journal handoff; exact partial-stage cleanup cannot adopt foreign replacements, and post-journal interruption retains resume-only recovery. The committed compatibility candidate and finalization recovery target passed 104 tests; ownership, parser, foundation, inventory, migration, and Make contracts passed 424 tests; command contracts passed 461 tests; installed tools passed 175 tests; deterministic Python generation, static checks, retained Bash generation, ShellCheck, and whitespace checks passed. Final `make container-check` remains reserved for final migration acceptance. |
 | 2026-08-12 | CA rollover public cutover implemented and focused acceptance completed. | Final Bash commit `ba9dd57214cae18f82c83dfb54b6ddce13882280` remains frozen with executable SHA-256 `7e9430e6d17969d5d1779e8073b9757e08157625e16b91969991e611953b806b` and common-library SHA-256 `dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f`. Compatibility and unified `ca-rollover migrate|status|prepare|recover` share Python handlers. Core migration, status, and preparation scenarios execute the generated compatibility launcher; private drivers remain limited to implementation-level race injection and frozen-oracle differentials. The complete four-worker rollover suite passed 544 tests, and focused trust-install, certificate-export, and candidate suites passed 75, 17, and 104 tests. Deterministic Python generation and the 250-test foundation passed. Final `make container-check` remains pending. |
 | 2026-08-13 | Phase 8 production Bash retirement completed. | PKI Bashly workspaces and installed shell libraries were removed after pre-cleanup acceptance. Current-release compatibility names remain deterministic Python zipapps. Required final-Bash source evidence was relocated byte-for-byte under `tests/pki/oracles/final-bash-source/` with a complete SHA-256 manifest; command-specific executable oracles remain unchanged. Final `make container-check` passed remaining Bash generation, ShellCheck, static checks, all 4,849 maintained tests including 544 rollover cases, and the 10-test archive smoke. |
+| 2026-08-13 | Next-major unified-only implementation completed; release gate remains open. | Current worktree source and targeted test changes remove all 18 alias artifacts and compatibility-name dispatch, generate/install only `platform-pki`, keep renamed copies canonical, and make installation reject exact stale alias paths before mutation without deleting them. Final bounded parser/help verification passed 40 tests; unified-only install inventory and exact legacy-alias preflight verification passed 3 tests; deterministic zipapp verification, Python compilation, whitespace validation, and frozen-oracle checks passed. Documentation and Unreleased notes carry exact manual cleanup guidance. External downstream inventory, canary validation, and Python 3.14 target-host readiness remain blockers; `VERSION` is still `2.3.0`. |
+| 2026-08-17 | Unified-only candidate hardening completed without closing the release gate. | Current route documentation now records all 27 unified leaves and 20 deferred output/status contracts. Exact legacy-alias install preflight covers regular files, directories, dangling symlinks, and live symlinks; runtime-evidence races cover one immutable artifact-state snapshot, descriptor-bound executable status, replacement during and after hashing, sealed-snapshot invocation, and one immutable alias snapshot for both detail fields and aggregate status; offline signing rejects approved-source or installed-trust changes after confirmation before journal/replay mutation. Persisted rollover recovery and migration action bytes retain their exact historical alias spellings despite unified-only runtime dispatch. The focused install, offline, and persisted-action additions passed 4, 2, and 2 cases, and the complete 26-test runtime-evidence target passed. Pinned deterministic Bash generation, ShellCheck, Python zipapp verification, Python compilation, and whitespace checks passed. Full `make container-check` and the external downstream, canary, and target-host Python gates remain pending; `VERSION` remains `2.3.0`. |
 
 ## Decision Log
 
@@ -883,3 +904,4 @@ Phase 8 progress entry records the final aggregate acceptance run.
 | 2026-08-10 | Cut over only the unified rollover recovery route. | This exposes the accepted Python recovery state machines without changing the final-Bash compatibility executable or the migration, status, preparation, and authority-writer paths that still produce the recovered state. |
 | 2026-08-10 | Require a post-confirmation CSR journal-kind recheck before Python recovery mutation. | Recovery must not switch between signing and candidate-finalization protocols after the operator confirms one kind; a changed selection under the required locks fails closed. The public Python route now enforces this decision. |
 | 2026-08-10 | Remove `platform-pki-*` compatibility executables in the next major release. | Compatibility names remain available while routes migrate, but the completed migration will install only `platform-pki`; frozen Bash oracles remain test evidence rather than public launchers. This supersedes the 2026-08-07 decision to preserve compatibility names indefinitely. |
+| 2026-08-13 | Complete the unified-only implementation before opening the v3 release gate. | Alias removal, canonical copied-name behavior, and fail-closed manual-cleanup installation are implemented, but release remains blocked on external downstream inventory, canary acceptance, and target-host Python prerequisites. |

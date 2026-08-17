@@ -331,7 +331,7 @@ def _prepare_command(
     generation: int,
 ) -> list[str | Path]:
     command: list[str | Path] = [
-        tools.rollover,
+        *tools.rollover,
         "prepare",
         "--namespace",
         workspace.namespace,
@@ -426,7 +426,7 @@ def _recover(
 ) -> ProcessResult:
     return process_runner(
         [
-            tools.rollover,
+            *tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,

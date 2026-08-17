@@ -28,7 +28,8 @@ def _write_executable(path: Path, content: str) -> None:
 
 
 def _wrapper_directory(tools: RolloverTools, case_name: str) -> Path:
-    temporary_root = tools.rollover.parents[1] / ".tmp"
+    executable = Path(tools.rollover[0])
+    temporary_root = executable.parents[1] / ".tmp"
     temporary_root.mkdir(mode=0o700, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix=f"pytest-{case_name}-", dir=temporary_root))
 
@@ -44,7 +45,7 @@ def _prepare_command(
     rollover_type: str,
 ) -> list[str | Path]:
     command: list[str | Path] = [
-        tools.rollover,
+        *tools.rollover,
         "prepare",
         "--namespace",
         workspace.namespace,
@@ -85,7 +86,7 @@ def _recovery_command(
     action: str,
 ) -> list[str | Path]:
     return [
-        tools.rollover,
+        *tools.rollover,
         "recover",
         "--namespace",
         workspace.namespace,

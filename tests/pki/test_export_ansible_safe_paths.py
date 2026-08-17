@@ -15,7 +15,7 @@ from .support import BIN, REPOSITORY, assert_result, environment, executable, ex
 
 
 pytestmark = pytest.mark.pki
-TOOL = BIN / "platform-pki-export-ansible"
+TOOL = (BIN / "platform-pki", "export-ansible")
 ORACLE = REPOSITORY / "tests/pki/oracles/platform-pki-export-ansible/platform-pki-export-ansible"
 UNIFIED = BIN / "platform-pki"
 ORACLE_COMMIT = "00c7cd55fa51ffc3e5911f0f3bcba1b76e7c5f6b"
@@ -42,14 +42,15 @@ INVENTORY = """services:
 """
 
 
-def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], *arguments: object, cwd: Path | None = None, tool: Path = TOOL) -> ProcessResult:
+def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], *arguments: object, cwd: Path | None = None, tool: Path | tuple[Path | str, ...] = TOOL) -> ProcessResult:
+    command = (tool,) if isinstance(tool, Path) else tool
     effective = dict(env)
-    if tool == ORACLE:
+    if command == (ORACLE,):
         effective.setdefault(
             "PLATFORM_TOOLS_LIB_DIR",
             os.fspath(REPOSITORY / "tests/pki/oracles/final-bash-source/lib"),
         )
-    return process_runner([tool, *arguments], env=effective, cwd=cwd, timeout=30)
+    return process_runner([*command, *arguments], env=effective, cwd=cwd, timeout=30)
 
 
 def wait_for_path(path: Path, timeout: float = 30) -> None:
@@ -126,19 +127,13 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     assert os.access(ORACLE, os.X_OK)
 
 
-def test_export_compatibility_help_matches_oracle(process_runner, isolated_environment) -> None:
-    oracle = run(process_runner, isolated_environment, "--help", tool=ORACLE)
-    result = run(process_runner, isolated_environment, "--help")
-    assert result == ProcessResult(result.args, 0, oracle.stdout, "")
-
-
 def test_export_cli_contract_and_literal_service_is_not_evaluated(tmp_path, process_runner, isolated_environment) -> None:
     version = (REPOSITORY / "VERSION").read_text().strip()
     result = run(process_runner, isolated_environment, "--help")
     assert_result(result, 0, stderr="")
     assert "Usage:" in result.stdout
-    assert "platform-pki-export-ansible --version | -v" in result.stdout
-    assert_result(run(process_runner, isolated_environment, "--version"), 0, stdout=f"platform-pki-export-ansible {version}\n", stderr="")
+    assert "Usage: platform-pki export-ansible" in result.stdout
+    assert_result(process_runner([TOOL[0], "--version"], env=isolated_environment, timeout=30), 0, stdout=f"platform-pki {version}\n", stderr="")
     literal = f"platform-$(touch {tmp_path / 'eval-injected'})"
     result = run(process_runner, isolated_environment, literal)
     assert result.status == 1
@@ -440,8 +435,8 @@ def test_export_force_replaces_target_symlink_without_touching_victim(tmp_path, 
     assert not target.is_symlink()
 
 
-@pytest.mark.parametrize("interface", ((TOOL,), (UNIFIED, "export-ansible")), ids=("compatibility", "unified"))
-def test_python_interfaces_publish_complete_selected_export(tmp_path, process_runner, isolated_environment, interface) -> None:
+def test_python_interface_publishes_complete_selected_export(tmp_path, process_runner, isolated_environment) -> None:
+    interface = TOOL
     pki = create_tree(tmp_path / interface[0].name, process_runner, isolated_environment)
     target = pki / f"export/{interface[0].name}-selected"
     result = process_runner(
@@ -544,7 +539,7 @@ def test_python_custom_marker_replacement_before_exchange_preserves_old_destinat
     release = tmp_path / f"{mutation}-release"
     process = process_starter(
         [
-            TOOL,
+            *TOOL,
             "platform-example",
             "--pki-dir",
             pki,
@@ -586,7 +581,7 @@ def test_python_source_race_preserves_existing_export_and_removes_stage(tmp_path
     marker = tmp_path / "source-race-marker"
     release = tmp_path / "source-race-release"
     process = process_starter(
-        [TOOL, "--pki-dir", pki, "--force"],
+        [*TOOL, "--pki-dir", pki, "--force"],
         env=python_environment(
             isolated_environment,
             PLATFORM_PKI_EXPORT_ANSIBLE_PAUSE_AT="export-before-source-recheck",
@@ -610,7 +605,7 @@ def test_python_competing_destination_preserves_winner_and_removes_stage(tmp_pat
     marker = tmp_path / "destination-race-marker"
     release = tmp_path / "destination-race-release"
     process = process_starter(
-        [TOOL, "platform-example", "--pki-dir", pki, "--export-dir", target],
+        [*TOOL, "platform-example", "--pki-dir", pki, "--export-dir", target],
         env=python_environment(
             isolated_environment,
             PLATFORM_PKI_EXPORT_ANSIBLE_PAUSE_AT="publication-before-mutation",
@@ -640,7 +635,7 @@ def test_python_prepublication_cleanup_race_retains_private_stage_evidence(
     marker = tmp_path / "stage-cleanup-marker"
     release = tmp_path / "stage-cleanup-release"
     process = process_starter(
-        [TOOL, "--pki-dir", pki, "--force"],
+        [*TOOL, "--pki-dir", pki, "--force"],
         env=python_environment(
             isolated_environment,
             PLATFORM_PKI_EXPORT_ANSIBLE_FAIL_AT="export-before-source-recheck",
@@ -730,7 +725,7 @@ def test_python_postexchange_cleanup_race_keeps_new_export_and_old_private_key_e
     marker = tmp_path / "postexchange-cleanup-marker"
     release = tmp_path / "postexchange-cleanup-release"
     process = process_starter(
-        [TOOL, "--pki-dir", pki, "--force"],
+        [*TOOL, "--pki-dir", pki, "--force"],
         env=python_environment(
             isolated_environment,
             PLATFORM_PKI_EXPORT_ANSIBLE_PAUSE_AT="tree-cleanup-before-entry-unlink",
@@ -859,6 +854,13 @@ def _normalize_case_root(root: Path, output: str) -> str:
     return output.replace(os.fspath(root), "<CASE>")
 
 
+def _normalize_retired_command_guidance(_root: Path, output: str) -> str:
+    return output.replace(
+        "platform-pki-ca-rollover status/migrate",
+        "platform-pki ca-rollover status/migrate",
+    )
+
+
 def _run_export_differential(seed: Path, case: Path, isolated_environment, arguments=(), export_relative: Path | None = None):
     effective = {
         **isolated_environment,
@@ -885,7 +887,10 @@ def _run_export_differential(seed: Path, case: Path, isolated_environment, argum
         lambda root: command(root, (ORACLE,)),
         lambda root: command(root, (UNIFIED, "export-ansible")),
         effective,
-        output_normalizers=(_normalize_case_root,),
+        output_normalizers=(
+            _normalize_case_root,
+            _normalize_retired_command_guidance,
+        ),
         run_options={"timeout": 30},
     )
 

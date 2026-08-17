@@ -381,7 +381,7 @@ def test_python_prepare_all_normal_path_checkpoints_roll_back(
     journal = _read_strict_record(workspace.pki / "state/rollover/journal")
     recovered = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -431,7 +431,7 @@ def test_python_root_prepare_bounded_checkpoints_roll_back(
     journal = _read_strict_record(workspace.pki / "state/rollover/journal")
     recovered = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -487,7 +487,7 @@ def test_python_prepare_fault_and_signal_checkpoints_are_recoverable(
     journal = _read_strict_record(workspace.pki / "state/rollover/journal")
     recovered = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -540,7 +540,7 @@ def test_prepare_writer_publishes_schema5_recoverable_state(
 
     recovery = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -611,7 +611,7 @@ def test_python_prepare_writer_resumes_after_publication(
     assert journal["recovery_step"] == recovery_step
     recovery = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,

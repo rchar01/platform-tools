@@ -7,6 +7,40 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added unified `platform-pki offline-csr approve|sign` routes with exact
+  untrusted-directory snapshots, protected local staging, authenticated
+  no-clobber approval publication, fixed-order JSON results, exact TTY review,
+  protected Ed25519 key prompting, and delegation to the existing host-local
+  signer immediately before its journal and replay mutation boundary.
+- Added the Bashly-backed `platform-runtime-evidence` command. It emits a
+  fixed-order, percent-encoded schema-1 record containing explicit reviewed
+  environment fields, Python 3.14 readiness, descriptor-bound artifact metadata
+  and SHA-256 with final identity stability, no-follow states for all 18 exact
+  legacy aliases, prerequisite versions, and bounded filesystem capability
+  probes. It reads no PKI state, performs no recursive cleanup, and executes the
+  selected `platform-pki` artifact only with explicit `--invoke-version`.
+
+### Removed
+
+- **Breaking:** Removed all 18 v2 `platform-pki-*` compatibility executables
+  from production generation and installation. `platform-pki <command>` is now
+  the only PKI command interface. Copied or renamed archives retain canonical
+  `platform-pki` help, version, parsing, and dispatch rather than selecting a
+  route from the invocation filename.
+
+### Changed
+
+- Changed `make install` to inspect every exact legacy PKI alias path before any
+  installation mutation. If any path or symlink exists, installation lists the
+  blockers and fails without deleting, replacing, or otherwise cleaning them.
+  Upgraders must inspect and manually remove or relocate the exact 18 paths in
+  the [upgrade guide](README.md#upgrade-from-v230); wildcard deletion is not
+  safe guidance.
+- Kept this work under the Unreleased heading with `VERSION` at `2.3.0` while
+  the next-major release gate remains pending.
+
 ## [2.3.0] - 2026-08-13
 
 ### Added

@@ -4,6 +4,33 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki offline-csr approve|sign` for exact-directory offline
+  host-local CSR review. Approval authenticates and no-clobber-publishes the
+  canonical five files without changing CA or replay state; signing adds an
+  authenticated precommit confirmation and delegates to the existing signer
+  and `csr-recover` state machine. Protected approval and response Ed25519 keys
+  prompt through the inherited terminal without exposing passphrases in
+  arguments, environment, or machine-readable output.
+- Added `platform-runtime-evidence`, a state-free collector for reviewed host or
+  image identity, Python 3.14 readiness, installed `platform-pki` metadata and
+  digest, all 18 exact retired aliases, external tool versions, and selected
+  Linux filesystem capabilities. It does not read PKI state or execute the
+  selected artifact unless `--invoke-version` is supplied, and it reports
+  evidence rather than certifying role-specific readiness.
+- **Breaking:** PKI packaging is unified-only. Production generation and
+  installation now publish only `platform-pki`; all 18 v2 `platform-pki-*`
+  compatibility aliases have been removed. Update commands and automation to
+  `platform-pki <command>`. A copied or renamed archive still identifies and
+  behaves as `platform-pki`; its filename does not restore alias dispatch.
+- Before upgrading from v2.3.0, inspect and manually remove or relocate every
+  exact legacy alias path listed in the
+  [upgrade guide](README.md#upgrade-from-v230). Do not use wildcard deletion.
+  Installation checks those exact paths before any mutation, fails closed if
+  any path or dangling symlink remains, lists the blockers, and never deletes or
+  replaces them.
+- This remains post-v2.3.0 release development. `VERSION` stays at `2.3.0`
+  until the next-major release gate is complete.
+
 ## v2.3.0 - 2026-08-13
 
 - All maintained PKI routes and current-release `platform-pki-*` compatibility

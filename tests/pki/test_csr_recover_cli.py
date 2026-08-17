@@ -13,8 +13,7 @@ from .support import BIN, write_private
 
 pytestmark = pytest.mark.pki
 
-TOOL = BIN / "platform-pki-csr-recover"
-UNIFIED = BIN / "platform-pki"
+TOOL = (BIN / "platform-pki", "csr-recover")
 TRANSACTION = "csr-0123456789abcdef0123456789abcdef"
 
 
@@ -29,26 +28,21 @@ def _pki(tmp_path: Path) -> Path:
 def _run(
     runner: Callable[..., ProcessResult],
     environment: Mapping[str, str],
-    command: Path,
+    command: tuple[Path | str, ...],
     *arguments: str | Path,
 ) -> ProcessResult:
-    prefix: tuple[str | Path, ...] = (command,)
-    if command == UNIFIED:
-        prefix += ("csr-recover",)
-    return runner((*prefix, *arguments), env=environment)
+    return runner((*command, *arguments), env=environment)
 
 
-@pytest.mark.parametrize("command", (TOOL, UNIFIED), ids=("compatibility", "unified"))
-def test_public_routes_share_transaction_validation(
+def test_public_route_validates_transaction(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
     isolated_environment: Mapping[str, str],
-    command: Path,
 ) -> None:
     result = _run(
         process_runner,
         isolated_environment,
-        command,
+        TOOL,
         "--pki-dir",
         tmp_path / "missing",
         "--transaction",
@@ -154,7 +148,7 @@ def test_public_confirmation_rechecks_selected_journal_without_switching(
     write_private(signing, "invalid\n")
     prompt = f"Type recover {TRANSACTION} to continue: "
     process = process_starter(
-        [TOOL, "--pki-dir", pki, "--transaction", TRANSACTION],
+        [*TOOL, "--pki-dir", pki, "--transaction", TRANSACTION],
         env=isolated_environment,
         pty_mode="canonical",
         controlling_terminal=True,
@@ -189,7 +183,7 @@ def test_public_finalization_confirmation_is_exact(
     pki = _pki(tmp_path)
     write_private(pki / "state/csr/finalization-recovery-journal", "invalid\n")
     result = process_runner(
-        [TOOL, "--pki-dir", pki],
+        [*TOOL, "--pki-dir", pki],
         env=isolated_environment,
         input="recover finalization\n",
         pty_mode="canonical",

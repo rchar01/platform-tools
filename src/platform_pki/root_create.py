@@ -1040,7 +1040,7 @@ def _abort(transaction: _Transaction, original: BaseException) -> None:
     except BaseException as rollback_error:
         raise ApplicationError(
             "Root bootstrap rollback failed; retained recovery evidence requires "
-            "platform-pki-ca-rollover recover"
+            "platform-pki ca-rollover recover"
         ) from rollback_error
     raise original
 
@@ -1060,7 +1060,7 @@ def _run_transaction(
     bootstrap = f"{pki_dir}/state/bootstrap-root"
     if os.path.lexists(active):
         _die(
-            "An active issuer exists; use platform-pki-ca-rollover instead of "
+            "An active issuer exists; use platform-pki ca-rollover instead of "
             "replacing the root CA"
         )
     if os.path.lexists(bootstrap):
@@ -1069,10 +1069,10 @@ def _run_transaction(
     if layout == "legacy":
         _die(
             "Legacy PKI state requires migration; create a fresh backup and follow "
-            "platform-pki-ca-rollover status/migrate"
+            "platform-pki ca-rollover status/migrate"
         )
     if layout != "empty":
-        _die("PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status")
+        _die("PKI state is incomplete or ambiguous; run platform-pki ca-rollover status")
     if force:
         _die(
             "--force cannot delete unproven root state; recover the journaled "
@@ -1173,7 +1173,7 @@ def _run_transaction(
 
 
 def create_root(parsed: ParseResult) -> int:
-    """Create one root authority through compatibility or unified dispatch."""
+    """Create one root authority through unified dispatch."""
 
     environment = dict(os.environ)
     name = str(parsed["--name"])

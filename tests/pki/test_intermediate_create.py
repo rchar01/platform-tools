@@ -75,7 +75,7 @@ _IDENTITY_FIELD = re.compile(
 
 
 def _command(value, toolset, *arguments: str | Path) -> list[str | Path]:
-    return [toolset.intermediate, "--namespace", value.namespace, *arguments]
+    return [*toolset.intermediate, "--namespace", value.namespace, *arguments]
 
 
 def _bootstrap(process_runner, value, env, toolset) -> None:
@@ -85,7 +85,7 @@ def _bootstrap(process_runner, value, env, toolset) -> None:
 
 def _create_command(value, toolset, *, unencrypted: bool = True) -> list[str | Path]:
     result: list[str | Path] = [
-        toolset.intermediate, "--namespace", value.namespace,
+        *toolset.intermediate, "--namespace", value.namespace,
         "--name", "Pytest Intermediate", "--org", "Platform Test", "--country", "PL",
         "--root-pass-file", value.root_pass,
     ]
@@ -213,7 +213,7 @@ def _db_snapshot(value) -> dict[str, tuple[object, ...] | None]:
 
 
 def _recovery_command(value, toolset, transaction: str, action: str) -> list[str | Path]:
-    return [toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", action, "--yes"]
+    return [*toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", action, "--yes"]
 
 
 def _normalize_intermediate_token(value: str) -> str:
@@ -285,7 +285,7 @@ def _intermediate_writer_content_normalizer(*roots: Path):
     ("arguments", "status", "stdout_fragment", "stderr_fragment"),
     (
         pytest.param(("--help",), 0, "Usage:", "", id="help"),
-        pytest.param(("--version",), 0, "platform-pki-intermediate-create", "", id="version"),
+        pytest.param(("--version",), 1, "", "invalid option: --version", id="version"),
         pytest.param(("--unknown",), 1, "", "invalid option: --unknown", id="unknown-option"),
         pytest.param(("--org", "Test", "--country", "PL"), 1, "", "missing required flag: --name CN", id="missing-name"),
         pytest.param(("--name", "Test", "--org", "Test", "--country", "PL", "--days", "zero"), 1, "", "Days value must be numeric: zero", id="invalid-days"),
@@ -294,51 +294,14 @@ def _intermediate_writer_content_normalizer(*roots: Path):
 )
 def test_parser_contract(tmp_path: Path, process_runner: Callable[..., ProcessResult], arguments: tuple[str, ...], status: int, stdout_fragment: str, stderr_fragment: str) -> None:
     toolset = tools()
-    result = run(process_runner, [toolset.intermediate, *arguments], environment(tmp_path / "environment"))
+    result = run(process_runner, [*toolset.intermediate, *arguments], environment(tmp_path / "environment"))
     assert result.status == status
     assert stdout_fragment in result.stdout
     assert stderr_fragment in result.stderr
     if arguments == ("--help",):
-        assert "platform-pki-intermediate-create --version | -v" in result.stdout
+        assert "Usage: platform-pki intermediate-create" in result.stdout
         assert "--allow-unencrypted-intermediate-key" in result.stdout
         assert result.stderr == ""
-    if arguments == ("--version",):
-        assert result.stdout == f"platform-pki-intermediate-create {toolset.version}\n"
-        assert result.stderr == ""
-
-
-@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
-def test_direct_compatibility_help_matches_frozen_bashly_help(
-    tmp_path: Path,
-    process_runner: Callable[..., ProcessResult],
-    tty: bool,
-) -> None:
-    toolset = tools()
-    env = environment(tmp_path / "environment")
-    env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(INTERMEDIATE_CREATE_ORACLE_LIB)
-    pty_mode = None
-    if tty:
-        env.pop("NO_COLOR")
-        pty_mode = "canonical"
-    expected = run(
-        process_runner,
-        [INTERMEDIATE_CREATE_ORACLE, "--help"],
-        env,
-        pty_mode=pty_mode,
-    )
-    actual = run(
-        process_runner,
-        [toolset.intermediate, "--help"],
-        env,
-        pty_mode=pty_mode,
-    )
-    assert (actual.status, actual.stdout, actual.stderr) == (
-        expected.status,
-        expected.stdout,
-        expected.stderr,
-    )
-
-
 def test_writer_contract_has_exact_database_and_field_order() -> None:
     assert intermediate_writer.ROOT_DB_KEYS == (*ROOT_DB, "newcert")
     assert len(intermediate_writer.INTERMEDIATE_BOOTSTRAP_WRITER_FIELDS) == 56
@@ -874,9 +837,10 @@ def test_frozen_bash_and_python_intermediate_writers_are_semantically_equivalent
     if boundary is not None:
         base_environment["PLATFORM_PKI_INTERMEDIATE_FAIL_AT"] = boundary
 
-    def argv(root: Path, command: Path) -> tuple[str | Path, ...]:
+    def argv(root: Path, command: Path | tuple[Path | str, ...]) -> tuple[str | Path, ...]:
+        prefix = (command,) if isinstance(command, Path) else command
         return (
-            command,
+            *prefix,
             "--namespace",
             root / "namespace",
             "--name",
@@ -1010,9 +974,10 @@ def test_sigkill_persisted_state_matches_frozen_writer_and_python_recovers(
         "PLATFORM_PKI_INTERMEDIATE_CRASH_AT": boundary,
     }
 
-    def argv(root: Path, command: Path) -> tuple[str | Path, ...]:
+    def argv(root: Path, command: Path | tuple[Path | str, ...]) -> tuple[str | Path, ...]:
+        prefix = (command,) if isinstance(command, Path) else command
         return (
-            command,
+            *prefix,
             "--namespace",
             root / "namespace",
             "--name",

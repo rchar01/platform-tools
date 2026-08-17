@@ -27,8 +27,8 @@ from .test_csr_signing import (
 
 
 pytestmark = pytest.mark.pki
-INIT = BIN / "platform-pki-init"
-TOOL = BIN / "platform-pki-csr-trust-install"
+INIT = (BIN / "platform-pki", "init")
+TOOL = (BIN / "platform-pki", "csr-trust-install")
 UNIFIED = BIN / "platform-pki"
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-trust-install"
 ORACLE = ORACLE_ROOT / "platform-pki-csr-trust-install"
@@ -72,17 +72,9 @@ def test_frozen_trust_install_oracle_matches_provenance_and_modes() -> None:
             assert os.access(path, os.X_OK)
 
 
-def test_trust_install_compatibility_help_matches_oracle(
-    process_runner, isolated_environment
-) -> None:
-    oracle = process_runner([ORACLE, "--help"], env=isolated_environment, timeout=30)
-    result = process_runner([TOOL, "--help"], env=isolated_environment, timeout=30)
-    assert result == ProcessResult(result.args, 0, oracle.stdout, "")
-
-
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], namespace: Path, private: Path, *arguments: object) -> ProcessResult:
     return process_runner(
-        [TOOL, "--namespace", namespace, "--private-repo", private, *arguments],
+        [*TOOL, "--namespace", namespace, "--private-repo", private, *arguments],
         env=env,
         timeout=30,
     )
@@ -111,7 +103,7 @@ def start_paused(
     release: Path,
 ) -> ManagedProcess:
     return process_starter(
-        [TOOL, "--namespace", namespace, "--private-repo", private],
+        [*TOOL, "--namespace", namespace, "--private-repo", private],
         env=environment(
             env,
             PLATFORM_PKI_CSR_TRUST_INSTALL_PAUSE_AT=point,
@@ -149,7 +141,7 @@ def public_key(process_runner, env, root: Path, name: str) -> str:
 
 def setup_workspace(tmp_path: Path, process_runner, env) -> tuple[Path, Path, Path]:
     namespace = tmp_path / "namespace"
-    assert_result(process_runner([INIT, "--namespace", namespace], env=env, timeout=30), 0)
+    assert_result(process_runner([*INIT, "--namespace", namespace], env=env, timeout=30), 0)
     private = tmp_path / "platform-private"
     trust = private / "pki/csr-trust"
     trust.mkdir(mode=0o700, parents=True)
@@ -310,7 +302,7 @@ def test_default_parent_relative_private_repo(
     controller.mkdir(mode=0o700)
 
     result = process_runner(
-        [TOOL, "--namespace", namespace],
+        [*TOOL, "--namespace", namespace],
         cwd=controller,
         env=isolated_environment,
         timeout=30,
@@ -1164,7 +1156,7 @@ def prepare_terminal_migration(workspace: CsrWorkspace) -> None:
     assert_result(
         workspace.runner(
             [
-                ISSUE,
+                *ISSUE,
                 "external",
                 "--namespace",
                 workspace.namespace,
@@ -1180,7 +1172,7 @@ def prepare_terminal_migration(workspace: CsrWorkspace) -> None:
     assert_result(
         workspace.runner(
             [
-                ANSIBLE_EXPORT,
+                *ANSIBLE_EXPORT,
                 "external",
                 "--namespace",
                 workspace.namespace,

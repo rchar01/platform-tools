@@ -723,7 +723,7 @@ def _load_inventory(path: str, label: str, *, private: bool) -> tuple[Inventory,
             ) from None
         raise ApplicationError(
             f"Service inventory is missing or unreadable: {path}; "
-            "run platform-pki-inventory-install"
+            "run platform-pki inventory-install"
         ) from None
 
 

@@ -14,7 +14,7 @@ from .migration_harness import run_differential_case
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOL = ROOT / "bin/platform-pki-service-verify"
+TOOL = (ROOT / "bin/platform-pki", "service-verify")
 ORACLE = ROOT / "tests/pki/oracles/platform-pki-service-verify/platform-pki-service-verify"
 ORACLE_COMMIT = "b421370123db006148d0439af3e35efd47bcda2f"
 ORACLE_SHA256 = "e9756ceb6df907cf4019cdb6a7f00f75ff7aab3b6c6b9588684286a5349a6cb0"
@@ -179,9 +179,9 @@ def _run(
     process_runner: Callable[..., ProcessResult],
     arguments: Sequence[str | Path],
     environment: Mapping[str, str] | None = None,
-    tool: Path | Sequence[str | Path] = TOOL,
+    tool: Sequence[str | Path] = TOOL,
 ) -> ProcessResult:
-    command = (tool,) if isinstance(tool, Path) else tuple(tool)
+    command = tuple(tool)
     effective_environment = environment
     if command == (ORACLE,):
         effective_environment = dict(os.environ if environment is None else environment)
@@ -194,8 +194,7 @@ def _run(
 
 OPERATIONAL_TOOLS = (
     pytest.param((ORACLE,), id="bash-oracle"),
-    pytest.param((TOOL,), id="python-compatibility"),
-    pytest.param((UNIFIED, "service-verify"), id="python-unified"),
+    pytest.param(TOOL, id="python-unified"),
 )
 
 
@@ -203,14 +202,14 @@ def test_help(process_runner: Callable[..., ProcessResult]) -> None:
     result = _run(process_runner, ["--help"])
     assert result.status == 0
     assert "Usage:" in result.stdout
-    assert "platform-pki-service-verify --version | -v" in result.stdout
+    assert "Usage: platform-pki service-verify" in result.stdout
     assert result.stderr == ""
 
 
 def test_version(process_runner: Callable[..., ProcessResult]) -> None:
-    result = _run(process_runner, ["--version"])
+    result = _run(process_runner, ["--version"], tool=(UNIFIED,))
     assert result == ProcessResult(
-        result.args, 0, f"platform-pki-service-verify {VERSION}\n", ""
+        result.args, 0, f"platform-pki {VERSION}\n", ""
     )
 
 
@@ -478,25 +477,25 @@ def test_missing_installed_share_library_is_ignored(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
     pki, fake_library, fake_bin = _workspace(tmp_path)
-    tool = tmp_path / "installed/bin/platform-pki-service-verify"
+    tool = tmp_path / "installed/bin/platform-pki"
     tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, tool)
+    shutil.copy2(TOOL[0], tool)
     environment, _ = _environment(tmp_path, fake_library, fake_bin, "none")
     environment = dict(environment)
     environment.pop("PLATFORM_TOOLS_LIB_DIR")
     environment["PLATFORM_TOOLS_SHARE_DIR"] = os.fspath(tmp_path / "installed/share")
 
-    result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment, tool)
+    result = _run(process_runner, ["platform-example", "--pki-dir", pki], environment, (tool, "service-verify"))
 
     assert result == ProcessResult(
         result.args, 0, "[OK] Verified service certificate: platform-example\n", ""
     )
 
 
-def _isolated_tool(tmp_path: Path) -> tuple[Path, Mapping[str, str]]:
-    tool = tmp_path / "isolated/bin/platform-pki-service-verify"
+def _isolated_tool(tmp_path: Path) -> tuple[tuple[Path | str, ...], Mapping[str, str]]:
+    tool = tmp_path / "isolated/bin/platform-pki"
     tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, tool)
+    shutil.copy2(TOOL[0], tool)
     home = tmp_path / "isolated/home"
     home.mkdir(mode=0o700)
     environment = dict(
@@ -504,7 +503,7 @@ def _isolated_tool(tmp_path: Path) -> tuple[Path, Mapping[str, str]]:
         HOME=os.fspath(home),
         PLATFORM_TOOLS_SHARE_DIR=os.fspath(tmp_path / "isolated/missing"),
     )
-    return tool, environment
+    return (tool, "service-verify"), environment
 
 
 def test_help_does_not_require_shared_library(

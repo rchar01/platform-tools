@@ -13,7 +13,7 @@ from .support import BIN, REPOSITORY, assert_result, environment, executable, ex
 
 
 pytestmark = pytest.mark.pki
-TOOL = BIN / "platform-pki-init"
+TOOL = (BIN / "platform-pki", "init")
 ORACLE = REPOSITORY / "tests/pki/oracles/platform-pki-init/platform-pki-init"
 UNIFIED = BIN / "platform-pki"
 ORACLE_COMMIT = "ee03cddc626338ea7d066dd71519204bddb46db3"
@@ -24,13 +24,12 @@ TEMPLATE_SHA256 = "6faf52e34ab66d402b9777277383f5963aad417e748ea24de977de103e3cf
 
 INTERFACES = (
     pytest.param((ORACLE,), id="bash-oracle"),
-    pytest.param((TOOL,), id="python-compatibility"),
-    pytest.param((UNIFIED, "init"), id="python-unified"),
+    pytest.param(TOOL, id="python-unified"),
 )
 
 
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], *args: object) -> ProcessResult:
-    return process_runner([TOOL, *args], env=env, timeout=30)
+    return process_runner([*TOOL, *args], env=env, timeout=30)
 
 
 def run_interface(
@@ -56,14 +55,10 @@ def test_init_cli_contract(process_runner, isolated_environment) -> None:
     result = run(process_runner, isolated_environment, "--help")
     assert_result(result, 0, stderr="")
     assert "Usage:" in result.stdout
-    assert "platform-pki-init --version | -v" in result.stdout
-    oracle_help = run_interface(
-        process_runner, isolated_environment, (ORACLE,), "--help"
-    )
-    assert result == ProcessResult(result.args, 0, oracle_help.stdout, "")
+    assert "Usage: platform-pki init" in result.stdout
 
-    result = run(process_runner, isolated_environment, "--version")
-    assert_result(result, 0, stdout=f"platform-pki-init {version}\n", stderr="")
+    result = process_runner([TOOL[0], "--version"], env=isolated_environment, timeout=30)
+    assert_result(result, 0, stdout=f"platform-pki {version}\n", stderr="")
 
     for arguments, message in ((["--unknown"], "invalid option: --unknown"), (["--namespace", ""], "must not be empty")):
         result = run(process_runner, isolated_environment, *arguments)
@@ -84,7 +79,7 @@ def test_frozen_oracle_and_assets_match_recorded_provenance() -> None:
 
 
 @pytest.mark.parametrize("tool", INTERFACES)
-def test_init_three_interfaces_fresh_repeat_force_and_preflight(
+def test_init_oracle_and_unified_interfaces_fresh_repeat_force_and_preflight(
     tmp_path,
     process_runner,
     isolated_environment,
@@ -384,10 +379,11 @@ def test_init_template_discovery_and_missing_templates(tmp_path, process_runner,
     (custom / "services.yml.example").write_text("custom template source\n")
     explicit_bin = executable_directory / "explicit/bin"
     explicit_bin.mkdir(parents=True)
-    (explicit_bin / TOOL.name).write_bytes(TOOL.read_bytes())
-    (explicit_bin / TOOL.name).chmod(0o755)
+    copied_tool = explicit_bin / "platform-pki"
+    copied_tool.write_bytes(TOOL[0].read_bytes())
+    copied_tool.chmod(0o755)
     result = process_runner(
-        [explicit_bin / TOOL.name, "--namespace", tmp_path / "custom-namespace", "--pki-dir", tmp_path / "custom-pki"],
+        [copied_tool, "init", "--namespace", tmp_path / "custom-namespace", "--pki-dir", tmp_path / "custom-pki"],
         env=environment(isolated_environment, PLATFORM_TOOLS_TEMPLATE_DIR=os.fspath(custom.parent)), timeout=30,
     )
     assert_result(result, 0, stderr="")
@@ -440,8 +436,9 @@ def test_init_installed_share_layout(tmp_path, process_runner, isolated_environm
     share = tmp_path / "installed/share"
     share.mkdir(parents=True)
     installed_bin.mkdir(parents=True)
-    (installed_bin / TOOL.name).write_bytes(TOOL.read_bytes())
-    (installed_bin / TOOL.name).chmod(0o755)
+    copied_tool = installed_bin / "platform-pki"
+    copied_tool.write_bytes(TOOL[0].read_bytes())
+    copied_tool.chmod(0o755)
     if templates_present:
         destination = share / "templates/pki"
         destination.mkdir(parents=True)
@@ -449,7 +446,7 @@ def test_init_installed_share_layout(tmp_path, process_runner, isolated_environm
             if source.is_file():
                 (destination / source.name).write_bytes(source.read_bytes())
     namespace = tmp_path / "installed-namespace"
-    result = process_runner([installed_bin / TOOL.name, "--namespace", namespace], env=environment(isolated_environment, PLATFORM_TOOLS_SHARE_DIR=os.fspath(share)), timeout=30)
+    result = process_runner([copied_tool, "init", "--namespace", namespace], env=environment(isolated_environment, PLATFORM_TOOLS_SHARE_DIR=os.fspath(share)), timeout=30)
     if templates_present:
         assert_result(result, 0, stderr="")
         assert (namespace / "pki/inventory/services.yml.example").is_file()

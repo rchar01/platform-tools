@@ -1476,7 +1476,7 @@ def _abort(transaction: _Transaction, original: BaseException) -> NoReturn:
     except BaseException as rollback_error:
         raise ApplicationError(
             "Intermediate bootstrap rollback failed; retained recovery evidence "
-            "requires platform-pki-ca-rollover recover"
+            "requires platform-pki ca-rollover recover"
         ) from rollback_error
     raise original
 
@@ -1501,11 +1501,11 @@ def _run_transaction(
     ):
         _die(
             "Legacy PKI state requires migration; create a fresh backup and follow "
-            "platform-pki-ca-rollover status/migrate"
+            "platform-pki ca-rollover status/migrate"
         )
     if os.path.lexists(active):
         _die(
-            "An active issuer exists; use platform-pki-ca-rollover instead of "
+            "An active issuer exists; use platform-pki ca-rollover instead of "
             "replacing the intermediate CA"
         )
     if not os.path.lexists(bootstrap):
@@ -1710,7 +1710,7 @@ def _run_transaction(
 
 
 def create_intermediate(parsed: ParseResult) -> int:
-    """Create the first intermediate through compatibility or unified dispatch."""
+    """Create the first intermediate through unified dispatch."""
 
     environment = dict(os.environ)
     name = str(parsed["--name"])

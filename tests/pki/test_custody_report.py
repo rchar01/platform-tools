@@ -30,15 +30,13 @@ from src.platform_pki.subprocesses import ProcessOutputOverflowError, ProcessTim
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOL = ROOT / "bin/platform-pki-custody-report"
-UNIFIED = ROOT / "bin/platform-pki"
+TOOL = (ROOT / "bin/platform-pki", "custody-report")
 ORACLE = ROOT / "tests/pki/oracles/platform-pki-custody-report/platform-pki-custody-report"
 ORACLE_COMMIT = "a2336a1518d41bf5dd2c5f2897a0c1c84128b5f4"
 ORACLE_SHA256 = "f17aa588e5d6d200f16c3ae416da15a18c839f29ae97963704d5f11b27f822e4"
 COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
 PYTHON_INTERFACES = (
-    pytest.param((TOOL,), id="compatibility"),
-    pytest.param((UNIFIED, "custody-report"), id="unified"),
+    pytest.param(TOOL, id="unified"),
 )
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ROOT_SECRET = "root-private-parameters-must-not-appear"
@@ -149,7 +147,7 @@ def _run(
     pki: Path,
     *arguments: str,
 ) -> ProcessResult:
-    return process_runner([TOOL, "--pki-dir", pki, *arguments], timeout=30)
+    return process_runner([*TOOL, "--pki-dir", pki, *arguments], timeout=30)
 
 
 def _run_interface(
@@ -202,14 +200,14 @@ def _sensitive_snapshot(pki: Path) -> dict[str, tuple[int, int, int, str]]:
 
 
 def test_help_and_version(process_runner: Callable[..., ProcessResult]) -> None:
-    help_result = process_runner([TOOL, "--help"])
+    help_result = process_runner([*TOOL, "--help"])
     assert help_result.status == 0
     assert "only the first PEM header line" in help_result.stdout
     assert help_result.stderr == ""
 
-    version_result = process_runner([TOOL, "--version"])
+    version_result = process_runner([TOOL[0], "--version"])
     assert version_result.status == 0
-    assert version_result.stdout == f"platform-pki-custody-report {VERSION}\n"
+    assert version_result.stdout == f"platform-pki {VERSION}\n"
     assert version_result.stderr == ""
 
 
@@ -219,17 +217,6 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     assert sha256((ROOT / "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh").read_bytes()).hexdigest() == COMMON_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
-
-
-def test_compatibility_help_matches_frozen_oracle(
-    process_runner: Callable[..., ProcessResult],
-) -> None:
-    environment = {**os.environ, "PLATFORM_TOOLS_LIB_DIR": os.fspath(ROOT / "tests/pki/oracles/final-bash-source/lib")}
-    oracle = process_runner([ORACLE, "--help"], env=environment)
-    result = process_runner([TOOL, "--help"], env=environment)
-    assert result.status == oracle.status == 0
-    assert result.stdout == oracle.stdout
-    assert result.stderr == oracle.stderr == ""
 
 
 @pytest.mark.parametrize("command", PYTHON_INTERFACES)
@@ -890,7 +877,7 @@ def test_non_luks_ancestry_is_evidence_not_unencrypted_finding(
         environment = os.environ.copy()
         environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
         result = process_runner(
-            [TOOL, "--pki-dir", pki, "--format", "json"],
+            [*TOOL, "--pki-dir", pki, "--format", "json"],
             env=environment,
             timeout=30,
         )
@@ -915,7 +902,7 @@ def test_empty_storage_ancestry_is_unknown(
         environment = os.environ.copy()
         environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
         result = process_runner(
-            [TOOL, "--pki-dir", pki, "--format", "json"],
+            [*TOOL, "--pki-dir", pki, "--format", "json"],
             env=environment,
             timeout=30,
         )
@@ -1175,7 +1162,7 @@ def test_report_creates_no_sensitive_path_list_temp_files(
     environment = {**os.environ, "TMPDIR": os.fspath(temporary)}
     before = tuple(temporary.iterdir())
     result = process_runner(
-        [TOOL, "--pki-dir", pki, "--format", "json"], env=environment, timeout=30
+        [*TOOL, "--pki-dir", pki, "--format", "json"], env=environment, timeout=30
     )
     assert result.status == 0
     assert tuple(temporary.iterdir()) == before

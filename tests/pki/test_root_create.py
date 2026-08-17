@@ -77,7 +77,7 @@ _DYNAMIC_RESERVATION_SIZE_FIELDS = frozenset(
 
 
 def _root_command(value, toolset, *arguments: str | Path) -> list[str | Path]:
-    return [toolset.root, "--namespace", value.namespace, *arguments]
+    return [*toolset.root, "--namespace", value.namespace, *arguments]
 
 
 def _normalize_root_token(value: str) -> str:
@@ -238,7 +238,7 @@ else:
     ("arguments", "status", "stdout_fragment", "stderr_fragment"),
     (
         pytest.param(("--help",), 0, "Usage:", "", id="help"),
-        pytest.param(("--version",), 0, "platform-pki-root-create", "", id="version"),
+        pytest.param(("--version",), 1, "", "invalid option: --version", id="version"),
         pytest.param(("--unknown",), 1, "", "invalid option: --unknown", id="unknown-option"),
         pytest.param(("--org", "Test", "--country", "PL"), 1, "", "missing required flag: --name CN", id="missing-name"),
         pytest.param(("--name", "", "--org", "Test", "--country", "PL"), 1, "", "must not be empty", id="empty-name"),
@@ -255,50 +255,14 @@ def test_parser_contract(
 ) -> None:
     toolset = tools()
     env = environment(tmp_path / "environment")
-    result = run(process_runner, [toolset.root, *arguments], env)
+    result = run(process_runner, [*toolset.root, *arguments], env)
     assert result.status == status
     assert stdout_fragment in result.stdout
     assert stderr_fragment in result.stderr
     if arguments == ("--help",):
-        assert "platform-pki-root-create --version | -v" in result.stdout
+        assert "Usage: platform-pki root-create" in result.stdout
         assert "--allow-unencrypted-root-key" in result.stdout
         assert result.stderr == ""
-    if arguments == ("--version",):
-        assert result.stdout == f"platform-pki-root-create {toolset.version}\n"
-        assert result.stderr == ""
-
-
-@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
-def test_direct_compatibility_help_matches_frozen_bashly_help(
-    tmp_path: Path,
-    process_runner: Callable[..., ProcessResult],
-    tty: bool,
-) -> None:
-    toolset = tools()
-    env = environment(tmp_path / "environment")
-    pty_mode = None
-    if tty:
-        env.pop("NO_COLOR")
-        pty_mode = "canonical"
-    expected = run(
-        process_runner,
-        [ROOT_CREATE_ORACLE, "--help"],
-        env,
-        pty_mode=pty_mode,
-    )
-    actual = run(
-        process_runner,
-        [toolset.root, "--help"],
-        env,
-        pty_mode=pty_mode,
-    )
-    assert (actual.status, actual.stdout, actual.stderr) == (
-        expected.status,
-        expected.stdout,
-        expected.stderr,
-    )
-
-
 def test_environment_days_rejects_non_numeric_value(
     tmp_path: Path, process_runner: Callable[..., ProcessResult]
 ) -> None:
@@ -669,9 +633,10 @@ def test_frozen_bash_and_python_root_writers_are_semantically_equivalent(
     if boundary is not None:
         base_environment["PLATFORM_PKI_ROOT_FAIL_AT"] = boundary
 
-    def argv(root: Path, command: Path) -> tuple[str | Path, ...]:
+    def argv(root: Path, command: Path | tuple[Path | str, ...]) -> tuple[str | Path, ...]:
+        prefix = (command,) if isinstance(command, Path) else command
         return (
-            command,
+            *prefix,
             "--namespace",
             root / "namespace",
             "--name",
@@ -771,7 +736,7 @@ def test_recovery_can_restart_at_every_rollback_checkpoint(
         "rollback-authority-pending", "rollback-authority-done",
         "rollback-reservation-pending", "rollback-reservation-done",
     )
-    command = [toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", "rollback", "--yes"]
+    command = [*toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", "rollback", "--yes"]
     for checkpoint in checkpoints:
         assert run(process_runner, command, dict(env, PLATFORM_PKI_RECOVER_CRASH_AT=checkpoint)).status == 137
     assert run(process_runner, command, env).status == 0
@@ -802,7 +767,7 @@ def test_crash_recovery_abandons_generation_and_retry_advances(
     initialize(process_runner, value, env, toolset)
     assert create_root(process_runner, value, dict(env, PLATFORM_PKI_ROOT_CRASH_AT=boundary), toolset, unencrypted=True).status == 137
     transaction = record(value.pki / "state/rollover/journal")["transaction"]
-    recovered = run(process_runner, [toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", "rollback", "--yes"], env)
+    recovered = run(process_runner, [*toolset.recover, "recover", "--namespace", value.namespace, "--transaction", transaction, "--action", "rollback", "--yes"], env)
     assert recovered.status == 0
     assert not (value.pki / "authorities/roots/g1").exists()
     assert not (value.pki / "state/bootstrap-root").exists()

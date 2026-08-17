@@ -1,11 +1,10 @@
 # OpenSSL PKI Helpers
 
 The unified `platform-pki <command>` interface manages a small internal OpenSSL
-PKI for platform TLS certificates. Starting with v2.3.0, use unified routes for
-new operator commands, documentation, and automation. The corresponding
-`platform-pki-*` executable names remain supported throughout the v2 release
-series and dispatch to the same Python handlers; they are scheduled for removal
-at the next major release. `platform-pki service-recover` is unified-only.
+PKI for platform TLS certificates. Production packaging generates and installs
+only `platform-pki`; legacy v2 alias executables are not part of the current
+command surface. See the exact manual cleanup procedure in the
+[upgrade section](../README.md#upgrade-from-v230).
 
 Generated CA keys, service keys, CSRs, issued certificates, CA database files, exports, and backups live outside Git under:
 
@@ -73,7 +72,8 @@ make install
 ```
 
 The install target copies commands into `INSTALL_DIR` and PKI templates into
-`SHARE_DIR`. PKI commands do not install or load shared shell libraries.
+`SHARE_DIR`. It installs one PKI zipapp, `platform-pki`. PKI commands do not
+install or load shared shell libraries.
 
 Use custom paths when needed:
 
@@ -191,8 +191,7 @@ platform-pki root-create \
 
 The root key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_ROOT_DAYS`, or 3650 when that environment variable is unset.
-The v2 compatibility alias `platform-pki-root-create` uses the same Python
-transaction writer. PKI paths must be ASCII because they are persisted in the
+PKI paths must be ASCII because they are persisted in the
 canonical schema-3 recovery journal; passphrase files are bound to OpenSSL
 through inherited descriptors rather than child path arguments.
 Root key, certificate, configuration, and database state are staged as a new
@@ -228,8 +227,7 @@ platform-pki intermediate-create \
 The first clean bootstrap allocates immutable intermediate generation `g1-i1`.
 Its key is encrypted by default. `--days` defaults to
 `PLATFORM_PKI_INTERMEDIATE_DAYS`, or 1825 when that environment variable is
-unset. The v2 compatibility alias `platform-pki-intermediate-create` uses the
-same Python schema-3 writer. Both passphrases reach only the applicable OpenSSL
+unset. Both passphrases reach only the applicable OpenSSL
 children through fresh inherited descriptors. Intermediate state and the root
 database update are staged privately from exact identity-checked root sources.
 After the allocated intermediate verifies against the exact bootstrap root, the command publishes
@@ -343,8 +341,7 @@ all requested checks succeed. Failures suppress raw OpenSSL diagnostics, and
 passphrases are passed through inherited descriptors rather than argv or the
 environment. The command writes no persistent receipt; a successful run is
 point-in-time evidence and does not prove offline custody or future recovery.
-The v2 compatibility alias `platform-pki-ca-passphrase-verify` uses the same
-Python 3.14 handler. Public keys are compared in bounded memory, so verification
+Public keys are compared in bounded memory, so verification
 creates no temporary public-key files or cleanup state.
 
 ## Service Inventory
@@ -417,9 +414,6 @@ PKI initialization:
 platform-pki csr-trust-install
 platform-pki csr-trust-install --private-repo /absolute/path/to/platform-private
 ```
-
-The v2 compatibility alias `platform-pki-csr-trust-install` uses the same Python
-handler.
 
 The source is `<private-repo>/pki/csr-trust`; the protected destination is
 `<pki-dir>/inventory/csr-trust`. The source directory must contain exactly:
@@ -526,6 +520,66 @@ host-local issue, migration, and renewal consume schema 1 or schema 2. Candidate
 decisions require schema 2. Explicit host-local Ansible export remains fail
 closed.
 
+## Offline CSR Approval And Signing
+
+Use the offline facade when request files cross a reviewed removable-media
+boundary. Generate the dedicated approval and response Ed25519 keys with
+`platform-ssh-init` without `--empty-passphrase`, review their public blobs into
+the trust policy, and install that public trust separately with
+`platform-pki csr-trust-install`. Package content never selects trust.
+
+Approval accepts an untrusted directory containing exactly `tls.csr`, `request`,
+and `request.sig`. It snapshots those bytes into protected local staging,
+authenticates the request and current inventory, displays its review on stderr,
+and no-clobber-publishes the exact five-file protected destination:
+
+```bash
+platform-pki offline-csr approve external \
+  --operation issue \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --input-dir /media/reviewed-request \
+  --approval-key /secure/offline-approval \
+  --output-dir /secure/approved/0123456789abcdef0123456789abcdef
+```
+
+`--output-dir` is the exact destination, not a parent from which the command
+infers a name. Approval samples one UTC timestamp after confirmation, expires no
+later than 24 hours or the request, and changes no CA, replay, candidate, export,
+or target state. A matching existing complete approval is reported as
+`existing`; incomplete, expired, changed, or conflicting destinations are never
+overwritten. If interruption retains a hidden same-parent approval stage, a
+retry preserves it and fails closed until the operator inspects and explicitly
+removes that exact stage; the command never adopts or deletes unbound retained
+material. Renewal additionally requires `--current-cert-file`; issue and
+migration prohibit it.
+
+Signing accepts exactly `tls.csr`, `request`, `request.sig`, `approval`, and
+`approval.sig`. It snapshots them into protected local staging and delegates all
+trust, predecessor, replay, CA, response, journal, and recovery behavior to the
+authoritative host-local writer:
+
+```bash
+platform-pki offline-csr sign external \
+  --operation issue \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --input-dir /secure/approved/0123456789abcdef0123456789abcdef \
+  --response-key /secure/offline-response \
+  --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
+```
+
+Both commands require the exact confirmation shown on the TTY unless `--yes` is
+supplied; `--yes` skips only that prompt. Successful stdout is one compact JSON
+object, while reviews, prompts, and diagnostics use stderr. Protected Ed25519
+keys prompt through the inherited terminal, and passphrases are not placed in
+arguments, the environment, or output. One person may operate the distinct
+request, approval, and CA roles in the same time frame, but this is key
+separation and must not be represented as independent-human approval. Identical
+requester and approver key blobs retain the protocol's 24-hour delay.
+
+Signing neither exports the response nor acts on a target. Continue with
+`certificate-export publish|resolve`; if signer recovery evidence remains, use
+only `platform-pki csr-recover`.
+
 ## Authenticated Host-Local CSR Signing
 
 Host-local signing requires all protocol inputs in one invocation. Issue and
@@ -554,9 +608,7 @@ platform-pki service-renew external \
   --current-cert-file ./current-tls.crt
 ```
 
-The v2 compatibility aliases `platform-pki-service-issue` and
-`platform-pki-service-renew` use the same Python handlers. Managed renewal
-recovery is unified-only through `platform-pki service-recover`; this host-local
+Managed renewal recovery uses `platform-pki service-recover`; this host-local
 flow continues to recover through `platform-pki csr-recover`.
 
 These inputs are current-user-owned, singly linked, non-writable-by-others
@@ -977,11 +1029,9 @@ service key, certificate files, and archive state. If a published destination
 is replaced by foreign state during recovery, that state and the locked staging
 directory are preserved for manual recovery rather than overwritten.
 
-The v2 compatibility alias `platform-pki-service-renew` runs this same Python
-whole-command handler. An interrupted managed transaction is recovered
-with exact transaction selection through `platform-pki service-recover`; an
-interrupted authenticated host-local transaction uses `platform-pki
-csr-recover`.
+An interrupted managed transaction is recovered with exact transaction selection
+through `platform-pki service-recover`; an interrupted authenticated host-local
+transaction uses `platform-pki csr-recover`.
 
 The renew command does not deploy anything to remote hosts. Deployment belongs in `platform-config`.
 
@@ -1127,8 +1177,7 @@ field set plus the bound archive path, device, inode, size, mode, and owner. It
 does not hash the archive payload. Visible and hidden backup entries are both
 inspected, and orphan receipts are reported.
 
-The v2 compatibility alias `platform-pki-custody-report` invokes the same Python
-3.14 handler. Recursive metadata and unexpected-key enumeration is
+Recursive metadata and unexpected-key enumeration is
 descriptor-relative, does not cross filesystems, follows no symlinks, and keeps
 private path names out of temporary files and report diagnostics. Receipt fields
 may be unordered and need no final newline; all 14 nonempty schema-2 fields must

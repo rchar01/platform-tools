@@ -11,9 +11,8 @@ from pathlib import Path
 import pytest
 
 from .harness import ProcessResult
-from .pki.migration_contract import PKI_COMMAND_CONTRACTS, PKI_PARSER_ROUTES
+from .pki.migration_contract import PKI_PARSER_ROUTES
 from .test_platform_pki_parser import MINIMAL_ARGUMENTS
-from src.platform_pki.parser import ROUTE_SPECS, render_usage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +33,6 @@ EXPECTED_MEMBERS = (
     "platform_pki/ca_rollover_status.py",
     "platform_pki/certificate_export.py",
     "platform_pki/cli.py",
-    "platform_pki/compat.py",
     "platform_pki/csr_candidate.py",
     "platform_pki/csr_history.py",
     "platform_pki/csr_protocol.py",
@@ -52,6 +50,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/inventory_install.py",
     "platform_pki/list_expiry.py",
     "platform_pki/locks.py",
+    "platform_pki/offline_csr.py",
     "platform_pki/operational.py",
     "platform_pki/parser.py",
     "platform_pki/paths.py",
@@ -60,11 +59,13 @@ EXPECTED_MEMBERS = (
     "platform_pki/publication.py",
     "platform_pki/records.py",
     "platform_pki/root_create.py",
+    "platform_pki/routes.py",
     "platform_pki/service_issue.py",
     "platform_pki/service_recover.py",
     "platform_pki/service_transaction.py",
     "platform_pki/service_verify.py",
     "platform_pki/service_writer.py",
+    "platform_pki/ssh_keys.py",
     "platform_pki/subprocesses.py",
     "platform_pki/tree_manifests.py",
 )
@@ -300,6 +301,8 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         ("csr-candidate", "finalize"),
         ("csr-candidate", "abandon"),
         ("csr-recover",),
+        ("offline-csr", "approve"),
+        ("offline-csr", "sign"),
         ("ca-rollover", "migrate"),
         ("ca-rollover", "status"),
         ("ca-rollover", "prepare"),
@@ -314,7 +317,7 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         ("export-ansible",),
     }:
         assert result.stderr.startswith(
-            "[ERROR] PKI directory does not exist; run platform-pki-init first: "
+            "[ERROR] PKI directory does not exist; run platform-pki init first: "
         )
     else:
         assert result.stderr == (
@@ -346,230 +349,73 @@ def test_every_frozen_unified_route_rejects_abbreviations_without_state(
     assert result.stderr == "invalid option: --namesp\n"
 
 
-@pytest.mark.parametrize(
-    "route",
-    tuple(
-        route
-        for route in PKI_PARSER_ROUTES
-        if route.compatibility_executable is not None
-    ),
-    ids=(
-        "-".join(route.unified_route)
-        for route in PKI_PARSER_ROUTES
-        if route.compatibility_executable is not None
-    ),
-)
-@pytest.mark.parametrize(
-    "probe",
-    (
-        "--namesp=/tmp/unsupported",
-        "--help=x",
-        "-hfoo",
-        "--bad.name=x",
-        "-h/",
-        "-h\N{LATIN SMALL LETTER E WITH ACUTE}",
-    ),
-)
-def test_every_route_matches_bashly_unknown_token_normalization(
-    process_runner: Callable[..., ProcessResult],
-    clean_environment: dict[str, str],
-    route,
-    probe: str,
-) -> None:
-    nested = route.unified_route[1:]
-    minimal = MINIMAL_ARGUMENTS[route.unified_route]
-    bash = _run(
-        process_runner,
-        clean_environment,
-        ROOT / "bin" / route.compatibility_executable,
-        *nested,
-        *minimal,
-        probe,
-    )
-    python = _run(
-        process_runner,
-        clean_environment,
-        ARTIFACT,
-        *route.unified_route,
-        *minimal,
-        probe,
-    )
-    if bash.status == python.status == 0:
-        assert bash.stdout and python.stdout
-        assert "Usage:" in bash.stdout and "Usage:" in python.stdout
-        assert bash.stderr == python.stderr == ""
-    else:
-        assert (python.status, python.stdout, python.stderr) == (
-            bash.status,
-            bash.stdout,
-            bash.stderr,
-        )
-
-
-@pytest.mark.parametrize(
-    "contract",
-    tuple(
-        contract
-        for contract in PKI_COMMAND_CONTRACTS
-        if contract.compatibility_name is not None
-    ),
-    ids=(
-        contract.compatibility_name
-        for contract in PKI_COMMAND_CONTRACTS
-        if contract.compatibility_name is not None
-    ),
-)
-def test_copied_compatibility_name_dispatches_outside_checkout(
+def test_copied_canonical_name_dispatches_outside_checkout(
     process_runner: Callable[..., ProcessResult],
     clean_environment: dict[str, str],
     tmp_path: Path,
-    contract,
 ) -> None:
-    copied = tmp_path / "installed" / contract.compatibility_name
+    copied = tmp_path / "installed/platform-pki"
     copied.parent.mkdir()
     shutil.copy2(ARTIFACT, copied)
-    version = _run(process_runner, clean_environment, copied, "--version", cwd=tmp_path)
+    copied.chmod(0o755)
+    version = _run(
+        process_runner, clean_environment, "python3", copied, "--version", cwd=tmp_path
+    )
     _assert_success(version)
-    assert version.stdout == f"{contract.compatibility_name} {VERSION}\n"
+    assert version.stdout == f"platform-pki {VERSION}\n"
 
-    help_result = _run(process_runner, clean_environment, copied, "--help", cwd=tmp_path)
-    _assert_success(help_result)
-    operational_descriptions = {
-        "init": "Create the local outside-Git PKI working directory",
-        "inventory-install": "Install private-Git service inventory into local PKI state",
-        "csr-trust-install": "Install reviewed host-local CSR signing trust",
-        "csr-recover": "Recover an authenticated host-local CSR signing transaction",
-        "list-expiry": "List expiry dates for generated service certificates",
-        "print-cert": "Print readable details for a generated service certificate",
-        "root-create": "Create the root CA key and certificate",
-        "intermediate-create": "Create the intermediate CA key, certificate, and CA chain",
-        "service-issue": "Issue a service certificate from PKI inventory",
-        "service-renew": "Renew a service certificate from PKI inventory",
-        "service-verify": "Verify a generated service certificate",
-        "export-ansible": "Export generated PKI files into an Ansible-consumable layout",
-        "backup": "Create a backup archive of the outside-Git PKI directory",
-        "custody-report": "Report PKI encryption, custody, and backup-policy findings",
-        "ca-passphrase-verify": "Verify active CA key passphrases and certificate matches",
-    }
-    if contract.unified_route == "certificate-export":
-        expected_usage = (
-            f"{contract.compatibility_name} - Publish or resolve an immutable "
-            "certificate-only CSR export\n"
-        )
-    elif contract.unified_route == "csr-candidate":
-        expected_usage = (
-            f"{contract.compatibility_name} - Verify, finalize, or abandon "
-            "authenticated CSR candidate evidence\n"
-        )
-    elif contract.unified_route in operational_descriptions:
-        expected_usage = (
-            f"{contract.compatibility_name} - "
-            f"{operational_descriptions[contract.unified_route]}\n"
-        )
-    elif contract.unified_route == "ca-rollover":
-        expected_usage = (
-            "platform-pki-ca-rollover - Prepare or inspect generation-aware CA "
-            "rollover state\n"
-        )
-    elif contract.nested_commands:
-        expected_usage = f"Usage: {contract.compatibility_name} COMMAND [OPTIONS]\n"
-    else:
-        expected_usage = render_usage(
-            contract.compatibility_name,
-            ROUTE_SPECS[(contract.unified_route,)],
-            compatibility=True,
-        )
-    assert help_result.stdout.startswith(expected_usage)
-
-    invalid = _run(process_runner, clean_environment, copied, "--invalid", cwd=tmp_path)
-    assert invalid.status == 1
-    assert invalid.stdout == ""
-    if contract.nested_commands:
-        assert invalid.stderr.startswith("[ERROR] Unknown ")
-    else:
-        assert invalid.stderr == "invalid option: --invalid\n"
-
-    route = (
-        (contract.unified_route, contract.nested_commands[0])
-        if contract.nested_commands
-        else (contract.unified_route,)
-    )
-    operational_arguments = (
-        (*contract.nested_commands[:1], *MINIMAL_ARGUMENTS[route])
-    )
-    unavailable = _run(
+    help_result = _run(
         process_runner,
         clean_environment,
+        "python3",
         copied,
-        *operational_arguments,
+        "certificate-export",
+        "resolve",
+        "--help",
         cwd=tmp_path,
     )
-    assert unavailable.status == 1
-    assert unavailable.stdout == ""
-    if contract.unified_route in {
+    _assert_success(help_result)
+    assert help_result.stdout.startswith(
+        "Usage: platform-pki certificate-export resolve SERVICE [OPTIONS]\n"
+    )
+
+    invalid = _run(
+        process_runner,
+        clean_environment,
+        "python3",
+        copied,
         "certificate-export",
-        "csr-candidate",
-        "csr-recover",
-    }:
-        assert unavailable.stderr.startswith(
-            "[ERROR] PKI directory does not exist; run platform-pki-init first: "
-        )
-    elif contract.unified_route == "csr-trust-install":
-        assert unavailable.stderr.startswith(
-            "[ERROR] CSR trust source directory is missing or unsafe: "
-        )
-    elif contract.unified_route in {*operational_descriptions, "ca-rollover"}:
-        assert unavailable.stderr
-        assert "platform-pki-common.sh" not in unavailable.stderr
-    else:
-        assert "not available in the Python foundation" in unavailable.stderr
-
-    for nested in contract.nested_commands:
-        nested_help = _run(
-            process_runner,
-            clean_environment,
-            copied,
-            nested,
-            "--help",
-            cwd=tmp_path,
-        )
-        _assert_success(nested_help)
-        if contract.unified_route in {"certificate-export", "csr-candidate"}:
-            descriptions = {
-                "publish": "Publish one exact pending CSR response as an immutable export",
-                "resolve": "Resolve one digest-pinned immutable certificate export",
-                "verify": "Verify one exact candidate and report accepted historical state",
-                "finalize": "Accept authenticated activation and validation evidence",
-                "abandon": "Record authenticated non-activation or rollback evidence",
-            }
-            assert nested_help.stdout.startswith(
-                f"{contract.compatibility_name} {nested} - {descriptions[nested]}\n"
-            )
-        else:
-            assert nested_help.stdout.startswith(
-                render_usage(
-                    contract.compatibility_name,
-                    ROUTE_SPECS[(contract.unified_route, nested)],
-                    compatibility=True,
-                )
-            )
+        "resolve",
+        "--invalid",
+        cwd=tmp_path,
+    )
+    assert invalid.status == 1
+    assert invalid.stdout == ""
+    assert invalid.stderr == "invalid option: --invalid\n"
 
 
-def test_unknown_copied_invocation_name_fails_closed_before_actions(
+def test_renamed_copy_keeps_canonical_dispatch(
     process_runner: Callable[..., ProcessResult],
     clean_environment: dict[str, str],
     tmp_path: Path,
 ) -> None:
     copied = tmp_path / "installed/platform-pki-unknown"
     copied.parent.mkdir()
-    shutil.copy2(ARTIFACT, copied)
+    BUILDER.build_archive(ROOT / "src/platform_pki", ROOT / "VERSION", copied)
     for action in ("--help", "--version"):
-        result = _run(process_runner, clean_environment, copied, action, cwd=tmp_path)
-        assert result.status == 1
-        assert result.stdout == ""
-        assert result.stderr == (
-            "[ERROR] Unsupported invocation name: platform-pki-unknown\n"
+        result = _run(
+            process_runner,
+            clean_environment,
+            "python3",
+            copied,
+            action,
+            cwd=tmp_path,
         )
+        _assert_success(result)
+        if action == "--help":
+            assert result.stdout.startswith("Usage: platform-pki COMMAND [OPTIONS]\n")
+        else:
+            assert result.stdout == f"platform-pki {VERSION}\n"
 
 
 def test_python_version_guard_precedes_cli_import(
@@ -612,7 +458,13 @@ def test_copied_execution_ignores_import_and_shell_overrides(
         "PLATFORM_TOOLS_SHARE_DIR": os.fspath(poison),
         "PLATFORM_TOOLS_TEMPLATE_DIR": os.fspath(poison),
     }
-    result = _run(process_runner, environment, copied, "--version", cwd=poison.parent)
+    result = _run(
+        process_runner,
+        environment,
+        copied,
+        "--version",
+        cwd=poison.parent,
+    )
     _assert_success(result)
     assert result.stdout == f"platform-pki {VERSION}\n"
 

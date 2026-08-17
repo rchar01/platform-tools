@@ -677,7 +677,7 @@ def _install_locked(
 
 
 def install_inventory(parsed: ParseResult) -> int:
-    """Run the Bash-compatible inventory installation workflow."""
+    """Run the inventory installation workflow."""
 
     environment = dict(os.environ)
     namespace_value = parsed.values.get("--namespace")
@@ -732,7 +732,7 @@ def install_inventory(parsed: ParseResult) -> int:
     _require_no_symlink_components(pki_dir, "PKI directory")
     if not os.path.isdir(pki_dir):
         _die(
-            "PKI directory does not exist; run platform-pki-init first: "
+            "PKI directory does not exist; run platform-pki init first: "
             f"{pki_dir}"
         )
     _prepare_control_state(pki_dir)

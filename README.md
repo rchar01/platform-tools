@@ -32,6 +32,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | --- | --- |
 | `platform-ssh-init` | Create purpose-specific SSH identities and optional SSH config blocks. |
 | `platform-vm-env-collect` | Collect VM environment facts for rebuild planning. |
+| `platform-runtime-evidence` | Collect secret-free PKI runtime and installation evidence from one reviewed environment. |
 | `platform-config-init` | Create the local outside-Git secret namespace under `~/.config/platform-infrastructure/`. |
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
@@ -39,11 +40,9 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-pki` | Unified Python PKI interface for all maintained PKI routes. |
 | `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
-Starting with v2.3.0, use `platform-pki <command>` for new operator commands,
-documentation, and automation. The corresponding `platform-pki-*` executable
-names remain supported throughout the v2 release series and dispatch to the same
-Python handlers. They are scheduled for removal at the next major release.
-`platform-pki service-recover` is unified-only.
+PKI operations use only `platform-pki <command>`. Production packaging generates
+and installs one PKI executable, `platform-pki`; the 18 v2 compatibility aliases
+are not part of the current command surface.
 
 ## Install
 
@@ -66,6 +65,44 @@ make install \
 
 Ensure the install directory is on `PATH` when using tools by command name.
 
+### Upgrade From v2.3.0
+
+This working tree is post-v2.3.0 next-major development. `VERSION` remains
+`2.3.0` until the release gate is complete.
+
+Before installing this boundary over a v2.3.0 installation, inspect these exact
+legacy paths under `INSTALL_DIR`:
+
+- `platform-pki-init`
+- `platform-pki-inventory-install`
+- `platform-pki-print-cert`
+- `platform-pki-list-expiry`
+- `platform-pki-service-verify`
+- `platform-pki-export-ansible`
+- `platform-pki-backup`
+- `platform-pki-custody-report`
+- `platform-pki-ca-passphrase-verify`
+- `platform-pki-root-create`
+- `platform-pki-intermediate-create`
+- `platform-pki-csr-recover`
+- `platform-pki-service-issue`
+- `platform-pki-service-renew`
+- `platform-pki-csr-trust-install`
+- `platform-pki-certificate-export`
+- `platform-pki-csr-candidate`
+- `platform-pki-ca-rollover`
+
+Remove or relocate each listed path manually after inspection. Do not use a
+wildcard deletion such as `rm platform-pki-*`; similarly named protocol,
+archive, marker, or local operator files are not cleanup targets. `make install`
+checks every exact legacy path, including dangling symlinks, before any install
+mutation. If one exists, installation fails and lists it; the installer never
+deletes or replaces a legacy alias.
+
+Update automation to the corresponding `platform-pki <command>` route before
+cleanup. A copied or renamed `platform-pki` archive still behaves canonically as
+`platform-pki`; its filename does not select a legacy route.
+
 ## Requirements
 
 Core local requirements:
@@ -83,7 +120,7 @@ PKI helpers require:
 - OpenSSH `ssh-keygen` for validating trust keys and signing or verifying host-local CSR exchange manifests
 - `tar` with `--no-wildcards` support for safe PKI backup exclusions
 - `age` for encrypted `platform-pki backup` output; plain `.tar.gz` backup requires explicit `--allow-plain-backup`
-- Python 3.14 or newer for the unified `platform-pki` zipapp and all Python-backed `platform-pki-*` compatibility commands, including `platform-pki-ca-rollover`
+- Python 3.14 or newer for the unified `platform-pki` zipapp
 - Linux `O_TMPFILE`, linkable `/proc/self/fd` entries, and reliable advisory locks on the PKI filesystem for Python-backed operational lock acquisition
 - optional util-linux `findmnt` and `lsblk` for `platform-pki custody-report` LUKS-ancestry evidence; unsupported storage ancestry is reported as `unknown`
 
@@ -127,7 +164,7 @@ Run all maintained checks across both pinned containers:
 make container-check
 ```
 
-This is the canonical final acceptance command. It verifies the six remaining
+This is the canonical final acceptance command. It verifies the seven
 non-PKI Bashly artifacts and runs ShellCheck in the development image, then runs syntax checks,
 the complete pytest aggregate once, and the archive smoke in the test image. Do
 not run `make test` immediately before it unless a separate host-environment
@@ -188,17 +225,15 @@ Run the authoritative PKI rollover pytest scenarios:
 make test-pki-ca-rollover
 ```
 
-Run the same complete suite while forcing recovery scenarios through the
-generated unified command instead of the Python compatibility launcher:
+Run the same complete suite through the generated unified recovery command:
 
 ```bash
 make test-pki-ca-rollover-python-recover
 ```
 
-The compatibility `platform-pki-ca-rollover` executable and unified
-`platform-pki ca-rollover` route use the same Python handlers for migration,
-status, preparation, and recovery. Frozen final-Bash executables, libraries,
-and source fragments remain only under `tests/pki/oracles/` as test evidence.
+`platform-pki ca-rollover` uses Python handlers for migration, status,
+preparation, and recovery. Frozen final-Bash executables, libraries, and source
+fragments remain only under `tests/pki/oracles/` as historical test evidence.
 
 Within `make test`, the authoritative rollover target runs only after the
 non-rollover pool and uses four workers by default. Invoking the rollover target
@@ -232,7 +267,13 @@ Run the focused immutable certificate-only export scenarios:
 make test-pki-certificate-export
 ```
 
-Generate the six non-PKI Bashly-backed executables and verify that committed
+Run the focused removable-media CSR approval and signing facade scenarios:
+
+```bash
+make test-pki-offline-csr
+```
+
+Generate the seven non-PKI Bashly-backed executables and verify that committed
 output is current:
 
 ```bash
@@ -342,6 +383,26 @@ Collect facts from a VM:
 sudo platform-vm-env-collect
 ```
 
+Collect PKI runtime and installation evidence without reading PKI state or
+executing the installed `platform-pki` artifact:
+
+```bash
+platform-runtime-evidence \
+  --identity operator-01 \
+  --role operator-controller \
+  --owner platform-operator \
+  --executes-pki yes \
+  --install-dir /home/operator/.local/bin \
+  > operator-01.runtime-evidence
+```
+
+Use `--invoke-version` only when executing the selected artifact's
+`--version` route is explicitly approved. Point `--probe-dir` at the reviewed
+PKI filesystem when its `O_TMPFILE`, procfs-link, and advisory-lock results are
+intended as filesystem readiness evidence. Collection does not certify a role;
+review the fixed-order schema-1 record and its `runtime_status` as described in
+[`docs/platform-runtime-evidence.md`](docs/platform-runtime-evidence.md).
+
 Create the outside-Git local secret namespace with `infra/`, `config/`, and `pki/`:
 
 ```bash
@@ -428,9 +489,7 @@ different private repository. `platform-pki init --force` refreshes only the
 example and does not replace active inventory, CA keys, certificates, or
 database state. Existing PKI directories must
 be owned by the current user and must not be group- or world-writable.
-The corresponding `platform-pki-*` names remain supported v2 compatibility
-aliases until the next major release. Managed service transaction recovery is
-unified-only:
+Managed service transaction recovery uses:
 
 ```bash
 platform-pki service-recover \
@@ -458,6 +517,18 @@ revocation. Managed keys and exports remain
 through the configured hold and require separate cleanup approval. Explicit
 host-local Ansible export remains rejected.
 
+For a reviewed removable-media handoff, `platform-pki offline-csr approve`
+authenticates an exact three-file request directory and atomically publishes an
+exact protected five-file approval directory. `platform-pki offline-csr sign`
+reopens that exact directory, presents the authoritative signer precommit
+review, and delegates issue, migration, or renewal to the existing host-local
+writer. Both commands require explicit service, operation, and request ID and an
+exact TTY confirmation unless `--yes` is supplied. The same human may operate
+the distinct approval and CA roles, but this is key separation, not independent
+human approval; identical requester and approver keys retain the protocol's
+24-hour delay. Signing does not export a response or act on a target, and any
+retained signing transaction recovers only through `platform-pki csr-recover`.
+
 Publish or resolve one exact certificate-only pending response:
 
 ```bash
@@ -469,9 +540,8 @@ platform-pki certificate-export resolve platform-example \
   --manifest-sha256 <sha256>
 ```
 
-The v2 compatibility alias `platform-pki-certificate-export` uses the same
-Python handler. Publication contains no private key; resolution requires the
-reported exact manifest digest and performs no deployment or finalization.
+Publication contains no private key; resolution requires the reported exact
+manifest digest and performs no deployment or finalization.
 
 Install reviewed public trust before signing:
 
@@ -479,9 +549,6 @@ Install reviewed public trust before signing:
 platform-pki csr-trust-install
 platform-pki csr-trust-install --private-repo /absolute/path/to/platform-private
 ```
-
-The v2 compatibility alias `platform-pki-csr-trust-install` uses the same Python
-handler.
 
 The command accepts the exact four-file schema-1 signing/export trust set or
 the exact five-file schema-2 set that adds `deployers.allowed_signers` under
@@ -543,8 +610,7 @@ platform-pki ca-passphrase-verify \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
 
-The v2 compatibility alias `platform-pki-ca-passphrase-verify` uses the same
-Python handler. It holds the standard lifecycle, root, and intermediate locks,
+It holds the standard lifecycle, root, and intermediate locks,
 passes secrets to OpenSSL through inherited descriptors, suppresses OpenSSL
 diagnostics, and writes no persistent validation receipt. Success is
 point-in-time evidence; `platform-pki custody-report` continues to report
@@ -561,8 +627,7 @@ public-artifact roles. It inspects metadata, storage ancestry, `age` headers,
 and only the first PEM header line of validated private-key files. It reports
 offline custody, recipient separation, offsite copies, restore rehearsal, and
 target-host leaf custody as `unknown` because filesystem structure cannot prove
-those operational controls. The compatibility command and
-`platform-pki custody-report` use the same Python handler. Metadata-only scans
+those operational controls. Metadata-only scans
 are descriptor-relative, stay on the PKI filesystem, and do not stage private
 path lists. Header reads consume at most 257 bytes, receipt reads reject content
 above 65,536 bytes, and receipt archive digests are recorded compatibility
@@ -572,13 +637,11 @@ Service renewal requires an existing private key, reuses it unless
 `--rotate-key` is requested, and archives previous service material while
 transactionally replacing the certificate and intermediate CA database. Both
 operations hold ordered root, intermediate, and inventory locks through
-verification and consume one validated inventory snapshot. The compatibility
-command and `platform-pki service-renew` use the same Python whole-command
-handler. Interrupted managed renewal uses unified-only `service-recover`;
+verification and consume one validated inventory snapshot. Interrupted managed
+renewal uses `platform-pki service-recover`;
 host-local renewal continues to use `csr-recover`.
 
-`platform-pki root-create` and its v2 compatibility alias
-`platform-pki-root-create` use the same Python transaction writer. It generates
+`platform-pki root-create` uses a Python transaction writer. It generates
 the key and certificate in private staging,
 passes passphrase files to OpenSSL through inherited descriptors, and publishes
 the immutable generation without clobbering an existing destination. It refuses
@@ -589,9 +652,8 @@ PKI paths used in the schema-3 recovery journal must be ASCII. Root keys remain
 encrypted by default, and unencrypted root keys require the explicit
 `--allow-unencrypted-root-key` opt-in.
 
-`platform-pki intermediate-create` and its v2 compatibility alias
-`platform-pki-intermediate-create` use the same Python schema-3 transaction
-writer. It binds both passphrase files to
+`platform-pki intermediate-create` uses a Python schema-3 transaction writer.
+It binds both passphrase files to
 OpenSSL through inherited descriptors and stages its key, CSR, certificate,
 chain, and exact root CA database update. Authoritative root files are copied
 through identity-checked descriptors and rechecked before publication. It
@@ -638,6 +700,7 @@ If running directly from a checkout before install:
 
 ```bash
 sudo ./bin/platform-vm-env-collect
+./bin/platform-runtime-evidence --identity operator-01 --role operator-controller --owner unassigned --executes-pki yes --install-dir "$HOME/.local/bin"
 ./bin/platform-config-init
 ./bin/platform-proxmox-token-init --ssh root@<proxmox-ip>
 ./bin/platform-proxmox-vm-cleanup --ssh root@<proxmox-ip> --identity-file ~/.ssh/platform-template-builder_ed25519 --vmid 9900
@@ -652,6 +715,7 @@ sudo ./bin/platform-vm-env-collect
 | --- | --- |
 | `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
 | `docs/platform-vm-env-collect.md` | VM environment collector usage, output structure, and safety notes. |
+| `docs/platform-runtime-evidence.md` | Secret-free PKI runtime, artifact, prerequisite, capability, and exact legacy-alias evidence collection. |
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
 | `docs/bastion-policy.md` | Kubernetes bastion access-policy validation and rendering flow. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |

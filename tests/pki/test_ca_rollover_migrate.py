@@ -189,7 +189,7 @@ def _migration_command(
     intermediate_fingerprint: str = "0" * 64,
 ) -> list[str | Path]:
     return [
-        tools.rollover,
+        *tools.rollover,
         "migrate",
         "--namespace",
         workspace.namespace,
@@ -243,7 +243,7 @@ def _recovery_command(
     action: str,
 ) -> list[str | Path]:
     return [
-        tools.rollover,
+        *tools.rollover,
         "recover",
         "--namespace",
         workspace.namespace,
@@ -588,7 +588,7 @@ def test_migration_rejects_replaced_transaction_evidence(
 
     result = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -686,7 +686,7 @@ def test_migration_failure_boundary_rollback(
 
     status = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -710,7 +710,7 @@ def test_migration_failure_boundary_rollback(
 
     recovery = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -860,7 +860,7 @@ def test_migration_failure_boundary_resume(
 
     status = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -884,7 +884,7 @@ def test_migration_failure_boundary_resume(
 
     recovery = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "recover",
             "--namespace",
             workspace.namespace,
@@ -1038,7 +1038,7 @@ def test_migration_unresolved_recovery_state(
 
     status = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -1717,7 +1717,7 @@ def test_missing_generation_destination_preparation_is_safely_retryable(
     assert not (workspace.pki / "state/rollover/recovery-required").exists()
     status = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,

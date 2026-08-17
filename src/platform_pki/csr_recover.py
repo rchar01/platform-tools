@@ -64,7 +64,8 @@ from .publication import (
     replace_exact,
     unlink_exact,
 )
-from .subprocesses import ProcessResult, run_process
+from .subprocesses import ProcessResult
+from .ssh_keys import run_ssh_keygen
 
 
 MAX_FINALIZATION_JOURNAL_BYTES = 1024 * 1024
@@ -1878,15 +1879,8 @@ def _run_ssh_keygen(
     pass_fds: tuple[int, ...] = (),
 ) -> ProcessResult:
     try:
-        result = run_process(
-            argv,
-            env=environment,
-            timeout=30.0,
-            term_grace=1.0,
-            stdout_limit=1024 * 1024,
-            stderr_limit=1024 * 1024,
-            input=input,
-            pass_fds=pass_fds,
+        result = run_ssh_keygen(
+            argv, environment, input=input, pass_fds=pass_fds
         )
     except ApplicationError:
         _die("OpenSSH signature operation failed")

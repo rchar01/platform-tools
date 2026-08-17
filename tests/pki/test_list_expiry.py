@@ -15,7 +15,7 @@ from .migration_harness import run_differential_case
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOL = ROOT / "bin/platform-pki-list-expiry"
+TOOL = (ROOT / "bin/platform-pki", "list-expiry")
 ORACLE = ROOT / "tests/pki/oracles/platform-pki-list-expiry/platform-pki-list-expiry"
 ORACLE_COMMIT = "b421370123db006148d0439af3e35efd47bcda2f"
 ORACLE_SHA256 = "62a9a4d7fba7400935f91e9fe14843300ceb44992835501ce9c84df728e8eb27"
@@ -159,9 +159,9 @@ def _run(
     process_runner: Callable[..., ProcessResult],
     arguments: Sequence[str | Path],
     environment: Mapping[str, str] | None = None,
-    tool: Path | Sequence[str | Path] = TOOL,
+    tool: Sequence[str | Path] = TOOL,
 ) -> ProcessResult:
-    command = (tool,) if isinstance(tool, Path) else tuple(tool)
+    command = tuple(tool)
     effective_environment = environment
     if command == (ORACLE,):
         effective_environment = dict(os.environ if environment is None else environment)
@@ -174,8 +174,7 @@ def _run(
 
 OPERATIONAL_TOOLS = (
     pytest.param((ORACLE,), id="bash-oracle"),
-    pytest.param((TOOL,), id="python-compatibility"),
-    pytest.param((UNIFIED, "list-expiry"), id="python-unified"),
+    pytest.param(TOOL, id="python-unified"),
 )
 
 
@@ -183,14 +182,14 @@ def test_help(process_runner: Callable[..., ProcessResult]) -> None:
     result = _run(process_runner, ["--help"])
     assert result.status == 0
     assert "Usage:" in result.stdout
-    assert "platform-pki-list-expiry --version | -v" in result.stdout
+    assert "Usage: platform-pki list-expiry" in result.stdout
     assert result.stderr == ""
 
 
 def test_version(process_runner: Callable[..., ProcessResult]) -> None:
-    result = _run(process_runner, ["--version"])
+    result = _run(process_runner, ["--version"], tool=(UNIFIED,))
     assert result == ProcessResult(
-        result.args, 0, f"platform-pki-list-expiry {VERSION}\n", ""
+        result.args, 0, f"platform-pki {VERSION}\n", ""
     )
 
 
@@ -440,24 +439,24 @@ def test_missing_installed_share_library_is_ignored(
     pki = tmp_path / "ok"
     _inventory(pki, "ok-service", authority_certificates)
     _certificate(pki, "ok-service", 120, tmp_path, process_runner)
-    tool = tmp_path / "installed/bin/platform-pki-list-expiry"
+    tool = tmp_path / "installed/bin/platform-pki"
     tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, tool)
+    shutil.copy2(TOOL[0], tool)
     environment = dict(
         os.environ, PLATFORM_TOOLS_SHARE_DIR=os.fspath(tmp_path / "installed/share")
     )
 
-    result = _run(process_runner, ["--pki-dir", pki], environment, tool)
+    result = _run(process_runner, ["--pki-dir", pki], environment, (tool, "list-expiry"))
 
     assert result.status == 0
     assert result.stderr == ""
     assert "ok-service" in result.stdout
 
 
-def _isolated_tool(tmp_path: Path) -> tuple[Path, Mapping[str, str]]:
-    tool = tmp_path / "isolated/bin/platform-pki-list-expiry"
+def _isolated_tool(tmp_path: Path) -> tuple[tuple[Path | str, ...], Mapping[str, str]]:
+    tool = tmp_path / "isolated/bin/platform-pki"
     tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, tool)
+    shutil.copy2(TOOL[0], tool)
     home = tmp_path / "isolated/home"
     home.mkdir(mode=0o700)
     environment = dict(
@@ -465,7 +464,7 @@ def _isolated_tool(tmp_path: Path) -> tuple[Path, Mapping[str, str]]:
         HOME=os.fspath(home),
         PLATFORM_TOOLS_SHARE_DIR=os.fspath(tmp_path / "isolated/missing"),
     )
-    return tool, environment
+    return (tool, "list-expiry"), environment
 
 
 def test_help_does_not_require_shared_library(

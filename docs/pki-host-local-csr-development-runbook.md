@@ -29,10 +29,8 @@ a currently executable full lifecycle. Canonical references:
 If this document conflicts with either canonical PKI document, stop. Do not
 change field order, substitute a signature, or invent a helper command.
 
-Command templates use the recommended unified `platform-pki <command>`
-interface. The corresponding `platform-pki-*` executable names remain supported
-throughout the v2 release series and are scheduled for removal at the next major
-release.
+Command templates use the production `platform-pki <command>` interface. Legacy
+v2 alias names are not installed.
 
 ## Inert Command Convention
 Every command block is a template, not a script. A consequential block starts
@@ -419,6 +417,14 @@ Separate target and approver keys permit immediate post-review approval, never
 backdating or skipped review. Sign/verify under
 `platform-pki-csr-approval-v1` against frozen approver trust.
 
+For the removable-media profile, use `platform-pki offline-csr approve` with
+the explicit service, `migrate` operation, request ID, three-file request
+directory, protected approval key, and exact protected five-file destination.
+That supported route performs the review, canonical record creation, signature,
+verification, and no-clobber publication. The manual commands below remain
+development evidence for this direct SFTP profile; they are not a second
+production implementation.
+
 ```bash
 : "${PKI_LIVE_AUTHORIZATION:?separate approval authorization required}" && ssh-keygen -Y sign -f "${DEV_APPROVER_KEY:?protected dedicated approver key required}" -n platform-pki-csr-approval-v1 "${APPROVAL_DIR:?protected approval directory required}/approval"
 ```
@@ -428,9 +434,12 @@ backdating or skipped review. Sign/verify under
 ```
 
 ## Phase 4: Existing Migration Signer
-There is no migration helper. After the selection gate and separate CA mutation
-authorization, use exact existing `platform-pki service-issue`; do not pass
-`--current-cert-file`, `--days`, or `--rotate-key`:
+For the removable-media profile, use `platform-pki offline-csr sign` with the
+explicit `migrate` coordinates and exact five-file approved directory. It
+delegates to this same signer after authenticated review. For this direct SFTP
+profile, after the selection gate and separate CA mutation authorization, use
+exact `platform-pki service-issue`; do not pass `--current-cert-file`, `--days`,
+or `--rotate-key`:
 
 ```bash
 : "${PKI_LIVE_AUTHORIZATION:?separate CA signing authorization required}" && platform-pki service-issue registry-dev --namespace "${DEV_NAMESPACE:?current development namespace required}" --intermediate-pass-file "${DEV_INTERMEDIATE_PASS_FILE:?mode-600 secret mount required}" --csr-file "${REQUEST_DIR:?protected request directory required}/tls.csr" --request-file "${REQUEST_DIR:?protected request directory required}/request" --request-signature "${REQUEST_DIR:?protected request directory required}/request.sig" --approval-file "${APPROVAL_DIR:?protected approval directory required}/approval" --approval-signature "${APPROVAL_DIR:?protected approval directory required}/approval.sig" --response-key "${DEV_RESPONSE_KEY:?protected response key required}"
@@ -625,9 +634,8 @@ Finalization records historical evidence; it performs no deployment/discovery.
 | `platform-pki certificate-export publish/resolve` | Exact six-file digest-pinned export. |
 | `platform-pki csr-candidate verify/finalize/abandon` | Historical authenticated decisions; no live action. |
 
-The v2 compatibility aliases share the same Python handlers. Host-local
-interruption recovery remains `platform-pki csr-recover`; managed renewal uses
-unified-only `platform-pki service-recover`.
+Host-local interruption recovery remains `platform-pki csr-recover`; managed
+renewal uses `platform-pki service-recover`.
 
 | Manual/future operation | Status |
 | --- | --- |

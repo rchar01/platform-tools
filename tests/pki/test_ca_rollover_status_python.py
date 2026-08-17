@@ -29,6 +29,16 @@ ORACLE_LIBRARY_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c
 DRIVER = REPOSITORY / "tests/pki/ca_rollover_status_driver.py"
 
 
+def _normalize_retired_command_guidance(output: str) -> str:
+    return output.replace(
+        "platform-pki-backup, then platform-pki-ca-rollover migrate",
+        "platform-pki backup, then platform-pki ca-rollover migrate",
+    ).replace(
+        "platform-pki-ca-rollover recover",
+        "platform-pki ca-rollover recover",
+    )
+
+
 def _compare(
     workspace: RolloverWorkspace,
     environment: Mapping[str, str],
@@ -48,7 +58,7 @@ def _compare(
     )
     assert (python.status, python.stdout, python.stderr) == (
         oracle.status,
-        oracle.stdout,
+        _normalize_retired_command_guidance(oracle.stdout),
         oracle.stderr,
     )
     assert control_tree_snapshot(workspace.pki) == before
@@ -202,7 +212,7 @@ def test_python_status_prepared_root_matches_frozen_oracle(
     receipt = backup_receipt_factory(workspace)
     prepared = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "prepare",
             "--namespace",
             workspace.namespace,
@@ -485,7 +495,7 @@ def test_python_status_prepared_matches_frozen_oracle(
     receipt = backup_receipt_factory(workspace)
     prepared = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "prepare",
             "--namespace",
             workspace.namespace,
@@ -547,7 +557,7 @@ def test_python_status_rejects_coherent_unrelated_candidate_certificate(
     receipt = backup_receipt_factory(workspace)
     prepared = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "prepare",
             "--namespace",
             workspace.namespace,

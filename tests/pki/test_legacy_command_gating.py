@@ -13,7 +13,7 @@ from .support import BIN, mode, write_private
 pytestmark = pytest.mark.pki
 MIGRATION_ERROR = (
     "[ERROR] Legacy PKI state requires migration; create a fresh backup and "
-    "follow platform-pki-ca-rollover status/migrate\n"
+    "follow platform-pki ca-rollover status/migrate\n"
 )
 
 
@@ -37,33 +37,33 @@ def create_legacy_pki(pki: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("tool", "arguments", "locks"),
+    ("route", "arguments", "locks"),
     (
-        pytest.param("platform-pki-list-expiry", (), ("lifecycle", "root", "intermediate", "inventory"), id="list-expiry"),
-        pytest.param("platform-pki-print-cert", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="print-cert"),
-        pytest.param("platform-pki-service-verify", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-verify"),
-        pytest.param("platform-pki-service-issue", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-issue"),
-        pytest.param("platform-pki-service-renew", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-renew"),
-        pytest.param("platform-pki-export-ansible", (), ("lifecycle", "root", "intermediate", "inventory", "export"), id="export-ansible"),
-        pytest.param("platform-pki-certificate-export", ("publish", "legacy-service", "--request-id", "0123456789abcdef0123456789abcdef"), ("lifecycle", "root", "intermediate", "inventory", "export"), id="certificate-export"),
-        pytest.param("platform-pki-csr-candidate", ("verify", "legacy-service", "--request-id", "0123456789abcdef0123456789abcdef"), ("lifecycle", "root", "intermediate", "inventory", "export"), id="csr-candidate"),
-        pytest.param("platform-pki-root-create", ("--name", "Test Root", "--org", "Test", "--country", "PL", "--allow-unencrypted-root-key"), ("lifecycle", "root"), id="root-create"),
-        pytest.param("platform-pki-intermediate-create", ("--name", "Test Intermediate", "--org", "Test", "--country", "PL", "--allow-unencrypted-intermediate-key"), ("lifecycle", "root", "intermediate"), id="intermediate-create"),
+        pytest.param("list-expiry", (), ("lifecycle", "root", "intermediate", "inventory"), id="list-expiry"),
+        pytest.param("print-cert", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="print-cert"),
+        pytest.param("service-verify", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-verify"),
+        pytest.param("service-issue", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-issue"),
+        pytest.param("service-renew", ("legacy-service",), ("lifecycle", "root", "intermediate", "inventory"), id="service-renew"),
+        pytest.param("export-ansible", (), ("lifecycle", "root", "intermediate", "inventory", "export"), id="export-ansible"),
+        pytest.param("certificate-export", ("publish", "legacy-service", "--request-id", "0123456789abcdef0123456789abcdef"), ("lifecycle", "root", "intermediate", "inventory", "export"), id="certificate-export"),
+        pytest.param("csr-candidate", ("verify", "legacy-service", "--request-id", "0123456789abcdef0123456789abcdef"), ("lifecycle", "root", "intermediate", "inventory", "export"), id="csr-candidate"),
+        pytest.param("root-create", ("--name", "Test Root", "--org", "Test", "--country", "PL", "--allow-unencrypted-root-key"), ("lifecycle", "root"), id="root-create"),
+        pytest.param("intermediate-create", ("--name", "Test Intermediate", "--org", "Test", "--country", "PL", "--allow-unencrypted-intermediate-key"), ("lifecycle", "root", "intermediate"), id="intermediate-create"),
     ),
 )
 def test_legacy_commands_prepare_control_state_and_require_migration(
     tmp_path: Path,
     process_runner: Callable[..., ProcessResult],
     isolated_environment: Mapping[str, str],
-    tool: str,
+    route: str,
     arguments: Sequence[str],
     locks: Sequence[str],
 ) -> None:
-    pki = tmp_path / tool
+    pki = tmp_path / route
     create_legacy_pki(pki)
 
     result = process_runner(
-        [BIN / tool, *arguments, "--pki-dir", pki],
+        [BIN / "platform-pki", route, *arguments, "--pki-dir", pki],
         env=isolated_environment,
         timeout=30,
     )
@@ -98,7 +98,8 @@ def test_root_create_rejects_mixed_legacy_and_generation_state(
 
     result = process_runner(
         [
-            BIN / "platform-pki-root-create",
+            BIN / "platform-pki",
+            "root-create",
             "--pki-dir",
             pki,
             "--name",
@@ -115,7 +116,7 @@ def test_root_create_rejects_mixed_legacy_and_generation_state(
 
     assert result.status == 1
     assert result.stdout == ""
-    assert result.stderr == "[ERROR] PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status\n"
+    assert result.stderr == "[ERROR] PKI state is incomplete or ambiguous; run platform-pki ca-rollover status\n"
     assert not (pki / "state/active-issuer").exists()
     assert list((pki / "authorities/roots").iterdir()) == [pki / "authorities/roots/g1"]
 
@@ -138,7 +139,8 @@ def test_root_create_rejects_partial_generation_or_legacy_state(
 
     result = process_runner(
         [
-            BIN / "platform-pki-root-create",
+            BIN / "platform-pki",
+            "root-create",
             "--pki-dir",
             pki,
             "--name",
@@ -155,7 +157,7 @@ def test_root_create_rejects_partial_generation_or_legacy_state(
 
     assert result.status == 1
     assert result.stdout == ""
-    assert result.stderr == "[ERROR] PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status\n"
+    assert result.stderr == "[ERROR] PKI state is incomplete or ambiguous; run platform-pki ca-rollover status\n"
     assert not (pki / "state/active-issuer").exists()
     if authority_kind == "directory":
         assert (pki / "authorities/roots/g1/sentinel").read_text() == "partial generation\n"
@@ -196,7 +198,8 @@ def test_root_create_rejects_unexpected_authority_tree_entries(
 
     result = process_runner(
         [
-            BIN / "platform-pki-root-create",
+            BIN / "platform-pki",
+            "root-create",
             "--pki-dir",
             pki,
             "--name",
@@ -213,7 +216,7 @@ def test_root_create_rejects_unexpected_authority_tree_entries(
 
     assert result.status == 1
     assert result.stdout == ""
-    assert result.stderr == "[ERROR] PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status\n"
+    assert result.stderr == "[ERROR] PKI state is incomplete or ambiguous; run platform-pki ca-rollover status\n"
     assert not (pki / "state/active-issuer").exists()
     if object_kind == "directory":
         assert unexpected.is_dir() and not unexpected.is_symlink()
@@ -238,7 +241,7 @@ def test_legacy_gate_prioritizes_recovery_state(
     write_private(marker, "transaction=legacy-migrate-test\n")
 
     result = process_runner(
-        [BIN / "platform-pki-list-expiry", "--pki-dir", pki],
+        [BIN / "platform-pki", "list-expiry", "--pki-dir", pki],
         env=isolated_environment,
         timeout=30,
     )
@@ -258,7 +261,7 @@ def test_concurrent_legacy_control_state_preparation_is_idempotent(
 
     def invoke() -> ProcessResult:
         return process_runner(
-            [BIN / "platform-pki-list-expiry", "--pki-dir", pki],
+            [BIN / "platform-pki", "list-expiry", "--pki-dir", pki],
             env=isolated_environment,
             timeout=30,
         )

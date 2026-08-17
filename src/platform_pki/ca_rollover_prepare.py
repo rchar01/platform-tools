@@ -1354,7 +1354,7 @@ def _open_inventory(pki_dir: str):
     except FilesystemError:
         _die(
             f"Service inventory is missing or unreadable: {path}; "
-            "run platform-pki-inventory-install"
+            "run platform-pki inventory-install"
         )
 
 

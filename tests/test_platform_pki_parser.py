@@ -24,6 +24,32 @@ MINIMAL_ARGUMENTS = {
     ("inventory-install",): (),
     ("csr-trust-install",): (),
     ("csr-recover",): (),
+    ("offline-csr", "approve"): (
+        "api",
+        "--operation",
+        "issue",
+        "--request-id",
+        "0123456789abcdef0123456789abcdef",
+        "--input-dir",
+        "request",
+        "--approval-key",
+        "approval-key",
+        "--output-dir",
+        "approved",
+        "--yes",
+    ),
+    ("offline-csr", "sign"): (
+        "api",
+        "--operation",
+        "issue",
+        "--request-id",
+        "0123456789abcdef0123456789abcdef",
+        "--input-dir",
+        "approved",
+        "--response-key",
+        "response-key",
+        "--yes",
+    ),
     ("certificate-export", "publish"): (
         "api",
         "--request-id",
@@ -116,11 +142,8 @@ def test_production_routes_exactly_match_source_backed_parser_inventory() -> Non
     assert tuple(spec.route for spec in ROUTES) == tuple(
         contract.unified_route for contract in PKI_PARSER_ROUTES
     )
-    assert len(ROUTES) == len(ROUTE_SPECS) == 25
+    assert len(ROUTES) == len(ROUTE_SPECS) == 27
     for spec, contract in zip(ROUTES, PKI_PARSER_ROUTES, strict=True):
-        assert spec.compatibility_name == (
-            contract.compatibility_executable or "platform-pki"
-        )
         assert tuple(positional.name for positional in spec.positionals) == contract.positionals
         assert tuple(option.name for option in spec.options) == contract.long_flags
         assert (
@@ -334,6 +357,18 @@ def test_host_local_relationships_are_checked_before_handler_dispatch() -> None:
     with pytest.raises(ParserError, match="--rotate-key conflicts with --csr-file"):
         parse_route(("service-renew",), ("api", *renewal, "--rotate-key"))
 
+    offline = MINIMAL_ARGUMENTS[("offline-csr", "approve")]
+    with pytest.raises(ParserError, match="renewal requires --current-cert-file"):
+        parse_route(
+            ("offline-csr", "approve"),
+            tuple("renew" if value == "issue" else value for value in offline),
+        )
+    with pytest.raises(ParserError, match="available only for offline CSR renewal"):
+        parse_route(
+            ("offline-csr", "sign"),
+            (*MINIMAL_ARGUMENTS[("offline-csr", "sign")], "--current-cert-file", "cert"),
+        )
+
 
 def _host_local_options(*, include_current: bool) -> tuple[str, ...]:
     options = (
@@ -401,17 +436,11 @@ def test_rollover_prepare_type_relationships_and_tty_requirement() -> None:
     ).spec.route == ("ca-rollover", "prepare")
 
 
-def test_help_lists_every_option_and_preserves_invocation_shape() -> None:
+def test_help_lists_every_option_for_unified_invocation() -> None:
     spec = ROUTE_SPECS[("certificate-export", "resolve")]
-    unified = render_route_help("platform-pki", spec, compatibility=False)
-    compatibility = render_route_help(
-        "platform-pki-certificate-export", spec, compatibility=True
-    )
+    unified = render_route_help(spec)
     assert unified.startswith(
         "Usage: platform-pki certificate-export resolve SERVICE [OPTIONS]\n"
-    )
-    assert compatibility.startswith(
-        "Usage: platform-pki-certificate-export resolve SERVICE [OPTIONS]\n"
     )
     for option in spec.options:
         assert option.name in unified

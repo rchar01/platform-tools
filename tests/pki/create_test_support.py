@@ -17,11 +17,11 @@ from ..harness import ProcessResult
 
 @dataclass(frozen=True)
 class CreateTools:
-    init: Path
-    root: Path
-    intermediate: Path
-    issue: Path
-    recover: Path
+    init: tuple[Path | str, ...]
+    root: tuple[Path | str, ...]
+    intermediate: tuple[Path | str, ...]
+    issue: tuple[Path | str, ...]
+    recover: tuple[Path | str, ...]
     version: str
     common: Path
 
@@ -40,12 +40,14 @@ def tools() -> CreateTools:
     binaries = repository / "bin"
     recover = os.environ.get("PLATFORM_PKI_TEST_ROLLOVER_WRAPPER")
     return CreateTools(
-        init=binaries / "platform-pki-init",
-        root=binaries / "platform-pki-root-create",
-        intermediate=binaries / "platform-pki-intermediate-create",
-        issue=binaries / "platform-pki-service-issue",
+        init=(binaries / "platform-pki", "init"),
+        root=(binaries / "platform-pki", "root-create"),
+        intermediate=(binaries / "platform-pki", "intermediate-create"),
+        issue=(binaries / "platform-pki", "service-issue"),
         recover=(
-            Path(recover) if recover else binaries / "platform-pki-ca-rollover"
+            (Path(recover),)
+            if recover
+            else (binaries / "platform-pki", "ca-rollover")
         ),
         version=(repository / "VERSION").read_text().strip(),
         common=(
@@ -165,7 +167,7 @@ def initialize(
     *,
     pki_dir: Path | None = None,
 ) -> None:
-    command: list[str | Path] = [toolset.init, "--namespace", value.namespace]
+    command: list[str | Path] = [*toolset.init, "--namespace", value.namespace]
     if pki_dir is not None:
         command.extend(("--pki-dir", pki_dir))
     require_success(run(process_runner, command, env), "PKI initialization")
@@ -181,7 +183,7 @@ def create_root(
     days: int | None = None,
 ) -> ProcessResult:
     command: list[str | Path] = [
-        toolset.root,
+        *toolset.root,
         "--namespace",
         value.namespace,
         "--name",
@@ -210,7 +212,7 @@ def create_intermediate(
     days: int | None = None,
 ) -> ProcessResult:
     command: list[str | Path] = [
-        toolset.intermediate,
+        *toolset.intermediate,
         "--namespace",
         value.namespace,
         "--name",

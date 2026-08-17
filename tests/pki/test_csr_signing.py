@@ -30,14 +30,14 @@ from .support import (
 
 
 pytestmark = pytest.mark.pki
-INIT = BIN / "platform-pki-init"
-ROOT = BIN / "platform-pki-root-create"
-INTERMEDIATE = BIN / "platform-pki-intermediate-create"
-TRUST_INSTALL = BIN / "platform-pki-csr-trust-install"
-ISSUE = BIN / "platform-pki-service-issue"
-RECOVER = BIN / "platform-pki-csr-recover"
-RENEW = BIN / "platform-pki-service-renew"
-EXPORT = BIN / "platform-pki-export-ansible"
+INIT = (BIN / "platform-pki", "init")
+ROOT = (BIN / "platform-pki", "root-create")
+INTERMEDIATE = (BIN / "platform-pki", "intermediate-create")
+TRUST_INSTALL = (BIN / "platform-pki", "csr-trust-install")
+ISSUE = (BIN / "platform-pki", "service-issue")
+RECOVER = (BIN / "platform-pki", "csr-recover")
+RENEW = (BIN / "platform-pki", "service-renew")
+EXPORT = (BIN / "platform-pki", "export-ansible")
 INVENTORY = """services:
   external:
     key_custody: host-local
@@ -79,9 +79,10 @@ class CsrWorkspace:
     env: Mapping[str, str]
     runner: Callable[..., ProcessResult]
 
-    def sign(self, tool: Path = ISSUE, *, current_cert: Path | None = None, env: Mapping[str, str] | None = None) -> ProcessResult:
+    def sign(self, tool: Path | Sequence[str | Path] = ISSUE, *, current_cert: Path | None = None, env: Mapping[str, str] | None = None) -> ProcessResult:
+        command = (tool,) if isinstance(tool, Path) else tool
         arguments: list[object] = [
-            tool,
+            *command,
             "external",
             "--namespace",
             self.namespace,
@@ -300,12 +301,12 @@ def _create_csr_workspace(
     intermediate_pass = root / "intermediate.pass"
     write_private(root_pass, "root-test-passphrase-123\n")
     write_private(intermediate_pass, "intermediate-test-passphrase-123\n")
-    assert_result(run(runner, [INIT, "--namespace", namespace], isolated_environment), 0)
+    assert_result(run(runner, [*INIT, "--namespace", namespace], isolated_environment), 0)
     write_private(pki / "inventory/services.yml", INVENTORY)
     assert_result(
         run(
             runner,
-            [ROOT, "--namespace", namespace, "--name", "Test Root", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass],
+            [*ROOT, "--namespace", namespace, "--name", "Test Root", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass],
             isolated_environment,
         ),
         0,
@@ -314,7 +315,7 @@ def _create_csr_workspace(
         run(
             runner,
             [
-                INTERMEDIATE,
+                *INTERMEDIATE,
                 "--namespace",
                 namespace,
                 "--name",
@@ -346,7 +347,7 @@ def _create_csr_workspace(
     write_private(trust / "requesters.allowed_signers", f"host-01 {requester_public}\n")
     write_private(trust / "approvers.allowed_signers", f"offline-approver {approver_public}\n")
     write_private(trust / "responses.allowed_signers", f"offline-response {response_public}\n")
-    assert_result(run(runner, [TRUST_INSTALL, "--namespace", namespace, "--private-repo", private], isolated_environment), 0)
+    assert_result(run(runner, [*TRUST_INSTALL, "--namespace", namespace, "--private-repo", private], isolated_environment), 0)
     host_key = artifacts / "tls.key"
     assert_result(
         run(runner, ["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:secp384r1", "-out", host_key], isolated_environment),
@@ -607,14 +608,14 @@ def test_migration_preserves_complete_managed_service_and_export_state(csr_works
     write_private(workspace.pki / "inventory/services.yml", managed_inventory)
     managed = run(
         workspace.runner,
-        [ISSUE, "external", "--namespace", workspace.namespace, "--intermediate-pass-file", workspace.intermediate_pass],
+        [*ISSUE, "external", "--namespace", workspace.namespace, "--intermediate-pass-file", workspace.intermediate_pass],
         workspace.env,
     )
     assert_result(managed, 0)
     key = workspace.pki / "services/external/private/tls.key"
     certificate = workspace.pki / "services/external/certs/tls.crt"
     assert_result(
-        run(workspace.runner, [EXPORT, "external", "--namespace", workspace.namespace, "--force"], workspace.env),
+        run(workspace.runner, [*EXPORT, "external", "--namespace", workspace.namespace, "--force"], workspace.env),
         0,
     )
     service_root = workspace.pki / "services/external"
@@ -636,7 +637,7 @@ def test_migration_preserves_complete_managed_service_and_export_state(csr_works
         result = run(
             workspace.runner,
             [
-                RECOVER,
+                *RECOVER,
                 "--namespace",
                 workspace.namespace,
                 "--transaction",
@@ -724,7 +725,7 @@ def test_interrupted_signing_has_deterministic_recovery(csr_workspace: CsrWorksp
     issued_digest = digest(issued) if committed else None
     signature = workspace.pki / "state/csr/transactions/csr-0123456789abcdef0123456789abcdef/signing/response.sig"
     signature_state = (signature.stat().st_ino, digest(signature)) if signature.exists() else None
-    command: list[object] = [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"]
+    command: list[object] = [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"]
     if committed:
         command.extend(["--response-key", workspace.response_key])
     recovered = run(workspace.runner, command, workspace.env)
@@ -754,16 +755,16 @@ def test_committed_recovery_without_response_key_stays_blocked(csr_workspace: Cs
     result = workspace.issue(env=environment(workspace.env, PLATFORM_PKI_CSR_CRASH_AT="ca-committed"))
     assert result.status == 128 + signal.SIGKILL
     transaction = "csr-0123456789abcdef0123456789abcdef"
-    missing = run(workspace.runner, [RECOVER, "--namespace", workspace.namespace, "--transaction", transaction, "--yes"], workspace.env)
+    missing = run(workspace.runner, [*RECOVER, "--namespace", workspace.namespace, "--transaction", transaction, "--yes"], workspace.env)
     assert missing.status == 1
     assert "requires --response-key" in missing.stderr
     assert (workspace.pki / "state/csr/recovery-journal").is_file()
-    blocked = run(workspace.runner, [TRUST_INSTALL, "--namespace", workspace.namespace, "--private-repo", workspace.private], workspace.env)
+    blocked = run(workspace.runner, [*TRUST_INSTALL, "--namespace", workspace.namespace, "--private-repo", workspace.private], workspace.env)
     assert blocked.status == 1
     assert "Authenticated CSR signing recovery is required" in blocked.stderr
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", transaction, "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", transaction, "--response-key", workspace.response_key, "--yes"],
         workspace.env,
     )
     assert_result(recovered, 0)
@@ -785,7 +786,7 @@ def test_recovery_rejects_journal_path_outside_transaction(csr_workspace: CsrWor
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
         workspace.env,
     )
 
@@ -805,7 +806,7 @@ def test_recovery_rejects_replaced_sensitive_key_copy(csr_workspace: CsrWorkspac
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
         workspace.env,
     )
 
@@ -885,7 +886,7 @@ def test_recovery_does_not_remove_unrecorded_sensitive_key_path(csr_workspace: C
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
         workspace.env,
     )
 
@@ -912,7 +913,7 @@ def test_after_journal_recovery_rejects_foreign_transaction_tree(csr_workspace: 
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
         workspace.env,
     )
 
@@ -948,7 +949,7 @@ def test_csr_input_cleanup_preserves_foreign_replacement(
     marker = workspace.artifacts / "csr-input-race.marker"
     release = workspace.artifacts / "csr-input-race.release"
     arguments: list[object] = [
-        ISSUE,
+        *ISSUE,
         "external",
         "--namespace",
         workspace.namespace,
@@ -1029,7 +1030,7 @@ def test_recovery_rejects_same_content_replacement_after_publication_checkpoint(
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
         workspace.env,
     )
 
@@ -1057,7 +1058,7 @@ def test_recovery_binds_exact_stage_identity_after_precheckpoint_rename(
     identity = destination.stat().st_ino
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
         workspace.env,
     )
     assert_result(recovered, 0)
@@ -1076,7 +1077,7 @@ def test_recovery_does_not_mutate_unowned_allowed_name_artifact_stage(csr_worksp
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
         workspace.env,
     )
 
@@ -1112,7 +1113,7 @@ def test_recovery_rejects_unsafe_or_replaced_replay_record(csr_workspace: CsrWor
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
         workspace.env,
     )
 
@@ -1133,7 +1134,7 @@ def test_recovery_does_not_recreate_missing_journaled_replay_record(csr_workspac
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--yes"],
         workspace.env,
     )
 
@@ -1154,7 +1155,7 @@ def test_recovery_rejects_changed_published_candidate_record(csr_workspace: CsrW
     recovered = run(
         workspace.runner,
         [
-            RECOVER,
+            *RECOVER,
             "--namespace",
             workspace.namespace,
             "--transaction",
@@ -1209,7 +1210,7 @@ def test_recovery_rejects_unexpected_publication_tree_entries(
     recovered = run(
         workspace.runner,
         [
-            RECOVER,
+            *RECOVER,
             "--namespace",
             workspace.namespace,
             "--transaction",
@@ -1251,7 +1252,7 @@ def test_post_commit_recovery_prevalidates_every_source_before_publication(csr_w
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", transaction.name, "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", transaction.name, "--response-key", workspace.response_key, "--yes"],
         workspace.env,
     )
 
@@ -1274,7 +1275,7 @@ def test_recovery_rejects_replaced_checkpointed_response_signature_without_resig
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", transaction.name, "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", transaction.name, "--response-key", workspace.response_key, "--yes"],
         workspace.env,
     )
 
@@ -1373,7 +1374,7 @@ exec "$REAL_STAT" "$@"
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
         environment(
             workspace.env,
             PATH=f"{fake_bin}:{workspace.env['PATH']}",
@@ -1415,7 +1416,7 @@ exec "$REAL_SSH_KEYGEN" "$@"
 
     recovered = run(
         workspace.runner,
-        [RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
+        [*RECOVER, "--namespace", workspace.namespace, "--transaction", "csr-0123456789abcdef0123456789abcdef", "--response-key", workspace.response_key, "--yes"],
         environment(
             workspace.env,
             PATH=f"{fake_bin}:{workspace.env['PATH']}",

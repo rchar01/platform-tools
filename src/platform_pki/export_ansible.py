@@ -416,7 +416,7 @@ def _build_stage(
 
 
 def export_ansible(parsed: ParseResult) -> int:
-    """Run the compatibility and unified Ansible export workflow."""
+    """Run the unified Ansible export workflow."""
 
     environment = dict(os.environ)
     require_program("openssl", environment)

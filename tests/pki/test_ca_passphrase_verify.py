@@ -19,8 +19,7 @@ from src.platform_pki.parser import parse_route
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOL = ROOT / "bin/platform-pki-ca-passphrase-verify"
-UNIFIED = ROOT / "bin/platform-pki"
+TOOL = (ROOT / "bin/platform-pki", "ca-passphrase-verify")
 ORACLE = (
     ROOT
     / "tests/pki/oracles/platform-pki-ca-passphrase-verify/platform-pki-ca-passphrase-verify"
@@ -29,8 +28,7 @@ ORACLE_COMMIT = "95c0b27"
 ORACLE_SHA256 = "cdf4cb3f018e8b6c723310933691d2c433992fc74321e3d1e60bff2a99e88be1"
 COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
 PYTHON_INTERFACES = (
-    pytest.param((TOOL,), id="compatibility"),
-    pytest.param((UNIFIED, "ca-passphrase-verify"), id="unified"),
+    pytest.param(TOOL, id="unified"),
 )
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 GENERIC_FAILURE = "[ERROR] CA passphrase verification failed\n"
@@ -53,7 +51,7 @@ def _run(
     environment: Mapping[str, str],
 ) -> ProcessResult:
     return process_runner(
-        [TOOL, "--namespace", workspace.namespace, *arguments],
+        [*TOOL, "--namespace", workspace.namespace, *arguments],
         env=environment,
         timeout=30,
     )
@@ -106,16 +104,16 @@ def _state_snapshot(pki: Path) -> dict[str, tuple[int, int, int, str]]:
 
 
 def test_help_and_version(process_runner: Callable[..., ProcessResult]) -> None:
-    help_result = process_runner([TOOL, "--help"])
+    help_result = process_runner([*TOOL, "--help"])
     assert help_result.status == 0
     assert "inherited file descriptors" in help_result.stdout
     assert help_result.stderr == ""
 
-    version_result = process_runner([TOOL, "--version"])
+    version_result = process_runner([TOOL[0], "--version"])
     assert version_result == ProcessResult(
         version_result.args,
         0,
-        f"platform-pki-ca-passphrase-verify {VERSION}\n",
+        f"platform-pki {VERSION}\n",
         "",
     )
 
@@ -130,28 +128,10 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     assert os.access(ORACLE, os.X_OK)
 
 
-def test_compatibility_help_matches_frozen_oracle(
-    process_runner: Callable[..., ProcessResult],
-) -> None:
-    environment = {
-        **os.environ,
-        "PLATFORM_TOOLS_LIB_DIR": os.fspath(
-            ROOT / "tests/pki/oracles/final-bash-source/lib"
-        ),
-    }
-    oracle = process_runner([ORACLE, "--help"], env=environment)
-    result = process_runner([TOOL, "--help"], env=environment)
-    assert (result.status, result.stdout, result.stderr) == (
-        oracle.status,
-        oracle.stdout,
-        oracle.stderr,
-    )
-
-
 def test_requires_at_least_one_passphrase_file(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
-    result = process_runner([TOOL])
+    result = process_runner(TOOL)
     assert result.status == 1
     assert result.stdout == ""
     assert result.stderr == (

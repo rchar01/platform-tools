@@ -15,7 +15,7 @@ from .migration_harness import run_differential_case
 
 ROOT = Path(__file__).resolve().parents[2]
 PTY_CAPTURE = ROOT / "tests/cli/pty-capture.py"
-TOOL = ROOT / "bin/platform-pki-print-cert"
+TOOL = (ROOT / "bin/platform-pki", "print-cert")
 ORACLE = ROOT / "tests/pki/oracles/platform-pki-print-cert/platform-pki-print-cert"
 ORACLE_COMMIT = "4cd6b2294760571ffed632295de441c34a4c0eb1"
 ORACLE_SHA256 = "544b14fd0a006d96feb9bd9383cf57bdb6bb6ea4c3312b0324220c5ebcb07e92"
@@ -114,9 +114,9 @@ def _run(
     process_runner: Callable[..., ProcessResult],
     arguments: Sequence[str | Path],
     environment: Mapping[str, str] | None = None,
-    tool: Path | Sequence[str | Path] = TOOL,
+    tool: Sequence[str | Path] = TOOL,
 ) -> ProcessResult:
-    command = (tool,) if isinstance(tool, Path) else tuple(tool)
+    command = tuple(tool)
     effective_environment = environment
     if command == (ORACLE,):
         effective_environment = dict(os.environ if environment is None else environment)
@@ -128,8 +128,7 @@ def _run(
 
 OPERATIONAL_TOOLS = (
     pytest.param((ORACLE,), id="bash-oracle"),
-    pytest.param((TOOL,), id="python-compatibility"),
-    pytest.param((UNIFIED, "print-cert"), id="python-unified"),
+    pytest.param(TOOL, id="python-unified"),
 )
 
 
@@ -138,15 +137,15 @@ def test_help(process_runner: Callable[..., ProcessResult]) -> None:
 
     assert result.status == 0
     assert "Usage:" in result.stdout
-    assert "platform-pki-print-cert --version | -v" in result.stdout
+    assert "Usage: platform-pki print-cert" in result.stdout
     assert result.stderr == ""
 
 
 def test_version(process_runner: Callable[..., ProcessResult]) -> None:
-    result = _run(process_runner, ["--version"])
+    result = _run(process_runner, ["--version"], tool=(UNIFIED,))
 
     assert result == ProcessResult(
-        result.args, 0, f"platform-pki-print-cert {VERSION}\n", ""
+        result.args, 0, f"platform-pki {VERSION}\n", ""
     )
 
 
@@ -163,9 +162,9 @@ def test_frozen_oracle_matches_recorded_provenance() -> None:
 def test_tty_help_color_and_no_color(
     process_runner: Callable[..., ProcessResult],
 ) -> None:
-    colored = process_runner(["python3", PTY_CAPTURE, TOOL, "--help"])
+    colored = process_runner(["python3", PTY_CAPTURE, *TOOL, "--help"])
     uncolored = process_runner(
-        ["python3", PTY_CAPTURE, TOOL, "--help"],
+        ["python3", PTY_CAPTURE, *TOOL, "--help"],
         env={**os.environ, "NO_COLOR": "1"},
     )
 
@@ -488,9 +487,9 @@ def test_explicit_library_directory_is_ignored(
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, _ = _fake_environment(tmp_path, "explicit-openssl.log")
-    copied_tool = tmp_path / "explicit/bin/platform-pki-print-cert"
+    copied_tool = tmp_path / "explicit/bin/platform-pki"
     copied_tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, copied_tool)
+    shutil.copy2(TOOL[0], copied_tool)
     environment = dict(
         environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(tmp_path / "explicit/missing")
     )
@@ -499,7 +498,7 @@ def test_explicit_library_directory_is_ignored(
         process_runner,
         ["platform-example", f"--pki-dir={pki}"],
         environment,
-        copied_tool,
+        (copied_tool, "print-cert"),
     )
 
     assert result.status == 0
@@ -511,25 +510,25 @@ def test_missing_installed_share_library_is_ignored(
 ) -> None:
     pki = _pki_tree(tmp_path)
     environment, _ = _fake_environment(tmp_path, "installed-openssl.log")
-    copied_tool = tmp_path / "installed/bin/platform-pki-print-cert"
+    copied_tool = tmp_path / "installed/bin/platform-pki"
     copied_tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, copied_tool)
+    shutil.copy2(TOOL[0], copied_tool)
     environment = dict(
         environment, PLATFORM_TOOLS_SHARE_DIR=os.fspath(tmp_path / "installed/share")
     )
 
     result = _run(
-        process_runner, ["--pki-dir", pki, "platform-example"], environment, copied_tool
+        process_runner, ["--pki-dir", pki, "platform-example"], environment, (copied_tool, "print-cert")
     )
 
     assert result.status == 0
     assert result.stderr == ""
 
 
-def _isolated_tool(tmp_path: Path) -> tuple[Path, Mapping[str, str]]:
-    copied_tool = tmp_path / "isolated/bin/platform-pki-print-cert"
+def _isolated_tool(tmp_path: Path) -> tuple[tuple[Path | str, ...], Mapping[str, str]]:
+    copied_tool = tmp_path / "isolated/bin/platform-pki"
     copied_tool.parent.mkdir(mode=0o700, parents=True)
-    shutil.copy2(TOOL, copied_tool)
+    shutil.copy2(TOOL[0], copied_tool)
     home = tmp_path / "isolated/home"
     home.mkdir(mode=0o700)
     environment = dict(
@@ -537,7 +536,7 @@ def _isolated_tool(tmp_path: Path) -> tuple[Path, Mapping[str, str]]:
         HOME=os.fspath(home),
         PLATFORM_TOOLS_SHARE_DIR=os.fspath(tmp_path / "isolated/missing"),
     )
-    return copied_tool, environment
+    return (copied_tool, "print-cert"), environment
 
 
 def test_help_does_not_require_shared_library(

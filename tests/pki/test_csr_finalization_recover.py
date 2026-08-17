@@ -106,7 +106,7 @@ def _crash_finalization(
     request_id, _artifact, manifest, evidence, signature = prepared
     result = workspace.runner(
         [
-            CANDIDATE,
+            *CANDIDATE,
             "finalize",
             "external",
             "--request-id",

@@ -102,7 +102,7 @@ def test_intermediate_prepare_rejects_before_transaction(
     workspace = rollover_case_factory(case_name)
     receipt = backup_receipt_factory(workspace)
     command: list[str | Path] = [
-        rollover_tools.rollover,
+        *rollover_tools.rollover,
         "prepare",
         "--namespace",
         workspace.namespace,
@@ -196,7 +196,7 @@ def test_root_prepare_rejects_before_transaction(
         expected_error = f"Private repository ancestor is unsafe: {private_repo}"
 
     command: list[str | Path] = [
-        rollover_tools.rollover,
+        *rollover_tools.rollover,
         "prepare",
         "--namespace",
         workspace.namespace,

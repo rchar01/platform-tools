@@ -2,21 +2,23 @@
 
 ## Status
 
-Completed runtime-migration contract. This inventory records the compatibility
-surface preserved by the Python implementation. All maintained PKI routes and
-current-release compatibility executable names are Python-backed. Exact managed
-transaction recovery is exposed only through unified `service-recover`.
-Retained Bash executables, libraries, and source fragments under
-`tests/pki/oracles/` are immutable test evidence rather than runtime ownership.
+Completed runtime-migration and next-major implementation contract. Production
+generation and installation now contain one canonical PKI zipapp,
+`platform-pki`; all 18 compatibility executable names are removed. Exact managed
+transaction recovery is exposed through unified `service-recover`. A copied or
+renamed archive still behaves canonically as `platform-pki`. Retained Bash
+executables, libraries, source fragments, and historical command mappings are
+immutable evidence rather than runtime ownership. The v3 release gate remains
+pending on external downstream inventory, canary validation, and Python 3.14
+target-host prerequisites; `VERSION` remains `2.3.0` until that gate completes.
 
 ## Runtime and Interfaces
 
 - Minimum Python version: 3.14.
 - Application artifact: deterministic standard-library zipapp.
-- Existing `platform-pki-*` executable names remain supported during
-  incremental migration. The approved next major release removes these
-  compatibility launchers and installs only `platform-pki` after every unified
-  route passes final acceptance.
+- Production packaging generates and installs only `platform-pki`. Installation
+  checks all 18 exact legacy alias paths before mutation, fails if any exists,
+  and never deletes or replaces a blocker.
 - The new `platform-pki` CLI uses shallow command names.
 - Existing nested subcommands and options remain unchanged beneath each shallow
   command.
@@ -24,7 +26,10 @@ Retained Bash executables, libraries, and source fragments under
 - Package migration is forward-only after the first operational command cuts
   over; installing an older Bash implementation is unsupported.
 
-## Command Mapping
+## Historical Command Mapping
+
+This table preserves the exact v2 alias-to-route migration provenance. The left
+column is not a current executable inventory.
 
 | Compatibility executable | Unified route | Nested commands |
 | --- | --- | --- |
@@ -59,7 +64,8 @@ existing public `platform-pki csr-recover` route.
 - Root version uses `--version` and `-v`.
 - Leading root help or version takes precedence over later invalid arguments.
 - Help and version return status 0, write stdout, and leave stderr empty.
-- Version output is exactly `<invoked-name> <VERSION>\n`.
+- Version output is exactly `platform-pki <VERSION>\n`, including for a copied
+  or renamed archive.
 - Parser errors return status 1, leave stdout empty, and write stderr.
 - Long-option abbreviations are rejected.
 - Nonempty `--option=value` is accepted where the option accepts a value.
@@ -70,7 +76,7 @@ existing public `platform-pki csr-recover` route.
 - Application log messages remain uncolored.
 - Duplicate-option behavior is command- and option-specific; Python must follow
   the existing explicit rejection lists rather than applying one global rule.
-- Every retained leaf route accepts leading long and short help without state,
+- Every unified leaf route accepts leading long and short help without state,
   rejects non-leading help after a previously parsed option, rejects empty
   equals values and long option abbreviations before help, rejects an unknown
   option before help, and gives leading help precedence over a later unknown
@@ -85,8 +91,8 @@ Authoritative evidence:
 
 `tests/pki/test_migration_contract.py` separately normalizes the committed
 `PKI_PARSER_ROUTES` inventory against the immutable final-Bash source evidence.
-`tests/test_command_contract.py` then drives parser-edge probes through all 24
-retained routes, combining existing root-command checks with nested-leaf checks.
+`tests/test_command_contract.py` drives parser-edge probes through all 27
+unified leaf routes, combining root-command checks with nested-leaf checks.
 The clean environment fixture rejects state creation under `HOME`,
 `XDG_CONFIG_HOME`, and `XDG_DATA_HOME`; probes supplying an explicit namespace
 also require that path to remain absent.
@@ -115,6 +121,8 @@ also require that path to remain absent.
 | `inventory-install` | none | private repo `../platform-private` | `test_inventory_install.py`, inventory contract modules |
 | `csr-trust-install` | none | private repo `../platform-private` | `test_csr_trust_install.py` |
 | `csr-recover` | recovery-dependent transaction/key inputs | `--yes`; dispatches signing or finalization recovery | CSR signing and candidate modules |
+| `offline-csr approve` | service, operation, request ID, input directory, approval key, output directory | exact confirmation or `--yes`; renewal also requires current certificate | `test_offline_csr.py` |
+| `offline-csr sign` | service, operation, request ID, input directory, response key | exact confirmation or `--yes`; delegates to the host-local writer | `test_offline_csr.py` |
 | `certificate-export publish` | service, request ID | immutable six-file artifact publication | `test_certificate_export.py` |
 | `certificate-export resolve` | service, request ID, manifest digest | format `path`; exact digest-pinned resolution | `test_certificate_export.py` |
 | `csr-candidate verify` | service, request ID | format `text` | `test_csr_candidate.py` |
@@ -137,8 +145,8 @@ also require that path to remain absent.
 | `ca-rollover prepare` | type, backup receipt, intermediate name, organization, country | root/intermediate defaults 3650/1825 | rollover prepare, fault, lifecycle, recovery modules |
 | `ca-rollover recover` | transaction and resume/rollback action | optional `--yes` | rollover recovery modules |
 
-The compatibility and unified `service-issue` routes share one Python handler.
-Its `issue_host_local_csr` path writes authenticated host-local `issue` and
+The unified `service-issue` route uses the accepted Python handler. Its
+`issue_host_local_csr` path writes authenticated host-local `issue` and
 `migrate` transactions using the same 114-field journal consumed by public
 Python CSR recovery. It pins and repeatedly rechecks the exact installed trust
 tree and authenticated sources, enforces exact inventory lifetime and SAN
@@ -181,19 +189,23 @@ marker descriptor, identity, and exact bytes pinned through the final exchange
 boundary; displaced-tree cleanup rechecks every snapshotted name immediately
 before its destructive mutation.
 
-`tests/pki/migration_contract.py` freezes all 24 compatibility leaf routes, including
-ordered positionals and long flags, required names, defaults, enum values,
-conflicts, repeatable entries, and Bashly validators. Infrastructure tests load
-all 18 final-Bash definitions from test-only evidence with PyYAML so aliases are
-resolved and compare the complete normalized source shape with the committed inventory. Separate source-backed
+`tests/pki/migration_contract.py` freezes all 27 unified parser leaf routes and
+retains the 18 removed compatibility executable mappings as historical
+provenance. The inventory includes ordered positionals and long flags, required
+names, defaults, enum values, conflicts, repeatable entries, and Bashly
+validators. Infrastructure tests load all 18 final-Bash definitions from
+test-only evidence with PyYAML so aliases are resolved and compare the complete
+normalized source shape with the committed inventory. Separate source-backed
 inventories record runtime-only conditional requirements, conflicts, explicit
 empty-value rejection, confirmations, and exact duplicate-option rejection
 fields.
 
-## Pilot Output, Status, Dependency, and Asset Contracts
+## Output, Status, Dependency, and Asset Contracts
 
-The first migration tranche has machine-readable contracts for
-`print-cert`, `list-expiry`, and `service-verify`:
+The machine-readable contract inventory currently covers seven routes:
+`print-cert`, `list-expiry`, `service-verify`, `certificate-export resolve`,
+`csr-candidate verify`, `custody-report`, and `ca-rollover status`. Explicit,
+disjoint route sets defer the other 20 parser leaves.
 
 - `print-cert` owns the leading `Service:` line and ordering of its OpenSSL
   invocations; the remaining detail lines are OpenSSL-owned output. Missing
@@ -206,15 +218,19 @@ The first migration tranche has machine-readable contracts for
   Application validation failures return 1 with empty stdout and end with a
   newline-terminated application error, but may first preserve OpenSSL-owned
   diagnostics. The direct trust check emits only OpenSSL-owned stderr.
-- All three require OpenSSL and nonblocking `flock` behavior during operational
-  execution. The pilot inventory additionally records GNU `date -d` for expiry
-  conversion and `cmp`/`grep` behavior for managed certificate verification.
+- The dependency inventory distinguishes invoked programs, compatibility-only
+  PATH checks, optional storage evidence, and platform capabilities. It records
+  OpenSSL, OpenSSH, GNU `date -d`, `sed`, `cmp`, and `grep` where invoked;
+  `findmnt`/`lsblk` as optional custody evidence; Python `fcntl.flock`; and Linux
+  procfs where descriptor paths are part of the route contract. The retained
+  `flock` executable preflight is recorded as checked-only because current locks
+  use Python `fcntl.flock`.
 - The frozen Bash versions loaded `lib/platform-pki-common.sh` only after parser
   dispatch. The Python handlers preserve the operational behavior without
   installing or loading that shell library; the exact historical library is
   retained under `tests/pki/oracles/final-bash-source/lib/`.
 
-Infrastructure tests prove that every pilot contract references a retained
+Infrastructure tests prove that every covered contract references a retained
 route, authoritative source fragment, and maintained focused test function.
 The runtime dependencies listed here are migration-sensitive external
 boundaries, not yet an exhaustive inventory of every core utility used by the
@@ -353,8 +369,8 @@ intermediate bootstrap, rollover preparation, and receipt-bound terminal
 cleanup. It accepts all supported final-Bash states and also resumes an
 authenticated root-DB publication or restoration completed immediately before
 its pending journal rewrite; final Bash rejects that narrow post-mutation
-window. The final Bash executable remains the retained differential oracle;
-direct and unified rollover invocations use the Python handlers. The
+window. The final Bash executable remains the retained differential oracle; the
+production unified rollover invocation uses the Python handlers. The
 Python root writer preserves the fixed schema-3 writer order and exact
 reservation/bootstrap encodings. It requires ASCII PKI paths so every persisted
 path remains representable by the canonical recovery-record codec, and defers
@@ -372,7 +388,8 @@ and publication-phase relationships. Commit `5026f65` is the final-Bash/model
 provenance baseline for the operational finalization tranche.
 
 The public `src/platform_pki/csr_recover.py` layer binds both models to live
-state for compatibility and unified dispatch. Finalization recovery performs bounded
+state for unified dispatch while preserving final-Bash journal compatibility.
+Finalization recovery performs bounded
 mode-600 single-link no-follow journal access, holds lifecycle through export
 locks, validates all 17 source files and retained transaction, trust, outcome,
 and active evidence before mutation, and resumes only journal-authorized
@@ -614,7 +631,8 @@ For initial migration, the following remain byte-identical:
   final-Bash phase, Python recovery checkpoints, rollback and publication pause
   races, hostile branch state, inherited response-key descriptors, and
   field-aware Bash/Python terminal-state differentials.
-- Compatibility and unified routes dispatch the same Python handler.
+- The production unified route uses the accepted Python handler; frozen v2
+  executable evidence remains available for historical differentials.
 
 ### Candidate finalization
 
@@ -825,10 +843,13 @@ of the ordinary non-rollover Make pool.
 
 ## Open Items
 
-- Remove the Python compatibility zipapps at the approved next major-release
-  boundary; the current release installs one deterministic zipapp under every
-  supported compatibility name.
-- Extend output/status, runtime-boundary, and installed-asset contracts from the
-  three pilot commands to the remaining PKI routes. This is a machine-readable
-  post-release documentation expansion, not a v2.3.0 release blocker; focused
-  runtime tests already cover every route.
+- Complete the v3 release gate outside this implementation: reconcile external
+  downstream command inventory, complete canary validation, and prove Python
+  3.14 or newer on every target host that executes PKI commands. `VERSION`
+  remains `2.3.0` until these blockers close.
+- Extend output/status and runtime-boundary contracts from the seven covered
+  routes to the 20 explicitly deferred parser leaves. This is a machine-readable
+  documentation expansion, not a v3 release blocker; focused
+  runtime tests already cover every route. The current installed-asset inventory
+  separately records `templates/pki/services.yml.example`; frozen shell libraries
+  remain explicit oracle evidence only.

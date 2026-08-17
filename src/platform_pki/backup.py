@@ -423,7 +423,7 @@ def _cleanup_stage(
 
 
 def backup(parsed: ParseResult) -> int:
-    """Run the compatibility and unified backup workflow."""
+    """Run the unified backup workflow."""
 
     environment = dict(os.environ)
     require_program("tar", environment)

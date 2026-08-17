@@ -119,7 +119,7 @@ def test_status_rejects_invalid_terminal_marker(
 
     result = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -171,7 +171,7 @@ def test_status_reports_unresolved_migration_journal(
 
     result = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -220,7 +220,7 @@ def test_status_rejects_incomplete_committed_migration_journal(
 
     result = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -266,7 +266,7 @@ def test_status_rejects_missing_service_issuer(
 
     result = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -330,7 +330,7 @@ def test_status_reports_ready_generation(
 
     result = process_runner(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,

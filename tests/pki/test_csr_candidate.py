@@ -35,18 +35,18 @@ from .test_csr_signing import (
 
 
 pytestmark = pytest.mark.pki
-CANDIDATE = BIN / "platform-pki-csr-candidate"
+CANDIDATE = (BIN / "platform-pki", "csr-candidate")
 CANDIDATE_COMMAND = tuple(
     shlex.split(
         os.environ.get(
             "PLATFORM_PKI_CANDIDATE_TEST_COMMAND",
-            os.fspath(CANDIDATE),
+            f"{CANDIDATE[0]} {CANDIDATE[1]}",
         )
     )
 )
-CERTIFICATE_EXPORT = BIN / "platform-pki-certificate-export"
-TRUST_INSTALL = BIN / "platform-pki-csr-trust-install"
-RECOVER = BIN / "platform-pki-csr-recover"
+CERTIFICATE_EXPORT = (BIN / "platform-pki", "certificate-export")
+TRUST_INSTALL = (BIN / "platform-pki", "csr-trust-install")
+RECOVER = (BIN / "platform-pki", "csr-recover")
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-csr-candidate"
 ORACLE = ORACLE_ROOT / "platform-pki-csr-candidate"
 ORACLE_LIB = ORACLE_ROOT / "lib"
@@ -88,25 +88,6 @@ def test_frozen_candidate_oracle_matches_provenance_and_modes() -> None:
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
         expected_mode = 0o644 if relative.startswith("lib/") else 0o755
         assert stat.S_IMODE(path.stat().st_mode) == expected_mode
-
-
-def test_candidate_compatibility_help_matches_oracle(
-    process_runner, isolated_environment
-) -> None:
-    oracle_environment = environment(
-        isolated_environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)
-    )
-    for action in (
-        ("--help",),
-        ("verify", "--help"),
-        ("finalize", "--help"),
-        ("abandon", "--help"),
-    ):
-        oracle = process_runner([ORACLE, *action], env=oracle_environment, timeout=30)
-        result = process_runner(
-            [*CANDIDATE_COMMAND, *action], env=isolated_environment, timeout=30
-        )
-        assert result == ProcessResult(result.args, oracle.status, oracle.stdout, oracle.stderr)
 
 
 def run(workspace: CsrWorkspace, *arguments: object):
@@ -159,7 +140,7 @@ def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
     assert_result(
         workspace.runner(
             [
-                CERTIFICATE_EXPORT,
+                *CERTIFICATE_EXPORT,
                 "publish",
                 "external",
                 "--request-id",
@@ -240,7 +221,7 @@ def install_deployer_trust(workspace: CsrWorkspace) -> None:
     assert_result(
         workspace.runner(
             [
-                TRUST_INSTALL,
+                *TRUST_INSTALL,
                 "--namespace",
                 workspace.namespace,
                 "--private-repo",
@@ -345,7 +326,7 @@ def publish_request(workspace: CsrWorkspace, request_id: str) -> tuple[Path, str
     assert_result(
         workspace.runner(
             [
-                CERTIFICATE_EXPORT, "publish", "external", "--request-id",
+                *CERTIFICATE_EXPORT, "publish", "external", "--request-id",
                 request_id, "--namespace", workspace.namespace,
             ],
             env=workspace.env,
@@ -673,7 +654,7 @@ def test_finalize_handled_signal_preserves_transaction_ownership(
     assert journal.is_file()
     assert "requires explicit recovery" in interrupted.stderr
     recovered = csr_workspace.runner(
-        [RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
+        [*RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
         env=csr_workspace.env,
         timeout=120,
     )
@@ -945,7 +926,7 @@ def test_finalize_recovery_resumes_outcome_and_active_pointer(
     assert blocked.status == 1
     assert "finalization recovery is required" in blocked.stderr
     recovered = csr_workspace.runner(
-        [RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
+        [*RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
         env=csr_workspace.env,
         timeout=120,
     )
@@ -1047,7 +1028,7 @@ def test_recovery_rejects_source_tampering(csr_workspace: CsrWorkspace) -> None:
     source = csr_workspace.pki / f"state/csr/responses/external/{REQUEST_ID}/tls.crt"
     write_private(source, source.read_text() + "\n")
     recovered = csr_workspace.runner(
-        [RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
+        [*RECOVER, "--namespace", csr_workspace.namespace, "--yes"],
         env=csr_workspace.env,
         timeout=120,
     )
@@ -1153,7 +1134,7 @@ def test_migration_finalization_preserves_managed_state(
     assert_result(
         workspace.runner(
             [
-                ISSUE,
+                *ISSUE,
                 "external",
                 "--namespace",
                 workspace.namespace,
@@ -1169,7 +1150,7 @@ def test_migration_finalization_preserves_managed_state(
     assert_result(
         workspace.runner(
             [
-                ANSIBLE_EXPORT,
+                *ANSIBLE_EXPORT,
                 "external",
                 "--namespace",
                 workspace.namespace,

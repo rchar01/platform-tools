@@ -116,11 +116,9 @@ platform-pki service-issue SERVICE --csr-file PATH <authenticated-request-inputs
 platform-pki service-renew SERVICE --csr-file PATH <authenticated-request-inputs>
 ```
 
-New integrations should use the unified routes above. The corresponding
-`platform-pki-service-issue` and `platform-pki-service-renew` executable names
-remain supported throughout the v2 release series and share the same Python
-handlers. This host-local path retains `platform-pki csr-recover`; unified-only
-`service-recover` is for managed service transactions.
+These are the production routes. Legacy v2 alias executables are not installed.
+This host-local path retains `platform-pki csr-recover`; `service-recover` is for
+managed service transactions.
 
 `--csr-file` is allowed only for inventory `key_custody: host-local`, conflicts
 with `--rotate-key`, and never authorizes CSR-controlled names or extensions.
@@ -334,6 +332,14 @@ verification the controller creates `collection-receipt` locally. Activation
 transfer must use the exact six-file certificate export. `fetch`, `slurp`,
 registered output, facts, debug, diffs, lookups, controller temporary files, and
 exception output must never handle the private key.
+
+The implemented removable-media operator facade consumes the exact three-file
+request as `platform-pki offline-csr approve` and publishes one protected exact
+five-file directory containing those request files plus `approval` and
+`approval.sig`. `platform-pki offline-csr sign` consumes that directory and
+delegates to the existing host-local signer immediately before its journal and
+replay boundary. It does not consume `collection-receipt`, export a response,
+run target automation, or replace `csr-recover`.
 
 `collection-receipt` is printable ASCII with LF endings, one final newline, and
 this exact ordered schema:

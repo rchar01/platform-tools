@@ -1,0 +1,56 @@
+name: platform-runtime-evidence
+help: Collect secret-free PKI runtime and installation evidence
+version: platform-runtime-evidence <%= ENV.fetch("PLATFORM_TOOLS_VERSION") %>
+
+flags:
+- long: --identity
+  arg: identity
+  help: Stable reviewed host or image identity
+  required: true
+  validate: evidence_scalar
+- long: --role
+  arg: role
+  help: Reviewed execution role
+  required: true
+  validate: evidence_scalar
+- long: --owner
+  arg: owner
+  help: Accountable owner or unassigned
+  required: true
+  validate: evidence_scalar
+- long: --executes-pki
+  arg: status
+  help: Whether this environment executes platform-pki
+  required: true
+  allowed: ["yes", "no", "unknown"]
+- long: --install-dir
+  arg: path
+  help: Exact absolute installation directory to inspect
+  required: true
+  validate: evidence_path
+- long: --platform-pki
+  arg: path
+  help: Absolute artifact path to inspect instead of INSTALL_DIR/platform-pki
+  validate: evidence_path
+- long: --probe-dir
+  arg: path
+  help: Protected existing absolute directory for temporary capability probes
+  validate: evidence_path
+- long: --invoke-version
+  help: Explicitly execute the selected regular artifact with --version
+
+examples:
+- platform-runtime-evidence --identity HOST --role ROLE --owner OWNER --executes-pki yes --install-dir /usr/local/bin
+- platform-runtime-evidence --identity IMAGE --role signer --owner OWNER --executes-pki unknown --install-dir /usr/local/bin --probe-dir /tmp
+
+footer: |-
+  Output is a deterministic schema-1 key=value record on stdout. Non-NUL ASCII
+  controls, DEL, and percent signs in observed values are percent-encoded. It reads
+  no PKI state, does not recurse, does not follow exact legacy alias symlinks,
+  and exactly cleans its one owned temporary probe directory. Interruption or
+  identity uncertainty can retain that directory for review rather than risk
+  deleting an unbound object.
+
+  The selected platform-pki artifact is not executed unless --invoke-version is
+  supplied; that query executes a sealed exact-byte snapshot. Missing
+  requirements are evidence and do not make collection fail.

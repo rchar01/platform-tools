@@ -12,15 +12,15 @@ All shared platform helper tools are installed from `platform-tools`. Related pl
 - [`../Makefile`](../Makefile): Supported local entry points. Run `make help` to see them.
 - [`development.md`](./development.md): Separate Podman development and test images, Bashly generation, shell linting, and generated-file verification.
 
-PKI documentation recommends the unified `platform-pki <command>` form for new
-usage. Installed `platform-pki-*` compatibility aliases remain supported
-throughout the v2 release series and are scheduled for removal at the next major
-release.
+PKI documentation uses the unified `platform-pki <command>` form. The current
+production package installs only `platform-pki`; see the exact v2.3.0 alias
+cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 
 ## Docs In This Tree
 
 - [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
 - [`platform-vm-env-collect.md`](./platform-vm-env-collect.md): How to use `platform-vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
+- [`platform-runtime-evidence.md`](./platform-runtime-evidence.md): How to collect and review secret-free PKI runtime and installation evidence without reading PKI state.
 - [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
 - [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
@@ -41,8 +41,10 @@ release.
 - Create a cloud-init public key for `platform-infra`: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Decide where real SSH configs live: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
+- Collect PKI runtime and installation evidence: use [`platform-runtime-evidence.md`](./platform-runtime-evidence.md).
 - Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
+- Approve and sign an exact removable-media CSR directory: use [`pki-openssl.md`](./pki-openssl.md#offline-csr-approval-and-signing).
 - Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).
 - Plan production CI exchange through GitLab Generic Packages: use [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md).
 - Review the direct development-host registry migration design/manual handoff: use [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md).
@@ -57,32 +59,13 @@ release.
 
 - [`../bin/platform-ssh-init`](../bin/platform-ssh-init): Shared SSH identity helper.
 - [`../bin/platform-vm-env-collect`](../bin/platform-vm-env-collect): VM environment collector.
+- [`../bin/platform-runtime-evidence`](../bin/platform-runtime-evidence): Secret-free PKI runtime and installation evidence collector.
 - [`../bin/platform-config-init`](../bin/platform-config-init): Local outside-Git config initializer.
 - [`../bin/platform-proxmox-token-init`](../bin/platform-proxmox-token-init): Proxmox API token bootstrap helper.
 - [`../bin/platform-proxmox-vm-cleanup`](../bin/platform-proxmox-vm-cleanup): Safe single-VM Proxmox cleanup helper.
 - [`../bin/platform-proxmox-vm-snapshot`](../bin/platform-proxmox-vm-snapshot): Safe Proxmox VE 9 development snapshot helper.
 - [`../bin/platform-pki`](../bin/platform-pki): Unified Python PKI interface with shared runtime, filesystem, fork-safe ordered advisory-lock, and bounded Linux durable-publication primitives for every maintained PKI route.
 
-The following files are supported v2 compatibility aliases; new usage should
-call the corresponding unified route:
-
-- [`../bin/platform-pki-init`](../bin/platform-pki-init): PKI working directory initializer.
-- [`../bin/platform-pki-csr-trust-install`](../bin/platform-pki-csr-trust-install): Strict public-trust installer for authenticated host-local CSR signing.
-- [`../bin/platform-pki-csr-recover`](../bin/platform-pki-csr-recover): Python-backed deterministic recovery for interrupted host-local CSR signing or candidate finalization.
-- [`../bin/platform-pki-certificate-export`](../bin/platform-pki-certificate-export): Exact immutable certificate-only CSR export publisher and resolver.
-- [`../bin/platform-pki-csr-candidate`](../bin/platform-pki-csr-candidate): Authenticated candidate verification, finalization, abandonment, and recovery state.
-- [`../bin/platform-pki-root-create`](../bin/platform-pki-root-create): Python-backed schema-3 root CA transaction writer.
-- [`../bin/platform-pki-intermediate-create`](../bin/platform-pki-intermediate-create): Python-backed schema-3 intermediate CA and root-database transaction writer.
-- [`../bin/platform-pki-service-issue`](../bin/platform-pki-service-issue): Service certificate issuance helper.
-- [`../bin/platform-pki-service-renew`](../bin/platform-pki-service-renew): Service certificate renewal helper.
-- [`../bin/platform-pki-service-verify`](../bin/platform-pki-service-verify): Service certificate verification helper.
-- [`../bin/platform-pki-list-expiry`](../bin/platform-pki-list-expiry): Certificate expiry listing helper.
-- [`../bin/platform-pki-print-cert`](../bin/platform-pki-print-cert): Certificate detail printing helper.
-- [`../bin/platform-pki-export-ansible`](../bin/platform-pki-export-ansible): Ansible export helper for generated PKI files.
-- [`../bin/platform-pki-backup`](../bin/platform-pki-backup): Python-backed protected PKI archive and receipt publisher.
-- [`../bin/platform-pki-custody-report`](../bin/platform-pki-custody-report): Read-only PKI encryption, custody, and backup-policy report helper.
-- [`../bin/platform-pki-ca-passphrase-verify`](../bin/platform-pki-ca-passphrase-verify): Read-only active CA passphrase and certificate-match verification helper.
-- [`../bin/platform-pki-ca-rollover`](../bin/platform-pki-ca-rollover): Generation state inspection, legacy migration, and rollover candidate preparation helper.
 - [`../bin/platform-bastion-policy`](../bin/platform-bastion-policy): Bastion access-policy validation and rendering helper.
 - [`../assets/brand/`](../assets/brand/): Project brand assets for release metadata and forge profiles.
 - [`handoffs/`](./handoffs/): Handoff notes for downstream coding agents and platform repositories.

@@ -1505,7 +1505,7 @@ def _create_backup(
     backup_directory.mkdir(mode=0o700)
     result = process_runner(
         [
-            tools.backup,
+            *tools.backup,
             "--namespace",
             workspace.namespace,
             "--backup-dir",
@@ -1530,7 +1530,7 @@ def test_recovery_differential_root_bootstrap_rollback(
 ) -> None:
     seed = rollover_workspace_factory("differential-root-bootstrap-seed")
     initialized = process_runner(
-        [rollover_tools.init, "--namespace", seed.namespace],
+        [*rollover_tools.init, "--namespace", seed.namespace],
         env=isolated_environment,
         timeout=120,
     )
@@ -1540,7 +1540,7 @@ def test_recovery_differential_root_bootstrap_rollback(
         workspace = _copied_workspace(root)
         crashed = process_runner(
             [
-                rollover_tools.root,
+                *rollover_tools.root,
                 "--namespace",
                 workspace.namespace,
                 "--name",
@@ -1577,12 +1577,12 @@ def test_recovery_differential_intermediate_cleanup_resume(
     seed = rollover_workspace_factory("differential-intermediate-seed")
     for command, operation in (
         (
-            [rollover_tools.init, "--namespace", seed.namespace],
+            [*rollover_tools.init, "--namespace", seed.namespace],
             "intermediate differential initialization",
         ),
         (
             [
-                rollover_tools.root,
+                *rollover_tools.root,
                 "--namespace",
                 seed.namespace,
                 "--name",
@@ -1621,7 +1621,7 @@ def test_recovery_differential_intermediate_cleanup_resume(
         workspace = _copied_workspace(root)
         crashed = process_runner(
             [
-                rollover_tools.intermediate,
+                *rollover_tools.intermediate,
                 "--namespace",
                 workspace.namespace,
                 "--name",

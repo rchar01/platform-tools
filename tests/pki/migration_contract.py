@@ -184,6 +184,15 @@ class InstalledAssetContract:
     focused_tests: tuple[tuple[str, str], ...]
 
 
+@dataclass(frozen=True)
+class HistoricalOracleAssetContract:
+    path: str
+    mode: int
+    consumers: tuple[tuple[str, ...], ...]
+    evidence: tuple[tuple[str, str], ...]
+    focused_tests: tuple[tuple[str, str], ...]
+
+
 def _locks(*profiles: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
     return profiles
 
@@ -247,6 +256,13 @@ PKI_COMMAND_CONTRACTS = (
         (),
         _locks(LOCK_ORDER[:4], LOCK_ORDER),
         ("test-pki-csr-signing", "test-pki-csr-candidate"),
+    ),
+    CommandContract(
+        None,
+        "offline-csr",
+        ("approve", "sign"),
+        _locks(LOCK_ORDER[:4]),
+        ("test-pki-offline-csr",),
     ),
     CommandContract(
         "platform-pki-certificate-export",
@@ -384,6 +400,21 @@ PKI_PARSER_ROUTES = (
         "platform-pki-csr-recover", ("csr-recover",),
         long_flags=("--transaction", "--response-key", *_NAMESPACE_FLAGS, "--yes"),
         validators=(("--transaction", "not_empty"), ("--response-key", "not_empty"), *_NAMESPACE_VALIDATORS),
+    ),
+    _route(
+        None, ("offline-csr", "approve"), positionals=("service",),
+        long_flags=("--operation", "--request-id", "--input-dir", "--approval-key", "--output-dir", "--current-cert-file", *_NAMESPACE_FLAGS, "--yes"),
+        required_names=("service", "--operation", "--request-id", "--input-dir", "--approval-key", "--output-dir"),
+        allowed_values=(("--operation", ("issue", "migrate", "renew")),),
+        validators=(("--request-id", "not_empty"), ("--input-dir", "not_empty"), ("--approval-key", "not_empty"), ("--output-dir", "not_empty"), ("--current-cert-file", "not_empty"), *_NAMESPACE_VALIDATORS),
+    ),
+    _route(
+        None, ("offline-csr", "sign"), positionals=("service",),
+        long_flags=("--operation", "--request-id", "--input-dir", "--response-key", "--current-cert-file", "--intermediate-pass-file", "--issuer-safety-days", *_NAMESPACE_FLAGS, "--yes"),
+        required_names=("service", "--operation", "--request-id", "--input-dir", "--response-key"),
+        defaults=(("--issuer-safety-days", "1"),),
+        allowed_values=(("--operation", ("issue", "migrate", "renew")),),
+        validators=(("--request-id", "not_empty"), ("--input-dir", "not_empty"), ("--response-key", "not_empty"), ("--current-cert-file", "not_empty"), ("--intermediate-pass-file", "not_empty"), ("--issuer-safety-days", "days"), *_NAMESPACE_VALIDATORS),
     ),
     _route(
         "platform-pki-certificate-export", ("certificate-export", "publish"),
@@ -553,6 +584,16 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
         ("--yes", "--transaction"), "src/platform_pki/service_recover.py",
         'sys.stdin.readline().rstrip("\\n") != f"recover {transaction}"',
     ),
+    RuntimeOptionRelationship(
+        ("offline-csr", "approve"), "conditional-required", "--operation=renew",
+        ("--operation", "--current-cert-file"), "src/platform_pki/parser.py",
+        "Offline CSR renewal requires --current-cert-file",
+    ),
+    RuntimeOptionRelationship(
+        ("offline-csr", "sign"), "confirmation", "--yes is absent",
+        ("--operation", "--request-id", "--yes"), "src/platform_pki/offline_csr.py",
+        'f"sign {operation} {service} {request_id}"',
+    ),
     *(
         RuntimeOptionRelationship(
             ("csr-candidate", action), "confirmation", "--yes is absent",
@@ -614,6 +655,8 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("csr-trust-install",), ("--private-repo", "--namespace", "--pki-dir"), "bashly/platform-pki-csr-trust-install/src/root_command.sh"),
     DuplicateOptionContract(("csr-recover",), ("--transaction", "--response-key", "--namespace", "--pki-dir", "--yes"), "bashly/platform-pki-csr-recover/src/root_command.sh"),
     DuplicateOptionContract(("csr-recover",), ("--transaction", "--response-key", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("offline-csr", "approve"), ("--operation", "--request-id", "--input-dir", "--approval-key", "--output-dir", "--current-cert-file", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("offline-csr", "sign"), ("--operation", "--request-id", "--input-dir", "--response-key", "--current-cert-file", "--intermediate-pass-file", "--issuer-safety-days", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("certificate-export", "publish"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("certificate-export", "resolve"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("csr-candidate", "verify"), ("--request-id", "--format", "--namespace", "--pki-dir"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
@@ -632,7 +675,45 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
 )
 
 
-PILOT_OUTPUT_STATUS_CONTRACTS = (
+OUTPUT_STATUS_COVERED_ROUTES = frozenset(
+    {
+        ("certificate-export", "resolve"),
+        ("csr-candidate", "verify"),
+        ("custody-report",),
+        ("ca-rollover", "status"),
+        ("print-cert",),
+        ("list-expiry",),
+        ("service-verify",),
+    }
+)
+
+OUTPUT_STATUS_DEFERRED_ROUTES = frozenset(
+    {
+        ("init",),
+        ("inventory-install",),
+        ("csr-trust-install",),
+        ("csr-recover",),
+        ("offline-csr", "approve"),
+        ("offline-csr", "sign"),
+        ("certificate-export", "publish"),
+        ("csr-candidate", "finalize"),
+        ("csr-candidate", "abandon"),
+        ("root-create",),
+        ("intermediate-create",),
+        ("service-issue",),
+        ("service-renew",),
+        ("service-recover",),
+        ("export-ansible",),
+        ("backup",),
+        ("ca-passphrase-verify",),
+        ("ca-rollover", "migrate"),
+        ("ca-rollover", "prepare"),
+        ("ca-rollover", "recover"),
+    }
+)
+
+
+OUTPUT_STATUS_CONTRACTS = (
     OutputStatusContract(
         ("print-cert",),
         "certificate-details",
@@ -720,64 +801,221 @@ PILOT_OUTPUT_STATUS_CONTRACTS = (
         (("lib/platform-pki-common.sh", "openssl verify -CAfile \"$root_cert\" -untrusted \"$int_cert\" \"$cert\" >/dev/null"),),
         (("tests/pki/test_service_verify.py", "test_openssl_trust_failure_preserves_child_stderr"),),
     ),
+    OutputStatusContract(
+        ("certificate-export", "resolve"),
+        "exact-pinned-resolution",
+        (StatusContract(0, "success", "the exact digest-pinned artifact was resolved"),),
+        "absolute-path-or-canonical-json-line",
+        "empty",
+        True,
+        None,
+        (
+            ("src/platform_pki/certificate_export.py", "print(absolute)"),
+            ("src/platform_pki/certificate_export.py", '"kind": "certificate-export-resolution"'),
+        ),
+        (("tests/pki/test_certificate_export.py", "test_publish_bridges_real_csr_response_and_resolves_only_exact_pin"),),
+    ),
+    OutputStatusContract(
+        ("csr-candidate", "verify"),
+        "authenticated-candidate-status",
+        (StatusContract(0, "success", "authenticated historical candidate status was rendered"),),
+        "ordered-key-value-or-canonical-json-line",
+        "empty",
+        True,
+        None,
+        (
+            ("src/platform_pki/csr_candidate.py", "print(json.dumps(values, sort_keys=True, separators=(\",\", \":\")))"),
+            ("src/platform_pki/csr_candidate.py", "print(f\"state={state}\")"),
+            ("src/platform_pki/csr_candidate.py", 'print("live_state_claimed=false")'),
+        ),
+        (("tests/pki/test_csr_candidate.py", "test_verify_finalize_and_exact_rerun"),),
+    ),
+    OutputStatusContract(
+        ("custody-report",),
+        "read-only-custody-report",
+        (
+            StatusContract(0, "success", "the report contains no structural findings"),
+            StatusContract(2, "semantic", "the report contains one or more findings"),
+        ),
+        "stable-text-report-or-canonical-json-line",
+        "empty",
+        True,
+        None,
+        (
+            ("src/platform_pki/custody_report.py", '"status": "findings" if report.findings else "ok"'),
+            ("src/platform_pki/custody_report.py", 'return 2 if report.findings else 0'),
+        ),
+        (
+            ("tests/pki/test_custody_report.py", "test_clean_generation_reports_match_frozen_oracle_bytes"),
+            ("tests/pki/test_custody_report.py", "test_findings_report_matches_frozen_oracle_bytes"),
+        ),
+    ),
+    OutputStatusContract(
+        ("ca-rollover", "status"),
+        "operational-rollover-status",
+        (
+            StatusContract(0, "success", "generation state is ready"),
+            StatusContract(1, "semantic", "migration or a prepared rollover requires an operator action"),
+            StatusContract(2, "semantic", "recovery or layout repair is required"),
+        ),
+        "ordered-key-value-or-canonical-json-line",
+        "empty",
+        True,
+        None,
+        (
+            ("src/platform_pki/ca_rollover_status.py", '"status": "ready"'),
+            ("src/platform_pki/ca_rollover_status.py", '"status": "prepared"'),
+            ("src/platform_pki/ca_rollover_status.py", '"status":"recovery-required"'),
+        ),
+        (
+            ("tests/pki/test_ca_rollover_status_python.py", "test_python_status_recovery_matches_frozen_oracle"),
+            ("tests/pki/test_ca_rollover_status_python.py", "test_python_status_layouts_match_frozen_oracle"),
+            ("tests/pki/test_ca_rollover_status_python.py", "test_python_status_prepared_root_matches_frozen_oracle"),
+            ("tests/pki/test_ca_rollover_status.py", "test_status_reports_ready_generation"),
+        ),
+    ),
 )
 
 
-PILOT_RUNTIME_DEPENDENCY_CONTRACTS = (
+RUNTIME_DEPENDENCY_CONTRACTS = (
+    RuntimeDependencyContract(
+        ("print-cert",), "openssl", "invoked", "certificate rendering and issuer validation",
+        "OpenSSL certificate inspection and verification",
+        "src/platform_pki/print_cert.py", '"openssl",\n                "x509"',
+    ),
+    RuntimeDependencyContract(
+        ("list-expiry",), "openssl", "invoked", "certificate expiry inspection and issuer validation",
+        "OpenSSL certificate inspection and verification",
+        "src/platform_pki/list_expiry.py", '("openssl", "x509", "-in", certificate, "-noout", "-enddate")',
+    ),
+    RuntimeDependencyContract(
+        ("service-verify",), "openssl", "invoked", "certificate, key, extension, and chain verification",
+        "OpenSSL certificate inspection and verification",
+        "src/platform_pki/service_verify.py", '(\n                "openssl",\n                "verify",',
+    ),
     *(
         RuntimeDependencyContract(
-            (route,), "openssl", "required", "operational execution",
-            "OpenSSL certificate inspection and verification",
-            f"bashly/platform-pki-{route}/src/root_command.sh", "pki_require_cmd openssl",
+            (route,), "flock", "checked-only", "operational preflight",
+            "PATH compatibility check; locking itself uses Python fcntl.flock",
+            f"src/platform_pki/{route.replace('-', '_')}.py", 'require_program("flock", environment)',
         )
         for route in ("print-cert", "list-expiry", "service-verify")
     ),
     *(
         RuntimeDependencyContract(
-            (route,), "flock", "required", "first operation lock acquisition",
+            route, "fcntl.flock", "platform-capability", "operation lock acquisition",
             "nonblocking advisory locks over persistent lock files",
-            "lib/platform-pki-common.sh", "pki_require_cmd flock",
+            "src/platform_pki/locks.py", "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)",
         )
-        for route in ("print-cert", "list-expiry", "service-verify")
+        for route in sorted(OUTPUT_STATUS_COVERED_ROUTES)
     ),
     RuntimeDependencyContract(
-        ("list-expiry",), "date", "required", "certificate expiry conversion",
-        "GNU date UTC parsing with -d", "lib/platform-pki-common.sh",
-        "date -u -d \"$not_after\" '+%Y-%m-%dT%H:%M:%SZ'",
+        ("list-expiry",), "date", "invoked", "certificate expiry conversion",
+        "GNU date UTC parsing with -d", "src/platform_pki/list_expiry.py",
+        '("date", "-u", "-d", not_after, "+%s")',
     ),
     RuntimeDependencyContract(
-        ("service-verify",), "cmp", "required", "managed key/certificate comparison",
-        "quiet byte comparison", "lib/platform-pki-common.sh", "cmp -s \"$tmpdir/cert.pub\" \"$tmpdir/key.pub\"",
+        ("list-expiry",), "sed", "invoked", "notAfter prefix removal",
+        "stream transformation compatible with sed s/^notAfter=//",
+        "src/platform_pki/list_expiry.py", '("sed", "s/^notAfter=//")',
     ),
     RuntimeDependencyContract(
-        ("service-verify",), "grep", "required", "inventory and extension validation",
-        "fixed-string exact and substring matching", "lib/platform-pki-common.sh",
-        "grep -F 'TLS Web Server Authentication'",
+        ("service-verify",), "cmp", "invoked", "managed key/certificate comparison",
+        "quiet byte comparison", "src/platform_pki/service_verify.py",
+        '("cmp", "-s", cert_public, key_public)',
+    ),
+    RuntimeDependencyContract(
+        ("service-verify",), "grep", "invoked", "certificate extension validation",
+        "fixed-string matching", "src/platform_pki/service_verify.py",
+        '("grep", "-F", expected)',
+    ),
+    *(
+        RuntimeDependencyContract(
+            route, program, "invoked", "authenticated CSR history validation",
+            capability, "src/platform_pki/csr_history.py", fragment,
+        )
+        for route in (("certificate-export", "resolve"), ("csr-candidate", "verify"))
+        for program, capability, fragment in (
+            ("openssl", "certificate profile, key, metadata, and chain validation", '(\n                    "openssl",\n                    "x509" if certificate else "req",'),
+            ("ssh-keygen", "OpenSSH detached-signature verification", '(\n                    "ssh-keygen",'),
+        )
+    ),
+    *(
+        RuntimeDependencyContract(
+            route, "procfs", "platform-capability", "descriptor-pinned validation and output",
+            "Linux /proc/self/fd descriptor paths",
+            source, fragment,
+        )
+        for route, source, fragment in (
+            (("certificate-export", "resolve"), "src/platform_pki/certificate_export.py", 'f"/proc/self/fd/{artifact.fileno()}"'),
+            (("csr-candidate", "verify"), "src/platform_pki/csr_history.py", 'f"/proc/self/fd/{allowed.fileno()}"'),
+            (("ca-rollover", "status"), "src/platform_pki/ca_rollover_status.py", 'path = f"/proc/self/fd/{descriptor}"'),
+        )
+    ),
+    *(
+        RuntimeDependencyContract(
+            ("custody-report",), program, "optional-evidence", "storage-encryption evidence collection",
+            capability, "src/platform_pki/custody_report.py", fragment,
+        )
+        for program, capability, fragment in (
+            ("findmnt", "mount source discovery", 'shutil.which("findmnt", path=path)'),
+            ("lsblk", "block-device ancestry and filesystem-type discovery", 'shutil.which("lsblk", path=path)'),
+        )
+    ),
+    RuntimeDependencyContract(
+        ("ca-rollover", "status"), "openssl", "invoked", "authority observables and prepared chain validation",
+        "OpenSSL certificate inspection and verification",
+        "src/platform_pki/ca_rollover_status.py", '("openssl", "x509", "-in", path, "-noout", "-fingerprint", "-sha256")',
+    ),
+    RuntimeDependencyContract(
+        ("ca-rollover", "status"), "date", "invoked", "authority expiry conversion",
+        "GNU date UTC parsing with -d", "src/platform_pki/ca_rollover_status.py",
+        '"-d",\n            enddate.removeprefix("notAfter="),',
+    ),
+    RuntimeDependencyContract(
+        ("ca-rollover", "status"), "flock", "checked-only", "operational preflight",
+        "PATH compatibility check; locking itself uses Python fcntl.flock",
+        "src/platform_pki/ca_rollover_status.py", 'require_program("flock", environment)',
     ),
 )
 
 
-PILOT_INSTALLED_ASSET_CONTRACTS = (
+CURRENT_INSTALLED_ASSET_CONTRACTS = (
     InstalledAssetContract(
-        "lib/platform-pki-common.sh",
+        "templates/pki/services.yml.example",
+        0o644,
+        (("init",),),
+        (
+            'PLATFORM_TOOLS_TEMPLATE_DIR + "/pki"',
+            'package-or-archive-relative checkout + "/templates/pki"',
+            'PLATFORM_TOOLS_SHARE_DIR-or-XDG-user-share + "/templates/pki"',
+            '"/usr/local/share/platform-tools/templates/pki"',
+        ),
+        "initialization",
+        (
+            ("src/platform_pki/init.py", 'candidates.append(f"{explicit}/pki")'),
+            ("src/platform_pki/init.py", 'f"{_checkout_directory()}/templates/pki"'),
+            ("src/platform_pki/init.py", 'f"{environment.get(\'PLATFORM_TOOLS_SHARE_DIR\') or _user_share(environment)}/templates/pki"'),
+            ("src/platform_pki/init.py", '"/usr/local/share/platform-tools/templates/pki"'),
+            ("src/platform_pki/init.py", 'source = f"{template_directory}/services.yml.example"'),
+            ("Makefile", 'chmod 644 "$(SHARE_DIR)"/templates/pki/*'),
+        ),
+        (("tests/test_installed_tools.py", "test_installed_pki_shared_asset_lookup"),),
+    ),
+)
+
+
+HISTORICAL_ORACLE_ASSET_CONTRACTS = (
+    HistoricalOracleAssetContract(
+        "tests/pki/oracles/final-bash-source/lib/platform-pki-common.sh",
         0o644,
         (("print-cert",), ("list-expiry",), ("service-verify",)),
-        (
-            "PLATFORM_TOOLS_LIB_DIR",
-            "checkout-relative",
-            "PLATFORM_TOOLS_SHARE_DIR-or-XDG-user-share",
-        ),
-        "operational-only",
-        (
-            *(
-                (f"bashly/platform-pki-{route}/src/root_command.sh", "PLATFORM_TOOLS_SHARE_DIR")
-                for route in ("print-cert", "list-expiry", "service-verify")
-            ),
-        ),
+        (("tests/pki/oracles/final-bash-source/SHA256SUMS", "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f  lib/platform-pki-common.sh"),),
         (
             ("tests/pki/test_print_cert.py", "test_frozen_oracle_matches_recorded_provenance"),
             ("tests/pki/test_list_expiry.py", "test_frozen_oracle_matches_recorded_provenance"),
             ("tests/pki/test_service_verify.py", "test_frozen_oracle_matches_recorded_provenance"),
+            ("tests/pki/test_ca_rollover_status_python.py", "test_frozen_status_oracle_matches_recorded_provenance_and_modes"),
         ),
     ),
 )

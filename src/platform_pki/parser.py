@@ -1,4 +1,4 @@
-"""Frozen parser contracts for the retained PKI command surface."""
+"""Parser contracts for the unified PKI command surface."""
 
 from __future__ import annotations
 
@@ -40,6 +40,10 @@ _OPTION_METAVARS = {
     "--private-repo": "PATH",
     "--transaction": "ID",
     "--response-key": "PATH",
+    "--approval-key": "PATH",
+    "--input-dir": "PATH",
+    "--output-dir": "PATH",
+    "--operation": "OPERATION",
     "--request-id": "ID",
     "--manifest-sha256": "DIGEST",
     "--format": "FORMAT",
@@ -78,7 +82,7 @@ _OPTION_METAVARS = {
 
 
 class ParserError(Exception):
-    """A state-free parser diagnostic with its compatibility rendering policy."""
+    """A state-free parser diagnostic."""
 
     def __init__(self, message: str, *, application: bool = False) -> None:
         if (
@@ -130,7 +134,6 @@ class OptionSpec:
 
 @dataclass(frozen=True, slots=True)
 class RouteSpec:
-    compatibility_name: str
     route: tuple[str, ...]
     positionals: tuple[PositionalSpec, ...]
     options: tuple[OptionSpec, ...]
@@ -233,7 +236,6 @@ def _service(*, repeatable: bool = False) -> tuple[PositionalSpec, ...]:
 
 
 def _route(
-    compatibility_name: str,
     route: tuple[str, ...],
     option_names: tuple[str, ...],
     *,
@@ -247,7 +249,6 @@ def _route(
     conflicts: tuple[tuple[str, tuple[str, ...]], ...] = (),
 ) -> RouteSpec:
     return RouteSpec(
-        compatibility_name,
         route,
         positionals,
         _options(
@@ -282,9 +283,8 @@ _SERVICE_VALIDATORS = (
 
 
 ROUTES = (
-    _route("platform-pki-init", ("init",), (*_NS, "--force"), validators=_NS_VALIDATORS),
+    _route(("init",), (*_NS, "--force"), validators=_NS_VALIDATORS),
     _route(
-        "platform-pki-inventory-install",
         ("inventory-install",),
         ("--private-repo", *_NS),
         defaults=(("--private-repo", "../platform-private"),),
@@ -292,7 +292,6 @@ ROUTES = (
         reject_duplicates=("--private-repo", *_NS),
     ),
     _route(
-        "platform-pki-csr-trust-install",
         ("csr-trust-install",),
         ("--private-repo", *_NS),
         defaults=(("--private-repo", "../platform-private"),),
@@ -300,14 +299,90 @@ ROUTES = (
         reject_duplicates=("--private-repo", *_NS),
     ),
     _route(
-        "platform-pki-csr-recover",
         ("csr-recover",),
         ("--transaction", "--response-key", *_NS, "--yes"),
         validators=(("--transaction", "not_empty"), ("--response-key", "not_empty"), *_NS_VALIDATORS),
         reject_duplicates=("--transaction", "--response-key", *_NS, "--yes"),
     ),
     _route(
-        "platform-pki-certificate-export",
+        ("offline-csr", "approve"),
+        (
+            "--operation",
+            "--request-id",
+            "--input-dir",
+            "--approval-key",
+            "--output-dir",
+            "--current-cert-file",
+            *_NS,
+            "--yes",
+        ),
+        positionals=_service(),
+        required=(
+            "--operation",
+            "--request-id",
+            "--input-dir",
+            "--approval-key",
+            "--output-dir",
+        ),
+        choices=(("--operation", ("issue", "migrate", "renew")),),
+        validators=(
+            ("--request-id", "not_empty"),
+            ("--input-dir", "not_empty"),
+            ("--approval-key", "not_empty"),
+            ("--output-dir", "not_empty"),
+            ("--current-cert-file", "not_empty"),
+            *_NS_VALIDATORS,
+        ),
+        reject_duplicates=(
+            "--operation",
+            "--request-id",
+            "--input-dir",
+            "--approval-key",
+            "--output-dir",
+            "--current-cert-file",
+            *_NS,
+            "--yes",
+        ),
+    ),
+    _route(
+        ("offline-csr", "sign"),
+        (
+            "--operation",
+            "--request-id",
+            "--input-dir",
+            "--response-key",
+            "--current-cert-file",
+            "--intermediate-pass-file",
+            "--issuer-safety-days",
+            *_NS,
+            "--yes",
+        ),
+        positionals=_service(),
+        required=("--operation", "--request-id", "--input-dir", "--response-key"),
+        defaults=(("--issuer-safety-days", "1"),),
+        choices=(("--operation", ("issue", "migrate", "renew")),),
+        validators=(
+            ("--request-id", "not_empty"),
+            ("--input-dir", "not_empty"),
+            ("--response-key", "not_empty"),
+            ("--current-cert-file", "not_empty"),
+            ("--intermediate-pass-file", "not_empty"),
+            ("--issuer-safety-days", "days"),
+            *_NS_VALIDATORS,
+        ),
+        reject_duplicates=(
+            "--operation",
+            "--request-id",
+            "--input-dir",
+            "--response-key",
+            "--current-cert-file",
+            "--intermediate-pass-file",
+            "--issuer-safety-days",
+            *_NS,
+            "--yes",
+        ),
+    ),
+    _route(
         ("certificate-export", "publish"),
         ("--request-id", *_NS),
         positionals=_service(),
@@ -316,7 +391,6 @@ ROUTES = (
         reject_duplicates=_CERT_EXPORT_DUPLICATES,
     ),
     _route(
-        "platform-pki-certificate-export",
         ("certificate-export", "resolve"),
         ("--request-id", "--manifest-sha256", "--format", *_NS),
         positionals=_service(),
@@ -327,7 +401,6 @@ ROUTES = (
         reject_duplicates=_CERT_EXPORT_DUPLICATES,
     ),
     _route(
-        "platform-pki-csr-candidate",
         ("csr-candidate", "verify"),
         ("--request-id", "--format", *_NS),
         positionals=_service(),
@@ -339,7 +412,6 @@ ROUTES = (
     ),
     *(
         _route(
-            "platform-pki-csr-candidate",
             ("csr-candidate", action),
             (
                 "--request-id",
@@ -368,7 +440,6 @@ ROUTES = (
         for action in ("finalize", "abandon")
     ),
     _route(
-        "platform-pki-root-create",
         ("root-create",),
         (*_NS, "--name", "--org", "--country", "--days", "--root-pass-file", "--allow-unencrypted-root-key", "--force"),
         required=("--name", "--org", "--country"),
@@ -376,7 +447,6 @@ ROUTES = (
         conflicts=(("--root-pass-file", ("--allow-unencrypted-root-key",)), ("--allow-unencrypted-root-key", ("--root-pass-file",))),
     ),
     _route(
-        "platform-pki-intermediate-create",
         ("intermediate-create",),
         (*_NS, "--name", "--org", "--country", "--days", "--issuer-safety-days", "--root-pass-file", "--intermediate-pass-file", "--allow-unencrypted-intermediate-key", "--force"),
         required=("--name", "--org", "--country"),
@@ -386,7 +456,6 @@ ROUTES = (
     ),
     *(
         _route(
-            f"platform-pki-service-{action}",
             (f"service-{action}",),
             _SERVICE_OPTIONS,
             positionals=_service(),
@@ -397,7 +466,6 @@ ROUTES = (
         for action in ("issue", "renew")
     ),
     _route(
-        "platform-pki-service-verify",
         ("service-verify",),
         (*_NS, "--min-days"),
         positionals=_service(),
@@ -405,7 +473,6 @@ ROUTES = (
         validators=(*_NS_VALIDATORS, ("--min-days", "days")),
     ),
     _route(
-        "platform-pki",
         ("service-recover",),
         ("--transaction", *_NS, "--yes"),
         required=("--transaction",),
@@ -413,29 +480,25 @@ ROUTES = (
         reject_duplicates=("--transaction", *_NS, "--yes"),
     ),
     _route(
-        "platform-pki-list-expiry",
         ("list-expiry",),
         (*_NS, "--warn-days", "--critical-days"),
         defaults=(("--warn-days", "90"), ("--critical-days", "30")),
         validators=(*_NS_VALIDATORS, ("--warn-days", "days"), ("--critical-days", "days")),
     ),
-    _route("platform-pki-print-cert", ("print-cert",), _NS, positionals=_service(), validators=_NS_VALIDATORS),
+    _route(("print-cert",), _NS, positionals=_service(), validators=_NS_VALIDATORS),
     _route(
-        "platform-pki-export-ansible",
         ("export-ansible",),
         (*_NS, "--export-dir", "--force"),
         positionals=_service(repeatable=True),
         validators=(*_NS_VALIDATORS, ("--export-dir", "not_empty")),
     ),
     _route(
-        "platform-pki-backup",
         ("backup",),
         (*_NS, "--backup-dir", "--age-recipient", "--allow-plain-backup"),
         validators=(*_NS_VALIDATORS, ("--backup-dir", "not_empty"), ("--age-recipient", "not_empty")),
         repeatable=("--age-recipient",),
     ),
     _route(
-        "platform-pki-custody-report",
         ("custody-report",),
         (*_NS, "--format"),
         defaults=(("--format", "text"),),
@@ -443,14 +506,12 @@ ROUTES = (
         reject_duplicates=(*_NS, "--format"),
     ),
     _route(
-        "platform-pki-ca-passphrase-verify",
         ("ca-passphrase-verify",),
         (*_NS, "--root-pass-file", "--intermediate-pass-file"),
         validators=(*_NS_VALIDATORS, ("--root-pass-file", "not_empty"), ("--intermediate-pass-file", "not_empty")),
         reject_duplicates=(*_NS, "--root-pass-file", "--intermediate-pass-file"),
     ),
     _route(
-        "platform-pki-ca-rollover",
         ("ca-rollover", "migrate"),
         (*_NS, "--backup-receipt", "--private-repo", "--yes", "--expected-root-sha256", "--expected-intermediate-sha256"),
         required=("--backup-receipt",),
@@ -459,7 +520,6 @@ ROUTES = (
         reject_duplicates=(*_NS, "--backup-receipt", "--private-repo", "--yes", "--expected-root-sha256", "--expected-intermediate-sha256"),
     ),
     _route(
-        "platform-pki-ca-rollover",
         ("ca-rollover", "status"),
         (*_NS, "--format"),
         defaults=(("--format", "text"),),
@@ -468,7 +528,6 @@ ROUTES = (
         reject_duplicates=(*_NS, "--format"),
     ),
     _route(
-        "platform-pki-ca-rollover",
         ("ca-rollover", "prepare"),
         (*_NS, "--type", "--backup-receipt", "--root-name", "--intermediate-name", "--org", "--country", "--root-days", "--intermediate-days", "--root-pass-file", "--intermediate-pass-file", "--issuer-safety-days", "--private-repo"),
         required=("--type", "--backup-receipt", "--intermediate-name", "--org", "--country"),
@@ -478,7 +537,6 @@ ROUTES = (
         reject_duplicates=(*_NS, "--type", "--backup-receipt", "--root-name", "--intermediate-name", "--org", "--country", "--root-days", "--intermediate-days", "--root-pass-file", "--intermediate-pass-file", "--issuer-safety-days", "--private-repo"),
     ),
     _route(
-        "platform-pki-ca-rollover",
         ("ca-rollover", "recover"),
         (*_NS, "--transaction", "--action", "--yes"),
         required=("--transaction", "--action"),
@@ -610,6 +668,19 @@ def _runtime_relationships(
                 "At least one of --root-pass-file or --intermediate-pass-file is required",
                 application=True,
             )
+    elif route in (("offline-csr", "approve"), ("offline-csr", "sign")):
+        renewal = values["--operation"] == "renew"
+        current = "--current-cert-file" in provided
+        if renewal and not current:
+            raise ParserError(
+                "Offline CSR renewal requires --current-cert-file",
+                application=True,
+            )
+        if not renewal and current:
+            raise ParserError(
+                "--current-cert-file is available only for offline CSR renewal",
+                application=True,
+            )
     elif route == ("ca-rollover", "migrate") and "--yes" in provided:
         for option in ("--expected-root-sha256", "--expected-intermediate-sha256"):
             value = values.get(option)
@@ -723,9 +794,7 @@ def parse_route(
 
     for positional in spec.positionals:
         if positional.required and positional.name not in provided:
-            usage = render_usage(spec.compatibility_name, spec, compatibility=True)
-            if route == ("service-issue",):
-                usage = usage.replace("Usage:", "usage:", 1)
+            usage = render_usage(spec)
             raise ParserError(
                 f"missing required argument: {positional.metavar}\n{usage.rstrip()}"
             )
@@ -771,11 +840,8 @@ def parse_route(
     return ParseResult(spec, MappingProxyType(values.copy()), frozenset(provided))
 
 
-def render_usage(name: str, spec: RouteSpec, *, compatibility: bool) -> str:
-    route = spec.route[1:] if compatibility and len(spec.route) > 1 else (
-        () if compatibility else spec.route
-    )
-    invocation = " ".join((name, *route))
+def render_usage(spec: RouteSpec) -> str:
+    invocation = " ".join(("platform-pki", *spec.route))
     positionals = " ".join(
         f"[{positional.metavar}...]"
         if positional.repeatable
@@ -788,8 +854,33 @@ def render_usage(name: str, spec: RouteSpec, *, compatibility: bool) -> str:
     return f"Usage: {invocation} {suffix}\n"
 
 
-def render_route_help(name: str, spec: RouteSpec, *, compatibility: bool) -> str:
-    usage = render_usage(name, spec, compatibility=compatibility)
+_ROUTE_FOOTERS: dict[tuple[str, ...], str] = {
+    ("offline-csr", "approve"): (
+        "Authenticates an exact three-file request snapshot, requires explicit "
+        "review, and no-clobber-publishes one protected five-file approval "
+        "directory without mutating CA, replay, candidate, or target state."
+    ),
+    ("offline-csr", "sign"): (
+        "Authenticates an exact five-file approval snapshot and delegates every "
+        "signing mutation to the host-local writer. Recovery remains exclusively "
+        "through platform-pki csr-recover."
+    ),
+    ("ca-passphrase-verify",): (
+        "Passphrases are supplied to OpenSSL through inherited file descriptors "
+        "and are never placed in argv, the environment, or output. No receipt or "
+        "persistent verification state is written."
+    ),
+    ("custody-report",): (
+        "The report inspects managed PKI paths, file metadata, storage ancestry, "
+        "age headers, and only the first PEM header line of validated private-key "
+        "files. It never decrypts, parses, hashes, copies, or prints private-key "
+        "content."
+    ),
+}
+
+
+def render_route_help(spec: RouteSpec) -> str:
+    usage = render_usage(spec)
     lines = [usage.rstrip(), "", "Options:", "  -h, --help  Show this help"]
     for option in spec.options:
         label = option.name
@@ -802,4 +893,7 @@ def render_route_help(name: str, spec: RouteSpec, *, compatibility: bool) -> str
         elif option.default is not None:
             label += f"  (default: {option.default})"
         lines.append(f"  {label}")
+    footer = _ROUTE_FOOTERS.get(spec.route)
+    if footer is not None:
+        lines.extend(("", footer))
     return "\n".join(lines) + "\n"

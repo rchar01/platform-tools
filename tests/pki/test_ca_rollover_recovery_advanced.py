@@ -198,7 +198,7 @@ def _assert_terminal_status(
     }
     result = process_runner(
         [
-            tools.rollover,
+            *tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -214,7 +214,7 @@ def _assert_terminal_status(
 
     result = process_runner(
         [
-            tools.rollover,
+            *tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,

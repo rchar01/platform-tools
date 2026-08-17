@@ -12,7 +12,7 @@ from .support import BIN, assert_result, mode, write_private
 
 
 pytestmark = pytest.mark.pki
-TOOL = BIN / "platform-pki-backup"
+TOOL = (BIN / "platform-pki", "backup")
 
 
 def create_pki_tree(pki: Path) -> None:
@@ -36,7 +36,7 @@ def create_pki_tree(pki: Path) -> None:
 
 
 def backup(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], pki: Path, destination: Path | None = None) -> ProcessResult:
-    arguments: list[object] = [TOOL, "--pki-dir", pki]
+    arguments: list[object] = [*TOOL, "--pki-dir", pki]
     if destination is not None:
         arguments.extend(("--backup-dir", destination))
     arguments.append("--allow-plain-backup")

@@ -18,7 +18,7 @@ from .test_csr_signing import CsrWorkspace, csr_workspace, tree_snapshot
 
 
 pytestmark = pytest.mark.pki
-EXPORT = BIN / "platform-pki-certificate-export"
+EXPORT = (BIN / "platform-pki", "certificate-export")
 UNIFIED = BIN / "platform-pki"
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-certificate-export"
 ORACLE = ORACLE_ROOT / "platform-pki-certificate-export"
@@ -81,21 +81,9 @@ def test_frozen_certificate_export_oracle_matches_provenance_and_modes() -> None
         assert stat.S_IMODE(path.stat().st_mode) == expected_mode
 
 
-def test_certificate_export_compatibility_help_matches_oracle(
-    process_runner, isolated_environment
-) -> None:
-    oracle_environment = environment(
-        isolated_environment, PLATFORM_TOOLS_LIB_DIR=os.fspath(ORACLE_LIB)
-    )
-    for action in (("--help",), ("publish", "--help"), ("resolve", "--help")):
-        oracle = process_runner([ORACLE, *action], env=oracle_environment, timeout=30)
-        result = process_runner([EXPORT, *action], env=isolated_environment, timeout=30)
-        assert result == ProcessResult(result.args, oracle.status, oracle.stdout, oracle.stderr)
-
-
 def run(workspace: CsrWorkspace, *arguments: object):
     return workspace.runner(
-        [EXPORT, *arguments, "--namespace", workspace.namespace],
+        [*EXPORT, *arguments, "--namespace", workspace.namespace],
         env=workspace.env,
         timeout=120,
     )
@@ -223,7 +211,7 @@ def start_paused(process_starter, workspace: CsrWorkspace, arguments: list[objec
     if tmpdir is not None:
         env["TMPDIR"] = os.fspath(tmpdir)
     return process_starter(
-        [EXPORT, *arguments, "--namespace", workspace.namespace],
+        [*EXPORT, *arguments, "--namespace", workspace.namespace],
         env=env,
         timeout=120,
     )
@@ -694,14 +682,14 @@ def test_parser_requires_explicit_request_and_manifest_pin(
 ) -> None:
     workspace = csr_workspace
     missing_request = workspace.runner(
-        [EXPORT, "publish", "external", "--namespace", workspace.namespace],
+        [*EXPORT, "publish", "external", "--namespace", workspace.namespace],
         env=workspace.env,
     )
     assert missing_request.status == 1
     assert missing_request.stdout == ""
     missing_pin = workspace.runner(
         [
-            EXPORT,
+            *EXPORT,
             "resolve",
             "external",
             "--request-id",

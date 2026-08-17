@@ -46,7 +46,7 @@ ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-renew"
 ORACLE_RENEW = ORACLE_ROOT / "platform-pki-service-renew"
 ORACLE_LIB = ORACLE_ROOT / "lib"
 UNIFIED = BIN / "platform-pki"
-RECOVER = BIN / "platform-pki-csr-recover"
+RECOVER = (BIN / "platform-pki", "csr-recover")
 RENEWAL_ID = "2123456789abcdef0123456789abcdef"
 SECOND_RENEWAL_ID = "3123456789abcdef0123456789abcdef"
 THIRD_RENEWAL_ID = "4123456789abcdef0123456789abcdef"
@@ -61,7 +61,7 @@ def _renew(
 ):
     return workspace.runner(
         [
-            RENEW,
+            *RENEW,
             "external",
             "--namespace",
             workspace.namespace,
@@ -451,7 +451,7 @@ def test_python_host_local_renew_rejects_authenticated_abandoned_migration_witho
     assert_result(
         workspace.runner(
             [
-                ISSUE,
+                *ISSUE,
                 "external",
                 "--namespace",
                 workspace.namespace,
@@ -925,7 +925,7 @@ def test_python_host_local_renew_rechecks_terminal_outcome_at_source_boundaries(
     release = csr_workspace.artifacts / f"{checkpoint}.release"
     process = process_starter(
         [
-            RENEW,
+            *RENEW,
             "external",
             "--namespace",
             csr_workspace.namespace,
@@ -1270,7 +1270,7 @@ def test_python_host_local_renewal_hard_crash_uses_public_csr_recovery(
 
     recovered = csr_workspace.runner(
         [
-            RECOVER,
+            *RECOVER,
             "--namespace",
             csr_workspace.namespace,
             "--transaction",
@@ -1344,7 +1344,7 @@ def test_python_host_local_renew_authenticates_managed_migration_predecessor(
     assert_result(
         workspace.runner(
             [
-                ISSUE,
+                *ISSUE,
                 "external",
                 "--namespace",
                 workspace.namespace,
@@ -1359,7 +1359,7 @@ def test_python_host_local_renew_authenticates_managed_migration_predecessor(
     assert_result(
         workspace.runner(
             [
-                ANSIBLE_EXPORT,
+                *ANSIBLE_EXPORT,
                 "external",
                 "--namespace",
                 workspace.namespace,

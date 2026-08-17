@@ -16,8 +16,8 @@ from .support import BIN, REPOSITORY, assert_result, digest, environment, mode, 
 
 
 pytestmark = pytest.mark.pki
-INIT = BIN / "platform-pki-init"
-TOOL = BIN / "platform-pki-inventory-install"
+INIT = (BIN / "platform-pki", "init")
+TOOL = (BIN / "platform-pki", "inventory-install")
 ORACLE = REPOSITORY / "tests/pki/oracles/platform-pki-inventory-install/platform-pki-inventory-install"
 UNIFIED = BIN / "platform-pki"
 ORACLE_COMMIT = "8c2e8e7ae46e9aedbda70a9035682aa9f1445dd1"
@@ -25,8 +25,7 @@ ORACLE_SHA256 = "9084754ca9a6906abdbd3b1f6cbe7230f17a55074dfd327a0403d8d7a9a7703
 COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
 INTERFACES = (
     pytest.param((ORACLE,), id="bash-oracle"),
-    pytest.param((TOOL,), id="python-compatibility"),
-    pytest.param((UNIFIED, "inventory-install"), id="python-unified"),
+    pytest.param(TOOL, id="python-unified"),
 )
 INVENTORY = """services:
   api:
@@ -38,7 +37,7 @@ UPDATED_INVENTORY = INVENTORY.rstrip() + "\n    days: 2\n"
 
 
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], namespace: Path, private: Path | None, *, cwd: Path | None = None) -> ProcessResult:
-    arguments: list[object] = [TOOL, "--namespace", namespace]
+    arguments: list[object] = [*TOOL, "--namespace", namespace]
     if private is not None:
         arguments.extend(("--private-repo", private))
     return process_runner(arguments, env=env, cwd=cwd, timeout=30)
@@ -60,7 +59,7 @@ def run_interface(process_runner: Callable[..., ProcessResult], env: Mapping[str
 
 def setup_workspace(tmp_path: Path, process_runner, env) -> tuple[Path, Path, Path]:
     namespace = tmp_path / "namespace"
-    result = process_runner([INIT, "--namespace", namespace], env=env, timeout=30)
+    result = process_runner([*INIT, "--namespace", namespace], env=env, timeout=30)
     assert_result(result, 0)
     private = tmp_path / "platform-private"
     private.mkdir(mode=0o700)
@@ -79,7 +78,7 @@ def wait_for_path(path: Path, timeout: float = 30) -> None:
 
 def start_paused(process_starter, env: Mapping[str, str], namespace: Path, private: Path, point: str, marker: Path, release: Path):
     return process_starter(
-        [TOOL, "--namespace", namespace, "--private-repo", private],
+        [*TOOL, "--namespace", namespace, "--private-repo", private],
         env=environment(
             env,
             PLATFORM_PKI_INVENTORY_INSTALL_PAUSE_AT=point,
@@ -113,21 +112,13 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     assert os.access(ORACLE, os.X_OK)
 
 
-def test_inventory_install_compatibility_help_matches_oracle(
-    process_runner, isolated_environment
-) -> None:
-    oracle = process_runner([ORACLE, "--help"], env=isolated_environment, timeout=30)
-    result = process_runner([TOOL, "--help"], env=isolated_environment, timeout=30)
-    assert result == ProcessResult(result.args, 0, oracle.stdout, "")
-
-
 @pytest.mark.parametrize("tool", INTERFACES)
-def test_inventory_install_three_interfaces_install_noop_and_normalize(
+def test_inventory_install_oracle_and_unified_interfaces_install_noop_and_normalize(
     tmp_path, process_runner, isolated_environment, tool
 ) -> None:
     namespace = tmp_path / tool[0].name
     result = process_runner(
-        [INIT, "--namespace", namespace], env=isolated_environment, timeout=30
+        [*INIT, "--namespace", namespace], env=isolated_environment, timeout=30
     )
     assert_result(result, 0)
     private = tmp_path / f"private-{tool[0].name}"
@@ -395,8 +386,8 @@ def test_inventory_install_default_private_repository(tmp_path, process_runner, 
 def test_inventory_install_rejects_private_repo_conflicts_and_duplicate_option(tmp_path, process_runner, isolated_environment) -> None:
     namespace, pki, private = setup_workspace(tmp_path, process_runner, isolated_environment)
     assert run(process_runner, isolated_environment, namespace, pki).status == 1
-    assert process_runner([TOOL, "--namespace", namespace, "--private-repo", ""], env=isolated_environment, timeout=30).status == 1
-    assert process_runner([TOOL, "--namespace", namespace, "--private-repo", private, "--private-repo", private], env=isolated_environment, timeout=30).status == 1
+    assert process_runner([*TOOL, "--namespace", namespace, "--private-repo", ""], env=isolated_environment, timeout=30).status == 1
+    assert process_runner([*TOOL, "--namespace", namespace, "--private-repo", private, "--private-repo", private], env=isolated_environment, timeout=30).status == 1
 
 
 def _normalize_case_root(root: Path, output: str) -> str:
@@ -414,7 +405,7 @@ def _differential_seed(
     seed.mkdir(mode=0o700)
     namespace = seed / "namespace"
     result = process_runner(
-        [INIT, "--namespace", namespace], env=isolated_environment, timeout=30
+        [*INIT, "--namespace", namespace], env=isolated_environment, timeout=30
     )
     assert_result(result, 0)
     private = seed / "private"

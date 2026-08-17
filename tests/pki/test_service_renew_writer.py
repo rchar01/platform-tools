@@ -32,7 +32,7 @@ from src.platform_pki.service_transaction import (
 pytestmark = pytest.mark.pki
 REPOSITORY = Path(__file__).resolve().parents[2]
 ISSUE_DRIVER = REPOSITORY / "tests/pki/service_issue_writer_driver.py"
-RENEW_DRIVER = REPOSITORY / "bin/platform-pki-service-renew"
+RENEW_COMMAND = (REPOSITORY / "bin/platform-pki", "service-renew")
 PUBLIC = REPOSITORY / "bin/platform-pki"
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-renew"
 BASH_RENEW = ORACLE_ROOT / "platform-pki-service-renew"
@@ -53,14 +53,18 @@ INVENTORY = """services:
 
 
 def _command(
-    driver: Path,
+    command: Path | tuple[Path | str, ...],
     value: CreateWorkspace,
     service: str,
     *arguments: str,
 ) -> list[str | Path]:
+    prefix: tuple[Path | str, ...]
+    if isinstance(command, Path):
+        prefix = (sys.executable, command)
+    else:
+        prefix = command
     return [
-        sys.executable,
-        driver,
+        *prefix,
         service,
         "--pki-dir",
         value.pki,
@@ -265,7 +269,7 @@ def test_bash_python_managed_renewal_operational_state_is_equivalent(
     )
     python_result = run(
         process_runner,
-        _command(RENEW_DRIVER, python, "app"),
+        _command(RENEW_COMMAND, python, "app"),
         python_environment,
     )
     require_success(bash_result, "Bash managed service renewal")
@@ -314,7 +318,7 @@ def test_managed_renew_writer_archives_sparse_state_and_rotated_key(
     old_key = digest(service / "private/tls.key")
     old_certificate = digest(service / "certs/tls.crt")
 
-    result = run(process_runner, _command(RENEW_DRIVER, value, "app"), env)
+    result = run(process_runner, _command(RENEW_COMMAND, value, "app"), env)
     require_success(result, "Python managed service renewal")
     assert "[OK] Renewed service certificate:" in result.stdout
     assert digest(service / "private/tls.key") == old_key
@@ -342,7 +346,7 @@ def test_managed_renew_writer_archives_sparse_state_and_rotated_key(
     old_rotate_key = digest(rotate / "private/tls.key")
     result = run(
         process_runner,
-        _command(RENEW_DRIVER, value, "rotate", "--rotate-key", "--days", "31"),
+        _command(RENEW_COMMAND, value, "rotate", "--rotate-key", "--days", "31"),
         env,
     )
     require_success(result, "Python managed sparse service renewal")
@@ -373,7 +377,7 @@ def test_managed_renew_writer_failure_rolls_back_complete_operational_state(
     before = _operational_files(value, "app")
     result = run(
         process_runner,
-        _command(RENEW_DRIVER, value, "app", "--rotate-key"),
+        _command(RENEW_COMMAND, value, "app", "--rotate-key"),
         dict(env, PLATFORM_PKI_SERVICE_RENEW_FAILURE_AT="verification-after-mutation"),
     )
     assert result.status == 1
@@ -406,7 +410,7 @@ def test_managed_renew_writer_hard_crash_uses_exact_public_recovery(
         before = _renewal_public_state(value, "app")
         crashed = run(
             process_runner,
-            _command(RENEW_DRIVER, value, "app", "--rotate-key"),
+            _command(RENEW_COMMAND, value, "app", "--rotate-key"),
             dict(
                 process_environment,
                 PLATFORM_PKI_SERVICE_RENEW_CRASH_AT=checkpoint,

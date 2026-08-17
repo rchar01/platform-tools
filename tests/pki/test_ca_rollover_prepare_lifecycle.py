@@ -252,7 +252,7 @@ def test_intermediate_prepare_publication(
 
     result = _run(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "prepare",
             "--namespace",
             workspace.namespace,
@@ -322,7 +322,7 @@ def test_intermediate_prepare_publication(
 
     issue = _run(
         [
-            rollover_tools.issue,
+            *rollover_tools.issue,
             "next",
             "--namespace",
             workspace.namespace,
@@ -372,7 +372,7 @@ def test_intermediate_prepare_publication(
 
     status = _run(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,
@@ -449,7 +449,7 @@ def test_overlapping_active_rollover(
     workspace = rollover_case_factory("overlapping-active-rollover")
     receipt = backup_receipt_factory(workspace)
     base_command: list[str | Path] = [
-        rollover_tools.rollover,
+        *rollover_tools.rollover,
         "prepare",
         "--namespace",
         workspace.namespace,
@@ -512,7 +512,7 @@ def test_root_prepare_publication(
 
     result = _run(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "prepare",
             "--namespace",
             workspace.namespace,
@@ -678,7 +678,7 @@ def test_root_prepare_publication(
 
     status = _run(
         [
-            rollover_tools.rollover,
+            *rollover_tools.rollover,
             "status",
             "--namespace",
             workspace.namespace,

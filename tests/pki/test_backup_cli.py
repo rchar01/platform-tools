@@ -19,20 +19,18 @@ from .support import BIN, REPOSITORY, assert_result, environment, executable_dir
 
 
 pytestmark = pytest.mark.pki
-TOOL = BIN / "platform-pki-backup"
-UNIFIED = BIN / "platform-pki"
+TOOL = (BIN / "platform-pki", "backup")
 ORACLE = REPOSITORY / "tests/pki/oracles/platform-pki-backup/platform-pki-backup"
 ORACLE_COMMIT = "3d5e3b4ecd4c137f97748b4066c7e4c508e99655"
 ORACLE_SHA256 = "beac1204e2014e41be39254389ebc18a9db4b5a7b699197bf25187d5a8b6deea"
 COMMON_SHA256 = "dee644be8ab6236cb368a553493f55b53a90c3aead291550f7e635c080a5494f"
 PYTHON_INTERFACES = (
-    pytest.param((TOOL,), id="compatibility"),
-    pytest.param((UNIFIED, "backup"), id="unified"),
+    pytest.param(TOOL, id="unified"),
 )
 
 
 def run(process_runner: Callable[..., ProcessResult], env: Mapping[str, str], *arguments: object) -> ProcessResult:
-    return process_runner([TOOL, *arguments], env=env, timeout=30)
+    return process_runner([*TOOL, *arguments], env=env, timeout=30)
 
 
 def run_interface(
@@ -127,8 +125,8 @@ def test_backup_cli_contract(tmp_path, process_runner, isolated_environment) -> 
     result = run(process_runner, isolated_environment, "--help")
     assert_result(result, 0, stderr="")
     assert "Usage:" in result.stdout
-    assert "platform-pki-backup --version | -v" in result.stdout
-    assert_result(run(process_runner, isolated_environment, "--version"), 0, stdout=f"platform-pki-backup {version}\n", stderr="")
+    assert "Usage: platform-pki backup" in result.stdout
+    assert_result(process_runner([TOOL[0], "--version"], env=isolated_environment, timeout=30), 0, stdout=f"platform-pki {version}\n", stderr="")
     for arguments, message in (
         (("--unknown",), "invalid option: --unknown"),
         (("--backup-dir", ""), "must not be empty"),
@@ -149,14 +147,6 @@ def test_frozen_oracle_and_common_library_match_recorded_provenance() -> None:
     ).hexdigest() == COMMON_SHA256
     assert ORACLE_COMMIT in plan
     assert os.access(ORACLE, os.X_OK)
-
-
-def test_backup_compatibility_help_matches_frozen_oracle(
-    process_runner, isolated_environment
-) -> None:
-    oracle = run_interface(process_runner, isolated_environment, (ORACLE,), "--help")
-    result = run_interface(process_runner, isolated_environment, (TOOL,), "--help")
-    assert result == ProcessResult(result.args, oracle.status, oracle.stdout, oracle.stderr)
 
 
 @pytest.mark.parametrize("command", PYTHON_INTERFACES)
@@ -243,7 +233,7 @@ def test_plain_backup_receipt_and_manifest_match_frozen_oracle(
     assert python_listing.stdout == oracle_listing.stdout
 
     custody = process_runner(
-        [BIN / "platform-pki-custody-report", "--pki-dir", pki, "--format", "json"],
+        [BIN / "platform-pki", "custody-report", "--pki-dir", pki, "--format", "json"],
         env=isolated_environment,
         timeout=30,
     )

@@ -73,12 +73,12 @@ ROLLOVER_WRAPPER = "PLATFORM_PKI_TEST_ROLLOVER_WRAPPER"
 
 @dataclass(frozen=True)
 class RolloverTools:
-    init: Path
-    root: Path
-    intermediate: Path
-    issue: Path
-    backup: Path
-    rollover: Path
+    init: tuple[Path | str, ...]
+    root: tuple[Path | str, ...]
+    intermediate: tuple[Path | str, ...]
+    issue: tuple[Path | str, ...]
+    backup: tuple[Path | str, ...]
+    rollover: tuple[Path | str, ...]
 
 
 @dataclass(frozen=True)
@@ -168,12 +168,12 @@ def _validate_case_name(name: str) -> None:
 
 def _checked_process(
     tools: RolloverTools,
-    tool: Path,
+    tool: tuple[Path | str, ...],
     arguments: list[str | Path],
     environment: Mapping[str, str],
 ) -> ProcessResult:
     result = run_process(
-        [tool, *arguments],
+        [*tool, *arguments],
         env=environment,
         timeout=120,
     )
@@ -222,7 +222,7 @@ def _public_state_snapshot(workspace: RolloverWorkspace) -> tuple[str, ...]:
 
 
 @pytest.fixture
-def rollover_tool(rollover_tools: RolloverTools) -> Path:
+def rollover_tool(rollover_tools: RolloverTools) -> tuple[Path | str, ...]:
     return rollover_tools.rollover
 
 
@@ -409,7 +409,7 @@ def _conditional_rollover_wrapper(
     _write_conditional_rollover_wrapper(
         wrapper,
         bin_dir / "platform-pki",
-        bin_dir / "platform-pki-ca-rollover",
+        repository / "tests/pki/oracles/platform-pki-ca-rollover/platform-pki-ca-rollover",
     )
     previous = os.environ.get(ROLLOVER_WRAPPER)
     os.environ[ROLLOVER_WRAPPER] = os.fspath(wrapper)
@@ -426,14 +426,15 @@ def _conditional_rollover_wrapper(
 def rollover_tools(_conditional_rollover_wrapper: Path | None) -> RolloverTools:
     bin_dir = Path(__file__).resolve().parents[2] / "bin"
     return RolloverTools(
-        init=bin_dir / "platform-pki-init",
-        root=bin_dir / "platform-pki-root-create",
-        intermediate=bin_dir / "platform-pki-intermediate-create",
-        issue=bin_dir / "platform-pki-service-issue",
-        backup=bin_dir / "platform-pki-backup",
+        init=(bin_dir / "platform-pki", "init"),
+        root=(bin_dir / "platform-pki", "root-create"),
+        intermediate=(bin_dir / "platform-pki", "intermediate-create"),
+        issue=(bin_dir / "platform-pki", "service-issue"),
+        backup=(bin_dir / "platform-pki", "backup"),
         rollover=(
-            _conditional_rollover_wrapper
-            or bin_dir / "platform-pki-ca-rollover"
+            (_conditional_rollover_wrapper,)
+            if _conditional_rollover_wrapper is not None
+            else (bin_dir / "platform-pki", "ca-rollover")
         ),
     )
 

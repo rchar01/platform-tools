@@ -14,11 +14,11 @@ from .support import BIN, REPOSITORY, assert_result, digest, environment, execut
 
 
 pytestmark = pytest.mark.pki
-INIT = BIN / "platform-pki-init"
-ROOT = BIN / "platform-pki-root-create"
-INTERMEDIATE = BIN / "platform-pki-intermediate-create"
-ISSUE = BIN / "platform-pki-service-issue"
-TOOL = BIN / "platform-pki-service-renew"
+INIT = (BIN / "platform-pki", "init")
+ROOT = (BIN / "platform-pki", "root-create")
+INTERMEDIATE = (BIN / "platform-pki", "intermediate-create")
+ISSUE = (BIN / "platform-pki", "service-issue")
+TOOL = (BIN / "platform-pki", "service-renew")
 UNIFIED = BIN / "platform-pki"
 ORACLE_ROOT = REPOSITORY / "tests/pki/oracles/platform-pki-service-renew"
 ORACLE = ORACLE_ROOT / "platform-pki-service-renew"
@@ -77,20 +77,16 @@ class Workspace:
         service: str,
         *arguments: object,
         env: Mapping[str, str] | None = None,
-        unified: bool = False,
     ) -> ProcessResult:
-        prefix: tuple[object, ...] = (
-            (UNIFIED, "service-renew") if unified else (TOOL,)
-        )
         return self.runner(
-            [*prefix, service, "--namespace", self.namespace, *arguments, "--intermediate-pass-file", self.intermediate_pass],
+            [*TOOL, service, "--namespace", self.namespace, *arguments, "--intermediate-pass-file", self.intermediate_pass],
             env=self.env if env is None else env,
             timeout=120,
         )
 
     def issue(self, service: str) -> None:
         result = self.runner(
-            [ISSUE, service, "--namespace", self.namespace, "--intermediate-pass-file", self.intermediate_pass],
+            [*ISSUE, service, "--namespace", self.namespace, "--intermediate-pass-file", self.intermediate_pass],
             env=self.env,
             timeout=120,
         )
@@ -106,9 +102,9 @@ def renew_workspace(tmp_path, process_runner, isolated_environment) -> Workspace
     write_private(root_pass, "root-test-passphrase-123\n")
     write_private(intermediate_pass, "intermediate-test-passphrase-123\n")
     commands = (
-        [INIT, "--namespace", namespace],
-        [ROOT, "--namespace", namespace, "--name", "Test Root CA", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass],
-        [INTERMEDIATE, "--namespace", namespace, "--name", "Test Intermediate CA", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass, "--intermediate-pass-file", intermediate_pass],
+        [*INIT, "--namespace", namespace],
+        [*ROOT, "--namespace", namespace, "--name", "Test Root CA", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass],
+        [*INTERMEDIATE, "--namespace", namespace, "--name", "Test Intermediate CA", "--org", "Test", "--country", "PL", "--root-pass-file", root_pass, "--intermediate-pass-file", intermediate_pass],
     )
     assert_result(process_runner(commands[0], env=isolated_environment, timeout=120), 0)
     write_private(pki / "inventory/services.yml", INVENTORY)
@@ -186,71 +182,30 @@ def test_frozen_oracle_and_loaded_libraries_match_recorded_provenance() -> None:
     assert all(file_mode(path) == 0o644 for path in tuple(expected)[1:])
 
 
-@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
-def test_compatibility_help_matches_frozen_oracle(
-    process_runner, isolated_environment, tty
-) -> None:
-    env = dict(isolated_environment)
-    env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ORACLE_LIB)
-    pty_mode = None
-    if tty:
-        env.pop("NO_COLOR")
-        pty_mode = "canonical"
-    expected = process_runner(
-        [ORACLE, "--help"], env=env, timeout=30, pty_mode=pty_mode
-    )
-    actual = process_runner(
-        [TOOL, "--help"], env=env, timeout=30, pty_mode=pty_mode
-    )
-    assert (actual.status, actual.stdout, actual.stderr) == (
-        expected.status,
-        expected.stdout,
-        expected.stderr,
-    )
-
-
-def test_compatibility_and_unified_routes_share_public_handler(
-    tmp_path, process_runner, isolated_environment
-) -> None:
-    pki = tmp_path / "missing-pki"
-    compatibility = process_runner(
-        [TOOL, "app", "--pki-dir", pki], env=isolated_environment, timeout=30
-    )
-    unified = process_runner(
-        [UNIFIED, "service-renew", "app", "--pki-dir", pki],
-        env=isolated_environment,
-        timeout=30,
-    )
-    assert (compatibility.status, compatibility.stdout, compatibility.stderr) == (
-        unified.status,
-        unified.stdout,
-        unified.stderr,
-    )
-
-
 def test_service_renew_cli_contract(tmp_path, process_runner, isolated_environment) -> None:
     version = (REPOSITORY / "VERSION").read_text().strip()
-    result = process_runner([TOOL, "--help"], env=isolated_environment, timeout=30)
+    result = process_runner([*TOOL, "--help"], env=isolated_environment, timeout=30)
     assert_result(result, 0, stderr="")
-    assert "platform-pki-service-renew --version | -v" in result.stdout
+    assert "Usage: platform-pki service-renew" in result.stdout
     assert "--rotate-key" in result.stdout
-    assert_result(process_runner([TOOL, "--version"], env=isolated_environment, timeout=30), 0, stdout=f"platform-pki-service-renew {version}\n")
-    result = process_runner([TOOL], env=isolated_environment, timeout=30)
+    assert_result(process_runner([UNIFIED, "--version"], env=isolated_environment, timeout=30), 0, stdout=f"platform-pki {version}\n")
+    assert_result(process_runner([*TOOL, "--version"], env=isolated_environment, timeout=30), 1, stdout="")
+    result = process_runner(TOOL, env=isolated_environment, timeout=30)
     assert result.status == 1 and "missing required argument: SERVICE" in result.stderr
-    result = process_runner([TOOL, "app", "--days", "nope"], env=isolated_environment, timeout=30)
+    result = process_runner([*TOOL, "app", "--days", "nope"], env=isolated_environment, timeout=30)
     assert result.status == 1 and "Days value must be numeric: nope" in result.stderr
     for flag in ("--help", "-h"):
-        result = process_runner([TOOL, "app", flag], env=isolated_environment, timeout=30)
+        result = process_runner([*TOOL, "app", flag], env=isolated_environment, timeout=30)
         assert_result(result, 0, stderr="")
         assert "Usage:" in result.stdout
-    result = process_runner([TOOL, "app", "--namespace", "--help"], env=isolated_environment, timeout=30)
+    result = process_runner([*TOOL, "app", "--namespace", "--help"], env=isolated_environment, timeout=30)
     assert_result(result, 1, stdout="")
 
 
 def test_service_renew_requires_issued_service_state(renew_workspace: Workspace) -> None:
     result = renew_workspace.renew("app")
     assert result.status == 1
-    assert "Service private key is missing; use platform-pki-service-issue first" in result.stderr
+    assert "Service private key is missing; use platform-pki service-issue first" in result.stderr
     assert not (renew_workspace.pki / "services/app").exists()
 
 
@@ -352,7 +307,7 @@ def test_service_renew_rotate_key_archives_old_key(renew_workspace: Workspace) -
     old_key = digest(key)
     key.chmod(0o400)
     result = workspace.renew(
-        "rotate", "--days", "31", "--rotate-key", unified=True
+        "rotate", "--days", "31", "--rotate-key"
     )
     assert_result(result, 0)
     assert digest(key) != old_key

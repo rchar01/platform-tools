@@ -73,7 +73,7 @@ INVENTORY = """services:
 
 
 def _issue(value, toolset, service: str, *arguments: str | Path) -> list[str | Path]:
-    return [toolset.issue, service, "--namespace", value.namespace, "--intermediate-pass-file", value.intermediate_pass, *arguments]
+    return [*toolset.issue, service, "--namespace", value.namespace, "--intermediate-pass-file", value.intermediate_pass, *arguments]
 
 
 def _oracle_issue(value, service: str, *arguments: str | Path) -> list[str | Path]:
@@ -170,59 +170,11 @@ def test_frozen_oracle_and_loaded_libraries_match_recorded_provenance() -> None:
     assert mode(ORACLE_LIB / "platform-pki-csr-sign.sh") == 0o644
 
 
-@pytest.mark.parametrize("tty", (False, True), ids=("no-color", "tty-color"))
-def test_compatibility_help_matches_frozen_oracle(
-    tmp_path: Path,
-    process_runner: Callable[..., ProcessResult],
-    tty: bool,
-) -> None:
-    env = environment(tmp_path / "environment")
-    env["PLATFORM_TOOLS_LIB_DIR"] = os.fspath(ORACLE_LIB)
-    pty_mode = None
-    if tty:
-        env.pop("NO_COLOR")
-        pty_mode = "canonical"
-    expected = run(process_runner, [ORACLE, "--help"], env, pty_mode=pty_mode)
-    actual = run(
-        process_runner,
-        [tools().issue, "--help"],
-        env,
-        pty_mode=pty_mode,
-    )
-    assert (actual.status, actual.stdout, actual.stderr) == (
-        expected.status,
-        expected.stdout,
-        expected.stderr,
-    )
-
-
-def test_compatibility_and_unified_routes_share_public_handler(
-    tmp_path: Path, process_runner: Callable[..., ProcessResult]
-) -> None:
-    env = environment(tmp_path / "environment")
-    pki = tmp_path / "missing-pki"
-    compatibility = run(
-        process_runner,
-        [tools().issue, "app", "--pki-dir", pki],
-        env,
-    )
-    unified = run(
-        process_runner,
-        [UNIFIED, "service-issue", "app", "--pki-dir", pki],
-        env,
-    )
-    assert (compatibility.status, compatibility.stdout, compatibility.stderr) == (
-        unified.status,
-        unified.stdout,
-        unified.stderr,
-    )
-
-
 @pytest.mark.parametrize(
     ("arguments", "status", "stdout_fragment", "stderr_fragment"),
     (
         pytest.param(("--help",), 0, "Usage:", "", id="help"),
-        pytest.param(("--version",), 0, "platform-pki-service-issue", "", id="version"),
+        pytest.param(("--version",), 1, "", "invalid option: --version", id="version"),
         pytest.param(("--unknown",), 1, "", "invalid option: --unknown", id="unknown-option"),
         pytest.param((), 1, "", "missing required argument: SERVICE", id="missing-service"),
         pytest.param(("app", "--days", "nope"), 1, "", "Days value must be numeric: nope", id="invalid-days"),
@@ -235,15 +187,13 @@ def test_compatibility_and_unified_routes_share_public_handler(
     ),
 )
 def test_parser_contract(tmp_path: Path, process_runner: Callable[..., ProcessResult], arguments: tuple[str, ...], status: int, stdout_fragment: str, stderr_fragment: str) -> None:
-    toolset = tools(); result = run(process_runner, [toolset.issue, *arguments], environment(tmp_path / "environment"))
+    toolset = tools(); result = run(process_runner, [*toolset.issue, *arguments], environment(tmp_path / "environment"))
     assert result.status == status
     assert stdout_fragment in result.stdout
     assert stderr_fragment in result.stderr
     if arguments == ("--help",):
-        assert "platform-pki-service-issue --version | -v" in result.stdout
+        assert "Usage: platform-pki service-issue" in result.stdout
         assert "--rotate-key" in result.stdout
-    if arguments == ("--version",):
-        assert result.stdout == f"platform-pki-service-issue {toolset.version}\n"
     if status == 0:
         assert result.stderr == ""
     if arguments and arguments[-1] == "--help" and status == 1:
@@ -252,7 +202,7 @@ def test_parser_contract(tmp_path: Path, process_runner: Callable[..., ProcessRe
 
 def test_inventory_parser_temp_is_removed_on_cli_failure(tmp_path: Path, process_runner: Callable[..., ProcessResult]) -> None:
     toolset = tools(); env = environment(tmp_path / "environment"); temporary = tmp_path / "inventory-temp"; temporary.mkdir(mode=0o700)
-    result = run(process_runner, [toolset.issue, "unknown", "--pki-dir", tmp_path / "missing"], dict(env, TMPDIR=os.fspath(temporary)))
+    result = run(process_runner, [*toolset.issue, "unknown", "--pki-dir", tmp_path / "missing"], dict(env, TMPDIR=os.fspath(temporary)))
     assert result.status == 1
     assert_no_glob(temporary, "platform-pki-service-issue.*")
 
@@ -325,7 +275,7 @@ def test_existing_certificate_refusal_preserves_service_and_ca(tmp_path: Path, p
     key_before = digest(key); certificate_before = digest(certificate); ca_before = _ca_state(value)
     result = run(process_runner, _issue(value, toolset, "app", "--rotate-key"), env)
     assert result.status == 1
-    assert "Service certificate already exists; use platform-pki-service-renew" in result.stderr
+    assert "Service certificate already exists; use platform-pki service-renew" in result.stderr
     if digest(key) != key_before or digest(certificate) != certificate_before or _ca_state(value) != ca_before:
         pytest.fail("existing-certificate refusal changed service or CA state", pytrace=False)
 

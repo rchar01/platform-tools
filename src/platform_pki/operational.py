@@ -142,7 +142,7 @@ def acquire_operational_locks(pki_dir: str, profile: str) -> Iterator[None]:
 def require_pki_directory(pki_dir: str) -> None:
     if not os.path.isdir(pki_dir):
         raise ApplicationError(
-            f"PKI directory does not exist; run platform-pki-init first: {pki_dir}"
+            f"PKI directory does not exist; run platform-pki init first: {pki_dir}"
         )
 
 
@@ -151,7 +151,7 @@ def require_inventory_readable(pki_dir: str) -> str:
     if not os.access(path, os.R_OK):
         raise ApplicationError(
             f"Service inventory is missing or unreadable: {path}; "
-            "run platform-pki-inventory-install"
+            "run platform-pki inventory-install"
         )
     return path
 
@@ -315,7 +315,7 @@ def require_generation_layout(pki_dir: str) -> None:
     if legacy and not indicators:
         raise ApplicationError(
             "Legacy PKI state requires migration; create a fresh backup and follow "
-            "platform-pki-ca-rollover status/migrate"
+            "platform-pki ca-rollover status/migrate"
         )
     if not legacy and not indicators and not os.path.lexists(legacy_root) and not os.path.lexists(
         legacy_intermediate
@@ -325,7 +325,7 @@ def require_generation_layout(pki_dir: str) -> None:
             "intermediate authorities first"
         )
     raise ApplicationError(
-        "PKI state is incomplete or ambiguous; run platform-pki-ca-rollover status"
+        "PKI state is incomplete or ambiguous; run platform-pki ca-rollover status"
     )
 
 

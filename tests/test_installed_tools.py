@@ -13,9 +13,6 @@ from pathlib import Path
 import pytest
 
 from .harness import ProcessResult, run_process
-from src.platform_pki.compat import COMPATIBILITY_COMMANDS
-
-
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text().strip()
 
@@ -51,6 +48,27 @@ def make_inventory(name: str) -> tuple[str, ...]:
 
 TOOLS = make_inventory("TOOLS")
 PYTHON_ZIPAPPS = make_inventory("PYTHON_ZIPAPPS")
+LEGACY_PKI_ALIASES = make_inventory("LEGACY_PKI_ALIASES")
+EXPECTED_LEGACY_PKI_ALIASES = (
+    "platform-pki-init",
+    "platform-pki-inventory-install",
+    "platform-pki-print-cert",
+    "platform-pki-list-expiry",
+    "platform-pki-service-verify",
+    "platform-pki-export-ansible",
+    "platform-pki-backup",
+    "platform-pki-custody-report",
+    "platform-pki-ca-passphrase-verify",
+    "platform-pki-root-create",
+    "platform-pki-intermediate-create",
+    "platform-pki-csr-recover",
+    "platform-pki-service-issue",
+    "platform-pki-service-renew",
+    "platform-pki-csr-trust-install",
+    "platform-pki-certificate-export",
+    "platform-pki-csr-candidate",
+    "platform-pki-ca-rollover",
+)
 RETIRED_SHELL_LIBRARIES = (
     "platform-pki-common.sh",
     "platform-pki-csr-sign.sh",
@@ -81,7 +99,7 @@ DEPENDENCIES = (
 )
 LEGACY_MIGRATION_ERROR = (
     "[ERROR] Legacy PKI state requires migration; create a fresh backup and "
-    "follow platform-pki-ca-rollover status/migrate\n"
+    "follow platform-pki ca-rollover status/migrate\n"
 )
 
 
@@ -213,8 +231,84 @@ def test_staged_and_installed_commands_exist(install: Install, tool: str) -> Non
     assert runtime.resolve(strict=True) == installed.resolve(strict=True)
 
 
-def test_python_compatibility_command_inventory_is_complete() -> None:
-    assert set(PYTHON_ZIPAPPS) == {"platform-pki", *COMPATIBILITY_COMMANDS}
+def test_clean_install_inventory_is_unified_only(install: Install) -> None:
+    assert PYTHON_ZIPAPPS == ("platform-pki",)
+    assert LEGACY_PKI_ALIASES == EXPECTED_LEGACY_PKI_ALIASES
+    for install_bin in (install.staged_bin, install.install_bin):
+        assert {entry.name for entry in install_bin.iterdir()} == set(TOOLS)
+        assert not any((install_bin / alias).is_symlink() for alias in LEGACY_PKI_ALIASES)
+
+
+@pytest.mark.parametrize(
+    "stale_kind", ("regular", "directory", "dangling-symlink", "live-symlink")
+)
+def test_install_rejects_legacy_alias_before_mutation(
+    process_runner: Callable[..., ProcessResult], tmp_path: Path, stale_kind: str
+) -> None:
+    install_dir = tmp_path / "custom bin"
+    install_dir.mkdir()
+    sentinel = install_dir / "sentinel"
+    sentinel.write_bytes(b"preserve sentinel\n")
+    sentinel.chmod(0o640)
+    alias = install_dir / LEGACY_PKI_ALIASES[0]
+    if stale_kind == "regular":
+        alias.write_bytes(b"preserve legacy file\n")
+        alias.chmod(0o600)
+    elif stale_kind == "directory":
+        alias.mkdir()
+        alias.chmod(0o750)
+        (alias / "preserve").write_bytes(b"preserve legacy directory\n")
+    elif stale_kind == "dangling-symlink":
+        alias.symlink_to("missing-legacy-target")
+    else:
+        target = tmp_path / "live legacy target"
+        target.write_bytes(b"preserve live target\n")
+        target.chmod(0o600)
+        alias.symlink_to(target)
+    share_dir = tmp_path / "absent share"
+
+    result = process_runner(
+        (
+            "make",
+            "-s",
+            "--no-print-directory",
+            "install",
+            f"INSTALL_DIR={install_dir}",
+            f"SHARE_DIR={share_dir}",
+        ),
+        cwd=ROOT,
+        env=os.environ,
+    )
+
+    assert result.status != 0
+    assert result.stdout == ""
+    assert result.stderr.startswith(
+        "platform-tools v3 install blocked by legacy PKI aliases:\n"
+        f"  {alias}\n"
+        "Remove or relocate the listed paths, then rerun make install.\n"
+        "v3 installs only platform-pki for PKI.\n"
+    )
+    assert {entry.name for entry in install_dir.iterdir()} == {"sentinel", alias.name}
+    assert sentinel.read_bytes() == b"preserve sentinel\n"
+    assert sentinel.stat().st_mode & 0o777 == 0o640
+    if stale_kind == "regular":
+        assert alias.read_bytes() == b"preserve legacy file\n"
+        assert alias.stat().st_mode & 0o777 == 0o600
+    elif stale_kind == "directory":
+        assert alias.is_dir()
+        assert alias.stat().st_mode & 0o777 == 0o750
+        assert (alias / "preserve").read_bytes() == b"preserve legacy directory\n"
+    elif stale_kind == "dangling-symlink":
+        assert alias.is_symlink()
+        assert os.readlink(alias) == "missing-legacy-target"
+    else:
+        target = tmp_path / "live legacy target"
+        assert alias.is_symlink()
+        assert os.readlink(alias) == os.fspath(target)
+        assert target.read_bytes() == b"preserve live target\n"
+        assert target.stat().st_mode & 0o777 == 0o600
+    assert not share_dir.exists()
+    assert not share_dir.is_symlink()
 
 
 def test_installed_assets_exclude_retired_shell_libraries(install: Install) -> None:
@@ -287,22 +381,16 @@ def test_relative_xdg_cache_home_is_rejected(
     assert not (tmp_path / "relative-cache").exists()
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-init",), ("platform-pki", "init")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_pki_shared_asset_lookup(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    namespace = install.state / f"pki-namespace-{command[0]}"
+    namespace = install.state / "pki-namespace"
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "init",
         "--namespace",
         namespace,
     )
@@ -321,22 +409,16 @@ def test_installed_pki_shared_asset_lookup(
     assert example.read_bytes() == installed_template.read_bytes()
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-root-create",), ("platform-pki", "root-create")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_root_create_operates_outside_checkout(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    case = "compatibility" if len(command) == 1 else "unified"
-    namespace = install.state / f"root-create-namespace-{case}"
+    namespace = install.state / "root-create-namespace"
     initialized = execute(
         process_runner,
         install,
-        install.runtime / "platform-pki-init",
+        install.runtime / "platform-pki",
+        "init",
         "--namespace",
         namespace,
     )
@@ -345,8 +427,8 @@ def test_installed_root_create_operates_outside_checkout(
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "root-create",
         "--namespace",
         namespace,
         "--name",
@@ -413,22 +495,16 @@ def test_installed_root_create_operates_outside_checkout(
         assert verified.status == 0, verified.stderr
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-intermediate-create",), ("platform-pki", "intermediate-create")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_intermediate_create_operates_outside_checkout(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    case = "compatibility" if len(command) == 1 else "unified"
-    namespace = install.state / f"intermediate-create-namespace-{case}"
+    namespace = install.state / "intermediate-create-namespace"
     initialized = execute(
         process_runner,
         install,
-        install.runtime / "platform-pki-init",
+        install.runtime / "platform-pki",
+        "init",
         "--namespace",
         namespace,
     )
@@ -436,7 +512,8 @@ def test_installed_intermediate_create_operates_outside_checkout(
     root = execute(
         process_runner,
         install,
-        install.runtime / "platform-pki-root-create",
+        install.runtime / "platform-pki",
+        "root-create",
         "--namespace",
         namespace,
         "--name",
@@ -452,8 +529,8 @@ def test_installed_intermediate_create_operates_outside_checkout(
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "intermediate-create",
         "--namespace",
         namespace,
         "--name",
@@ -492,18 +569,12 @@ def test_installed_intermediate_create_operates_outside_checkout(
         require_outside_checkout(path, "installed intermediate artifact", strict=True)
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-inventory-install",), ("platform-pki", "inventory-install")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_inventory_install_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    namespace = install.state / f"inventory-namespace-{command[0]}"
-    private = install.state / f"inventory-private-{command[0]}"
+    namespace = install.state / "inventory-namespace"
+    private = install.state / "inventory-private"
     (private / "pki").mkdir(mode=0o700, parents=True)
     private.chmod(0o700)
     source = private / "pki/services.yml"
@@ -515,7 +586,8 @@ def test_installed_inventory_install_operates_without_shell_libraries(
     initialized = execute(
         process_runner,
         install,
-        install.runtime / "platform-pki-init",
+        install.runtime / "platform-pki",
+        "init",
         "--namespace",
         namespace,
     )
@@ -524,8 +596,8 @@ def test_installed_inventory_install_operates_without_shell_libraries(
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "inventory-install",
         "--namespace",
         namespace,
         "--private-repo",
@@ -538,17 +610,11 @@ def test_installed_inventory_install_operates_without_shell_libraries(
     assert destination.stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-custody-report",), ("platform-pki", "custody-report")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_custody_report_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    pki = install.state / f"custody-pki-{command[0]}"
+    pki = install.state / "custody-pki"
     for directory in (
         pki / "authorities/roots/g1/private",
         pki / "authorities/intermediates/g1-i1/private",
@@ -574,8 +640,8 @@ def test_installed_custody_report_operates_without_shell_libraries(
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "custody-report",
         "--pki-dir",
         pki,
         "--format",
@@ -591,29 +657,20 @@ def test_installed_custody_report_operates_without_shell_libraries(
     assert "private-root-tail" not in result.stdout
 
 
-@pytest.mark.parametrize(
-    "command",
-    (
-        ("platform-pki-ca-passphrase-verify",),
-        ("platform-pki", "ca-passphrase-verify"),
-    ),
-    ids=("compatibility", "unified"),
-)
 def test_installed_ca_passphrase_verify_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    passphrase = install.state / f"passphrase-{command[0]}"
+    passphrase = install.state / "passphrase"
     passphrase.write_text("installed-passphrase-value\n", encoding="utf-8")
     passphrase.chmod(0o600)
-    pki = install.state / f"missing-passphrase-pki-{command[0]}"
+    pki = install.state / "missing-passphrase-pki"
 
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "ca-passphrase-verify",
         "--pki-dir",
         pki,
         "--root-pass-file",
@@ -623,35 +680,29 @@ def test_installed_ca_passphrase_verify_operates_without_shell_libraries(
     assert result.status == 1
     assert result.stdout == ""
     assert result.stderr == (
-        "[ERROR] PKI directory does not exist; run platform-pki-init first: "
+        "[ERROR] PKI directory does not exist; run platform-pki init first: "
         f"{pki}\n"
     )
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-backup",), ("platform-pki", "backup")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_backup_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    pki = install.state / f"backup-pki-{command[0]}"
+    pki = install.state / "backup-pki"
     for directory in (pki / "inventory", pki / "root-ca", pki / "intermediate-ca"):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     pki.chmod(0o700)
     private = pki / "root-ca/root-ca.key"
     private.write_text("installed backup private state\n", encoding="utf-8")
     private.chmod(0o600)
-    destination = install.state / f"backup-output-{command[0]}"
+    destination = install.state / "backup-output"
 
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "backup",
         "--pki-dir",
         pki,
         "--backup-dir",
@@ -768,24 +819,18 @@ def _prepare_export_state(
     return pki
 
 
-@pytest.mark.parametrize(
-    "command",
-    (("platform-pki-export-ansible",), ("platform-pki", "export-ansible")),
-    ids=("compatibility", "unified"),
-)
 def test_installed_export_ansible_operates_without_shell_libraries(
     process_runner: Callable[..., ProcessResult],
     install: Install,
-    command: tuple[str, ...],
 ) -> None:
-    pki = _prepare_export_state(process_runner, install, command[0])
+    pki = _prepare_export_state(process_runner, install, "unified")
     destination = pki / "export/installed"
 
     result = execute(
         process_runner,
         install,
-        install.runtime / command[0],
-        *command[1:],
+        install.runtime / "platform-pki",
+        "export-ansible",
         "api",
         "--pki-dir",
         pki,
@@ -819,7 +864,8 @@ def test_installed_pki_command_prepares_legacy_control_state(
     result = execute(
         process_runner,
         install,
-        install.runtime / "platform-pki-list-expiry",
+        install.runtime / "platform-pki",
+        "list-expiry",
         "--pki-dir",
         pki,
     )

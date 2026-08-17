@@ -6,17 +6,18 @@ SHARE_DIR ?= $(HOME)/.local/share/platform-tools
 TEST_MAKE_JOBS ?= 2
 PKI_PYTEST_WORKERS ?= 4
 export TEST_MAKE_JOBS PKI_PYTEST_WORKERS
-SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
+SHELL_TOOLS := platform-ssh-init platform-vm-env-collect platform-runtime-evidence platform-config-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
 PYTHON_SOURCE_TOOLS := platform-bastion-policy
-PYTHON_ZIPAPPS := platform-pki platform-pki-init platform-pki-inventory-install platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-export-ansible platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-root-create platform-pki-intermediate-create platform-pki-csr-recover platform-pki-service-issue platform-pki-service-renew platform-pki-csr-trust-install platform-pki-certificate-export platform-pki-csr-candidate platform-pki-ca-rollover
+PYTHON_ZIPAPPS := platform-pki
+LEGACY_PKI_ALIASES := platform-pki-init platform-pki-inventory-install platform-pki-print-cert platform-pki-list-expiry platform-pki-service-verify platform-pki-export-ansible platform-pki-backup platform-pki-custody-report platform-pki-ca-passphrase-verify platform-pki-root-create platform-pki-intermediate-create platform-pki-csr-recover platform-pki-service-issue platform-pki-service-renew platform-pki-csr-trust-install platform-pki-certificate-export platform-pki-csr-candidate platform-pki-ca-rollover
 PYTHON_TOOLS := $(PYTHON_SOURCE_TOOLS) $(PYTHON_ZIPAPPS)
 PYTHON_SOURCES := scripts/build-platform-pki-zipapp.py $(wildcard src/platform_pki/*.py)
 TOOLS := $(SHELL_TOOLS) $(PYTHON_TOOLS)
 MAINTAINED_SCRIPTS := scripts/check scripts/devshell scripts/generate scripts/in-container scripts/in-test-container scripts/verify-generated
-BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
-NON_ROLLOVER_TEST_TARGETS := test-python-infrastructure test-command-contract test-installed-tools test-platform-pki-foundation test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-issue-writer test-pki-csr-issue-writer test-pki-service-writer test-pki-service-renew test-pki-service-renew-writer test-pki-service-recover test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing
+BASHLY_TOOLS := platform-config-init platform-vm-env-collect platform-runtime-evidence platform-ssh-init platform-proxmox-token-init platform-proxmox-vm-cleanup platform-proxmox-vm-snapshot
+NON_ROLLOVER_TEST_TARGETS := test-python-infrastructure test-command-contract test-installed-tools test-platform-pki-foundation test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-platform-runtime-evidence test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-issue-writer test-pki-csr-issue-writer test-pki-service-writer test-pki-service-renew test-pki-service-renew-writer test-pki-service-recover test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-offline-csr
 
-.PHONY: help shell container-check generate generate-python verify-generated verify-python-generated install verify test test-non-rollover test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-pki-foundation test-platform-pki-service-transaction-foundation test-platform-pki-publication test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-issue-writer test-pki-csr-issue-writer test-pki-service-writer test-pki-service-renew test-pki-service-renew-writer test-pki-service-recover test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-ca-rollover test-pki-ca-rollover-python-recover test-pki-ca-rollover-parser shellcheck
+.PHONY: help shell container-check generate generate-python verify-generated verify-python-generated install verify test test-non-rollover test-python-infrastructure test-python-pki-rollover test-python-pki-rollover-parallel test-command-contract test-installed-tools test-platform-pki-foundation test-platform-pki-service-transaction-foundation test-platform-pki-publication test-platform-config-init test-platform-ssh-init test-vm-env-collect-cli test-vm-env-collect-archive test-platform-runtime-evidence test-bastion-policy test-proxmox-token-init test-proxmox-vm-cleanup test-proxmox-vm-snapshot test-pki-init test-pki-root-create test-pki-intermediate-create test-pki-service-issue test-pki-service-issue-writer test-pki-csr-issue-writer test-pki-service-writer test-pki-service-renew test-pki-service-renew-writer test-pki-service-recover test-pki-print-cert test-pki-list-expiry test-pki-service-verify test-pki-pass-file test-pki-legacy-gating test-pki-backup test-pki-custody-report test-pki-ca-passphrase-verify test-pki-export test-pki-certificate-export test-pki-csr-candidate test-pki-inventory test-pki-inventory-install test-pki-csr-trust-install test-pki-csr-signing test-pki-offline-csr test-pki-ca-rollover test-pki-ca-rollover-python-recover test-pki-ca-rollover-parser shellcheck
 
 ## Show available commands
 help:
@@ -63,17 +64,48 @@ verify-python-generated:
 	done
 
 ## Install platform tools into INSTALL_DIR
-install: verify-python-generated
-	mkdir -p "$(INSTALL_DIR)"
-	mkdir -p "$(SHARE_DIR)/templates/pki"
-	@for tool in $(TOOLS); do \
+install:
+	@found=0; \
+	for alias in $(LEGACY_PKI_ALIASES); do \
+		path="$(INSTALL_DIR)/$$alias"; \
+		if [ -e "$$path" ] || [ -L "$$path" ]; then found=1; fi; \
+	done; \
+	if [ "$$found" -ne 0 ]; then \
+		printf '%s\n' 'platform-tools v3 install blocked by legacy PKI aliases:' >&2; \
+		for alias in $(LEGACY_PKI_ALIASES); do \
+			path="$(INSTALL_DIR)/$$alias"; \
+			if [ -e "$$path" ] || [ -L "$$path" ]; then printf '  %s\n' "$$path" >&2; fi; \
+		done; \
+		printf '%s\n' 'Remove or relocate the listed paths, then rerun make install.' >&2; \
+		printf '%s\n' 'v3 installs only platform-pki for PKI.' >&2; \
+		exit 1; \
+	fi
+	@$(MAKE) --no-print-directory verify-python-generated
+	@found=0; \
+	for alias in $(LEGACY_PKI_ALIASES); do \
+		path="$(INSTALL_DIR)/$$alias"; \
+		if [ -e "$$path" ] || [ -L "$$path" ]; then found=1; fi; \
+	done; \
+	if [ "$$found" -ne 0 ]; then \
+		printf '%s\n' 'platform-tools v3 install blocked by legacy PKI aliases:' >&2; \
+		for alias in $(LEGACY_PKI_ALIASES); do \
+			path="$(INSTALL_DIR)/$$alias"; \
+			if [ -e "$$path" ] || [ -L "$$path" ]; then printf '  %s\n' "$$path" >&2; fi; \
+		done; \
+		printf '%s\n' 'Remove or relocate the listed paths, then rerun make install.' >&2; \
+		printf '%s\n' 'v3 installs only platform-pki for PKI.' >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(INSTALL_DIR)"; \
+	mkdir -p "$(SHARE_DIR)/templates/pki"; \
+	for tool in $(TOOLS); do \
 		cp "bin/$$tool" "$(INSTALL_DIR)/$$tool"; \
 		chmod 755 "$(INSTALL_DIR)/$$tool"; \
 		printf '%s\n' "Installed $$tool to $(INSTALL_DIR)/$$tool"; \
-	done
-	cp templates/pki/* "$(SHARE_DIR)/templates/pki/"
-	chmod 644 "$(SHARE_DIR)"/templates/pki/*
-	@printf '%s\n' "Installed shared assets to $(SHARE_DIR)"
+	done; \
+	cp templates/pki/* "$(SHARE_DIR)/templates/pki/"; \
+	chmod 644 "$(SHARE_DIR)"/templates/pki/*; \
+	printf '%s\n' "Installed shared assets to $(SHARE_DIR)"
 
 ## Run syntax checks for maintained tool scripts
 verify: verify-python-generated
@@ -179,6 +211,10 @@ test-vm-env-collect-cli:
 ## Run VM collector archive smoke tests in the test container
 test-vm-env-collect-archive:
 	python3 -m pytest tests/test_vm_env_collect_archive.py
+
+## Run runtime evidence collector behavior tests
+test-platform-runtime-evidence:
+	python3 -m pytest tests/test_platform_runtime_evidence.py
 
 ## Run bastion policy render tests
 test-bastion-policy:
@@ -326,6 +362,10 @@ test-pki-csr-trust-install:
 ## Run authenticated host-local CSR signing and recovery tests
 test-pki-csr-signing:
 	python3 -m pytest tests/pki/test_csr_signing.py tests/pki/test_csr_signing_recover.py tests/pki/test_csr_recover_cli.py
+
+## Run offline host-local CSR approval and signing facade tests
+test-pki-offline-csr:
+	python3 -m pytest tests/pki/test_offline_csr.py
 
 ## Run authoritative generation-aware CA rollover tests
 test-pki-ca-rollover: test-python-pki-rollover-parallel

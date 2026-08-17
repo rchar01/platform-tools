@@ -139,13 +139,13 @@ def isolate_arguments(arguments: list[str], tmp_path: Path) -> list[str]:
 
 def run_parser_command(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     arguments: list[str],
 ) -> ProcessResult:
     return process_runner(
-        [rollover_tool, *isolate_arguments(arguments, tmp_path)],
+        [*rollover_tool, *isolate_arguments(arguments, tmp_path)],
         env=isolated_environment,
         timeout=10,
     )
@@ -187,9 +187,9 @@ def empty_option_diagnostic(option: str) -> tuple[str, ...]:
     return (f"validation error in {option} ", "must not be empty\n")
 
 
-def test_help_describes_available_rollover_lifecycle(
+def test_help_lists_available_rollover_lifecycle(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
@@ -199,16 +199,13 @@ def test_help_describes_available_rollover_lifecycle(
 
     assert result.status == 0
     assert result.stderr == ""
-    assert "candidate preparation, recovery, and status" in result.stdout
-    assert (
-        "activate, acknowledge, rollback, retire, and complete remain unavailable"
-        in result.stdout
-    )
+    for command in ("migrate", "status", "prepare", "recover"):
+        assert f"  {command}\n" in result.stdout
 
 
 def test_status_rejects_repeated_format(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
@@ -231,7 +228,7 @@ def test_status_rejects_repeated_format(
 )
 def test_prepare_rejects_repeated_required_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -256,7 +253,7 @@ def test_prepare_rejects_repeated_required_option(
 )
 def test_prepare_rejects_repeated_optional_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -281,7 +278,7 @@ def test_prepare_rejects_repeated_optional_option(
 )
 def test_recover_rejects_repeated_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -303,7 +300,7 @@ def test_recover_rejects_repeated_option(
 
 def test_recover_rejects_repeated_yes(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
@@ -324,7 +321,7 @@ def test_recover_rejects_repeated_yes(
 @pytest.mark.parametrize("option", PREPARE_REQUIRED_OPTIONS, ids=option_id)
 def test_prepare_rejects_empty_required_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -340,7 +337,7 @@ def test_prepare_rejects_empty_required_option(
 @pytest.mark.parametrize("option", PREPARE_OPTIONAL_OPTIONS, ids=option_id)
 def test_prepare_rejects_empty_optional_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -358,7 +355,7 @@ def test_prepare_rejects_empty_optional_option(
 
 def test_prepare_rejects_equals_form_empty_defaulted_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
@@ -378,7 +375,7 @@ def test_prepare_rejects_equals_form_empty_defaulted_option(
 
 
 def test_shared_helper_rejects_equals_form_empty_option(
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
 ) -> None:
@@ -409,7 +406,7 @@ def test_shared_helper_rejects_equals_form_empty_option(
 @pytest.mark.parametrize("option", RECOVER_REQUIRED_OPTIONS, ids=option_id)
 def test_recover_rejects_empty_required_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -432,7 +429,7 @@ def test_recover_rejects_empty_required_option(
 )
 def test_subcommand_rejects_positional_argument(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     arguments: list[str],
@@ -455,7 +452,7 @@ def test_subcommand_rejects_positional_argument(
 )
 def test_intermediate_prepare_rejects_root_only_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -481,7 +478,7 @@ def test_intermediate_prepare_rejects_root_only_option(
 @pytest.mark.parametrize("option", RECOVER_FORBIDDEN_OPTIONS, ids=option_id)
 def test_recover_rejects_prepare_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,
@@ -500,7 +497,7 @@ def test_recover_rejects_prepare_option(
 @pytest.mark.parametrize("option", PREPARE_FORBIDDEN_OPTIONS, ids=option_id)
 def test_prepare_rejects_recover_option(
     tmp_path: Path,
-    rollover_tool: Path,
+    rollover_tool: tuple[Path | str, ...],
     isolated_environment: Mapping[str, str],
     process_runner: Callable[..., ProcessResult],
     option: str,

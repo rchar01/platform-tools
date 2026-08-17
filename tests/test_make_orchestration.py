@@ -19,6 +19,7 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-platform-config-init",
     "test-platform-ssh-init",
     "test-vm-env-collect-cli",
+    "test-platform-runtime-evidence",
     "test-bastion-policy",
     "test-proxmox-token-init",
     "test-proxmox-vm-cleanup",
@@ -48,6 +49,7 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-pki-inventory-install",
     "test-pki-csr-trust-install",
     "test-pki-csr-signing",
+    "test-pki-offline-csr",
 }
 
 

@@ -340,6 +340,21 @@ class _CsrTrust:
     response_principal: str
 
 
+@dataclass(frozen=True, slots=True)
+class HostLocalCsrReview:
+    """Authenticated immutable values exposed at the pre-mutation review gate."""
+
+    operation: str
+    service: str
+    target: str
+    request_id: str
+    request_sha256: str
+    approval_sha256: str
+    csr_sha256: str
+    inventory_sha256: str
+    response_principal: str
+
+
 def _die(message: str, *, status: int = 1) -> NoReturn:
     raise ApplicationError(message, status=status)
 
@@ -938,6 +953,12 @@ def _certificate_dates(path: str, environment: Mapping[str, str]) -> tuple[int, 
         _die("Cannot parse certificate validity")
 
 
+def _valid_days_interval(not_before: int, not_after: int, days: str) -> bool:
+    requested = int(days, 10) * 86400
+    actual = not_after - not_before
+    return requested <= actual <= requested + 300
+
+
 def _validate_child_validity(child: str, issuer: str, safety_days: str, environment: Mapping[str, str]) -> None:
     child_start, child_end = _certificate_dates(child, environment)
     _issuer_start, issuer_end = _certificate_dates(issuer, environment)
@@ -1093,7 +1114,7 @@ def _plan(
     )
     if operation is ServiceOperation.ISSUE and certificate is not None:
         _die(
-            "Service certificate already exists; use platform-pki-service-renew: "
+            "Service certificate already exists; use platform-pki service-renew: "
             f"{certificate_path}"
         )
     current_key = _snapshot_file(
@@ -1103,7 +1124,7 @@ def _plan(
         required=False,
     )
     if operation is ServiceOperation.RENEW and current_key is None:
-        _die(f"Service private key is missing; use platform-pki-service-issue first: {key_path}")
+        _die(f"Service private key is missing; use platform-pki service-issue first: {key_path}")
     key_action = (
         ServiceKeyAction.CREATE
         if current_key is None and operation is ServiceOperation.ISSUE
@@ -2018,7 +2039,7 @@ def _verify_published(plan: _Plan, environment: Mapping[str, str]) -> None:
     now = int(datetime.datetime.now(datetime.UTC).timestamp())
     if abs(child_start - now) > 300:
         _die("Child certificate notBefore is outside the five-minute issuance tolerance")
-    if child_end - child_start != int(plan.days, 10) * 86400:
+    if not _valid_days_interval(child_start, child_end, plan.days):
         _die(f"Certificate validity does not match the planned days policy: {certificate}")
     _validate_child_validity(
         certificate,
@@ -2577,7 +2598,7 @@ def _csr_validate_certificate(
     now = int(datetime.datetime.now(datetime.UTC).timestamp())
     if abs(not_before - now) > 300:
         _die("Issued certificate notBefore is outside the five-minute issuance tolerance")
-    if not_after - not_before != int(days, 10) * 86400:
+    if not _valid_days_interval(not_before, not_after, days):
         _die("Issued certificate validity does not match the planned days policy")
     _validate_child_validity(
         certificate, intermediate_certificate, safety_days, environment
@@ -3111,6 +3132,7 @@ def _run_host_local_csr(
     output: TextIO | None = None,
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+    precommit_review: Callable[[HostLocalCsrReview], bool] | None = None,
 ) -> int:
     """Run one authenticated host-local CSR signing operation."""
 
@@ -3125,6 +3147,8 @@ def _run_host_local_csr(
     safety_days = _validate_days(issuer_safety_days)
     if not callable(fault_hook) or not callable(pause_hook):
         raise TypeError("CSR signing hooks must be callable")
+    if precommit_review is not None and not callable(precommit_review):
+        raise TypeError("precommit_review must be callable or None")
     process_environment = dict(os.environ if environment is None else environment)
     stream = sys.stdout if output is None else output
     require_program("openssl", process_environment)
@@ -3336,6 +3360,8 @@ def _run_host_local_csr(
                     history_recheck: CsrHistoryAuthentication | None = None
                     unresolved_recheck: Callable[[], None] | None = None
                     current_certificate: _CsrInput | None = None
+                    managed_key_evidence: _Evidence | None = None
+                    managed_certificate_evidence: _Evidence | None = None
                     if request.operation is CsrOperation.ISSUE:
                         if os.path.lexists(managed_key) or os.path.lexists(
                             managed_certificate
@@ -3344,16 +3370,22 @@ def _run_host_local_csr(
                                 "New host-local issue conflicts with existing managed service state"
                             )
                     elif request.operation is CsrOperation.MIGRATE:
-                        key_evidence = _snapshot_file(
+                        managed_key_evidence = _snapshot_file(
                             managed_key, "Managed service private key", private=True
                         )
-                        certificate_evidence = _snapshot_file(
+                        managed_certificate_evidence = _snapshot_file(
                             managed_certificate,
                             "Managed service certificate",
                             private=False,
                         )
-                        assert key_evidence is not None and certificate_evidence is not None
-                        if request_record["current_cert_sha256"] != certificate_evidence.digest:
+                        assert (
+                            managed_key_evidence is not None
+                            and managed_certificate_evidence is not None
+                        )
+                        if (
+                            request_record["current_cert_sha256"]
+                            != managed_certificate_evidence.digest
+                        ):
                             _die("Migration request does not bind the managed certificate")
                     else:
                         if current_cert_file is None:
@@ -3448,7 +3480,6 @@ def _run_host_local_csr(
                             required=False,
                         )
 
-                    _csr_prepare_state(root, service)
                     request_id = request_record["request_id"]
                     if os.path.lexists(
                         f"{root}/state/csr/replay/requests/{request_id}"
@@ -3474,21 +3505,107 @@ def _run_host_local_csr(
                     transaction_dir = f"{root}/state/csr/transactions/{transaction}"
                     if os.path.lexists(transaction_dir):
                         _die("CSR signing transaction path already exists")
-                    _checkpoint("source-before-journal-recheck", fault_hook, pause_hook)
-                    if unresolved_recheck is not None:
-                        unresolved_recheck()
-                    if history_recheck is not None:
-                        history_recheck()
-                    for label, item in protocol.items():
-                        _csr_recheck_input(item, f"CSR input {label}")
-                    _checkpoint("trust-before-journal-recheck", fault_hook, pause_hook)
-                    _csr_recheck_trust(trust)
-                    _recheck_evidence(inventory_evidence, "Service inventory")
-                    _recheck_evidence(active_evidence, "Active issuer record")
-                    if current_certificate is not None:
-                        _csr_recheck_input(
-                            current_certificate, "Current host-local certificate"
+
+                    def recheck_protocol_sources() -> None:
+                        if unresolved_recheck is not None:
+                            unresolved_recheck()
+                        if history_recheck is not None:
+                            history_recheck()
+                        for label, item in protocol.items():
+                            _csr_recheck_input(item, f"CSR input {label}")
+
+                    def recheck_authority_sources() -> None:
+                        _require_compatible_signing_state(root)
+                        _recheck_directory_identity(
+                            root_dir,
+                            root_dir_identity,
+                            "Active root authority directory",
                         )
+                        _recheck_directory_identity(
+                            intermediate_dir,
+                            intermediate_dir_identity,
+                            "Active intermediate authority directory",
+                        )
+                        _csr_recheck_trust(trust)
+                        _recheck_evidence(inventory_evidence, "Service inventory")
+                        _recheck_evidence(active_evidence, "Active issuer record")
+                        for evidence, label in (
+                            (root_certificate, "Root CA certificate"),
+                            (ca_key, "Intermediate CA key"),
+                            (ca_certificate, "Intermediate CA certificate"),
+                            (ca_config, "Intermediate CA configuration"),
+                            (crlnumber, "Intermediate CA CRL number"),
+                            (serial_evidence, "Intermediate CA serial"),
+                        ):
+                            assert evidence is not None
+                            _recheck_evidence(evidence, label)
+                        for key, template in CSR_DB_PATHS:
+                            _recheck_optional_evidence(
+                                f"{intermediate_dir}/{template.format(serial=issued_serial)}",
+                                db_evidence[key],
+                                f"Intermediate CA database {key}",
+                            )
+                        if current_certificate is not None:
+                            _csr_recheck_input(
+                                current_certificate,
+                                "Current host-local certificate",
+                            )
+                        if request.operation is CsrOperation.ISSUE:
+                            if os.path.lexists(managed_key) or os.path.lexists(
+                                managed_certificate
+                            ):
+                                _die(
+                                    "Managed service state changed during CSR signing review"
+                                )
+                        elif request.operation is CsrOperation.MIGRATE:
+                            assert (
+                                managed_key_evidence is not None
+                                and managed_certificate_evidence is not None
+                            )
+                            _recheck_evidence(
+                                managed_key_evidence,
+                                "Managed service private key",
+                            )
+                            _recheck_evidence(
+                                managed_certificate_evidence,
+                                "Managed service certificate",
+                            )
+                        if os.path.lexists(
+                            f"{root}/state/csr/replay/requests/{request_id}"
+                        ) or os.path.lexists(
+                            f"{root}/state/csr/replay/nonces/{request_record['nonce']}"
+                        ):
+                            _die("CSR request identity was consumed during signing review")
+                        if os.path.lexists(transaction_dir):
+                            _die("CSR signing transaction appeared during signing review")
+
+                    _checkpoint("source-before-journal-recheck", fault_hook, pause_hook)
+                    recheck_protocol_sources()
+                    _checkpoint("trust-before-journal-recheck", fault_hook, pause_hook)
+                    recheck_authority_sources()
+
+                    if precommit_review is not None and precommit_review(
+                        HostLocalCsrReview(
+                            operation=request_record["operation"],
+                            service=service,
+                            target=request_record["target"],
+                            request_id=request_id,
+                            request_sha256=request_sha256,
+                            approval_sha256=approval_sha256,
+                            csr_sha256=csr_sha256,
+                            inventory_sha256=inventory_sha256,
+                            response_principal=trust.response_principal,
+                        )
+                    ) is not True:
+                        _die("Host-local CSR signing was not confirmed")
+                    if precommit_review is not None:
+                        recheck_protocol_sources()
+                        recheck_authority_sources()
+
+                    _csr_prepare_state(root, service)
+                    if precommit_review is not None:
+                        recheck_protocol_sources()
+                        recheck_authority_sources()
 
                     values = _csr_initial_values(
                         root,
@@ -3957,6 +4074,7 @@ def issue_host_local_csr(
     output: TextIO | None = None,
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+    precommit_review: Callable[[HostLocalCsrReview], bool] | None = None,
 ) -> int:
     """Issue or migrate one authenticated host-local CSR."""
 
@@ -3976,6 +4094,7 @@ def issue_host_local_csr(
         output=output,
         fault_hook=fault_hook,
         pause_hook=pause_hook,
+        precommit_review=precommit_review,
     )
 
 
@@ -3996,6 +4115,7 @@ def renew_host_local_csr(
     output: TextIO | None = None,
     fault_hook: FaultHook = DEFAULT_FAULT_HOOK,
     pause_hook: PauseHook = DEFAULT_PAUSE_HOOK,
+    precommit_review: Callable[[HostLocalCsrReview], bool] | None = None,
 ) -> int:
     """Renew one authenticated host-local CSR."""
 
@@ -4016,6 +4136,7 @@ def renew_host_local_csr(
         output=output,
         fault_hook=fault_hook,
         pause_hook=pause_hook,
+        precommit_review=precommit_review,
     )
 
 
