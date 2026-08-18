@@ -525,9 +525,12 @@ review, and delegates issue, migration, or renewal to the existing host-local
 writer. Both commands require explicit service, operation, and request ID and an
 exact TTY confirmation unless `--yes` is supplied. The same human may operate
 the distinct approval and CA roles, but this is key separation, not independent
-human approval; identical requester and approver keys retain the protocol's
-24-hour delay. Signing does not export a response or act on a target, and any
-retained signing transaction recovers only through `platform-pki csr-recover`.
+human approval. Protected keys may prompt more than once because trust, signing,
+and race-safe key rechecks are separate OpenSSH operations; each prompt names
+its key role and phase. Identical requester and approver keys retain the
+protocol's 24-hour delay. Signing does not export a response or act on a target,
+and any retained signing transaction recovers only through
+`platform-pki csr-recover`.
 
 Publish or resolve one exact certificate-only pending response:
 

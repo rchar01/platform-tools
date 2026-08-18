@@ -278,6 +278,7 @@ def _derive_key(
     environment: Mapping[str, str],
     expected_blob: str,
     label: str,
+    passphrase_prompt: bytes,
 ) -> _CsrInput:
     identity: FileIdentity | None = None
     try:
@@ -293,6 +294,7 @@ def _derive_key(
                 ("ssh-keygen", "-y", "-f", f"/proc/self/fd/{key.fileno()}"),
                 environment,
                 pass_fds=(key.fileno(),),
+                passphrase_prompt=passphrase_prompt,
             )
             if result.status:
                 _die(f"Cannot derive {label} public key")
@@ -306,8 +308,20 @@ def _derive_key(
     return _CsrInput(path, identity, b"")
 
 
-def _recheck_key(item: _CsrInput, environment: Mapping[str, str], blob: str, label: str) -> None:
-    current = _derive_key(item.path, environment, blob, label)
+def _recheck_key(
+    item: _CsrInput,
+    environment: Mapping[str, str],
+    blob: str,
+    label: str,
+    passphrase_prompt: bytes,
+) -> None:
+    current = _derive_key(
+        item.path,
+        environment,
+        blob,
+        label,
+        passphrase_prompt,
+    )
     if current.identity != item.identity:
         _die(f"{label} changed during approval")
 
@@ -499,6 +513,7 @@ def _request_preflight(
         environment,
         trust.approver_key,
         "Approval signing key",
+        b"OpenSSH approval key passphrase (verify installed trust): ",
     )
     source.recheck("Offline CSR request source")
     _csr_recheck_trust(trust)
@@ -532,6 +547,7 @@ def _recheck_preflight(
     environment: Mapping[str, str],
     *,
     exact_source: bool = True,
+    key_passphrase_prompt: bytes,
 ) -> None:
     source.recheck("Offline CSR request source", exact=exact_source)
     _csr_recheck_trust(context.trust)
@@ -541,6 +557,7 @@ def _recheck_preflight(
         environment,
         context.trust.approver_key,
         "Approval signing key",
+        key_passphrase_prompt,
     )
     if context.current_certificate is not None:
         _csr_recheck_input(
@@ -623,7 +640,14 @@ def _validate_approval(
     )
     _csr_validate_times(context.request, parsed)
     _recheck_preflight(
-        source, context, environment, exact_source=exact_source
+        source,
+        context,
+        environment,
+        exact_source=exact_source,
+        key_passphrase_prompt=(
+            b"OpenSSH approval key passphrase "
+            b"(post-authentication key recheck): "
+        ),
     )
     return parsed
 
@@ -798,6 +822,9 @@ def _approve(arguments: ParseResult, environment: Mapping[str, str]) -> int:
                             ),
                             environment,
                             pass_fds=(key.fileno(), stage.fileno()),
+                            passphrase_prompt=(
+                                b"OpenSSH approval key passphrase (sign approval): "
+                            ),
                         )
                         if result.status:
                             _die("CSR approval signing failed")
@@ -896,6 +923,10 @@ def _approve(arguments: ParseResult, environment: Mapping[str, str]) -> int:
                             context,
                             environment,
                             exact_source=False,
+                            key_passphrase_prompt=(
+                                b"OpenSSH approval key passphrase "
+                                b"(pre-publication key recheck): "
+                            ),
                         )
 
                     _checkpoint("approval-before-publication", fault, pause)

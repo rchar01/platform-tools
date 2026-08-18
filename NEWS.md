@@ -9,8 +9,8 @@ This file gives a short, release-oriented view of what changed between versions.
   canonical five files without changing CA or replay state; signing adds an
   authenticated precommit confirmation and delegates to the existing signer
   and `csr-recover` state machine. Protected approval and response Ed25519 keys
-  prompt through the inherited terminal without exposing passphrases in
-  arguments, environment, or machine-readable output.
+  use role-and-phase-labeled inherited-terminal prompts without exposing
+  passphrases in arguments, environment, or machine-readable output.
 - Added `platform-runtime-evidence`, a state-free collector for reviewed host or
   image identity, Python 3.14 readiness, installed `platform-pki` metadata and
   digest, all 18 exact retired aliases, external tool versions, and selected

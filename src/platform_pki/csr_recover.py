@@ -1877,10 +1877,15 @@ def _run_ssh_keygen(
     *,
     input: bytes | None = None,
     pass_fds: tuple[int, ...] = (),
+    passphrase_prompt: bytes = b"OpenSSH key passphrase: ",
 ) -> ProcessResult:
     try:
         result = run_ssh_keygen(
-            argv, environment, input=input, pass_fds=pass_fds
+            argv,
+            environment,
+            input=input,
+            pass_fds=pass_fds,
+            passphrase_prompt=passphrase_prompt,
         )
     except ApplicationError:
         _die("OpenSSH signature operation failed")
@@ -2087,6 +2092,9 @@ def _ensure_response_signature(
                     ("ssh-keygen", "-y", "-f", f"/proc/self/fd/{key.fileno()}"),
                     environment,
                     pass_fds=(key.fileno(),),
+                    passphrase_prompt=(
+                        b"OpenSSH response key passphrase (verify retained trust): "
+                    ),
                 )
                 if public.status:
                     _die("Cannot derive response signing public key")
@@ -2118,6 +2126,9 @@ def _ensure_response_signature(
                     ),
                     environment,
                     pass_fds=(key.fileno(),),
+                    passphrase_prompt=(
+                        b"OpenSSH response key passphrase (sign response): "
+                    ),
                 )
                 if result.status:
                     _die("Response signing failed; recovery-required state is retained")

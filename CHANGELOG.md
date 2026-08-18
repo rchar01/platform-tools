@@ -38,6 +38,9 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Upgraders must inspect and manually remove or relocate the exact 18 paths in
   the [upgrade guide](README.md#upgrade-from-v230); wildcard deletion is not
   safe guidance.
+- Changed protected offline CSR approval and response key prompts to identify
+  the key role and the trust, signing, or race-safe recheck phase while keeping
+  passphrases off arguments, environment, and output.
 - Kept this work under the Unreleased heading with `VERSION` at `2.3.0` while
   the next-major release gate remains pending.
 

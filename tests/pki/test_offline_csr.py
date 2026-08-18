@@ -26,6 +26,16 @@ REQUEST_ID = "0123456789abcdef0123456789abcdef"
 MIGRATION_REQUEST_ID = "1123456789abcdef0123456789abcdef"
 RENEWAL_REQUEST_ID = "2123456789abcdef0123456789abcdef"
 KEY_PASSPHRASE = "offline-key-passphrase"
+APPROVAL_PASSPHRASE_PROMPTS = (
+    "OpenSSH approval key passphrase (verify installed trust): ",
+    "OpenSSH approval key passphrase (sign approval): ",
+    "OpenSSH approval key passphrase (post-authentication key recheck): ",
+    "OpenSSH approval key passphrase (pre-publication key recheck): ",
+)
+RESPONSE_PASSPHRASE_PROMPTS = (
+    "OpenSSH response key passphrase (verify retained trust): ",
+    "OpenSSH response key passphrase (sign response): ",
+)
 
 
 @pytest.fixture
@@ -80,6 +90,15 @@ def encrypt_key(workspace: CsrWorkspace, key: Path) -> None:
         env=workspace.env,
     )
     assert_result(result, 0)
+
+
+def assert_passphrase_prompts(stderr: str, expected: tuple[str, ...]) -> None:
+    positions = []
+    for prompt in expected:
+        assert stderr.count(prompt) == 1
+        positions.append(stderr.index(prompt))
+    assert positions == sorted(positions)
+    assert "OpenSSH key passphrase: " not in stderr
 
 
 def approve(
@@ -312,7 +331,7 @@ def test_approve_supports_protected_key_without_polluting_stdout(
     assert json.loads(result.stdout)["status"] == "created"
     assert KEY_PASSPHRASE not in result.stdout + result.stderr
     assert "passphrase" not in result.stdout.lower()
-    assert result.stderr.lower().count("passphrase") == 4
+    assert_passphrase_prompts(result.stderr, APPROVAL_PASSPHRASE_PROMPTS)
 
 
 def test_protected_key_does_not_execute_inherited_askpass_without_tty(
@@ -882,7 +901,7 @@ def test_sign_supports_protected_response_key_through_inherited_terminal(
     assert json.loads(result.stdout)["status"] == "signed"
     assert KEY_PASSPHRASE not in result.stdout + result.stderr
     assert "passphrase" not in result.stdout.lower()
-    assert result.stderr.lower().count("passphrase") == 2
+    assert_passphrase_prompts(result.stderr, RESPONSE_PASSPHRASE_PROMPTS)
     assert not (offline_workspace.pki / "state/csr/recovery-journal").exists()
 
 

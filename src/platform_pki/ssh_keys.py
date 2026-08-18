@@ -116,6 +116,7 @@ def run_ssh_keygen(
     *,
     input: bytes | None = None,
     pass_fds: Sequence[int] = (),
+    passphrase_prompt: bytes = b"OpenSSH key passphrase: ",
 ) -> ProcessResult:
     """Run ssh-keygen with bounded cleanup and optional terminal askpass input."""
 
@@ -171,13 +172,13 @@ def run_ssh_keygen(
             )
         previous_prompt = signal.getsignal(signal.SIGUSR1)
 
-        def prompt(*_: object) -> None:
+        def prompt_passphrase(*_: object) -> None:
             value = bytearray()
             attributes = termios.tcgetattr(terminal)
             hidden = attributes.copy()
             hidden[3] &= ~termios.ECHO
             try:
-                os.write(2, b"OpenSSH key passphrase: ")
+                os.write(2, passphrase_prompt)
                 termios.tcsetattr(terminal, termios.TCSANOW, hidden)
                 while len(value) <= 4096:
                     byte = os.read(terminal, 1)
@@ -194,7 +195,7 @@ def run_ssh_keygen(
                     value[index] = 0
 
         try:
-            signal.signal(signal.SIGUSR1, prompt)
+            signal.signal(signal.SIGUSR1, prompt_passphrase)
             result = run_process(
                 tuple(argv),
                 env=effective_environment,

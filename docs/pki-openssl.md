@@ -571,10 +571,13 @@ Both commands require the exact confirmation shown on the TTY unless `--yes` is
 supplied; `--yes` skips only that prompt. Successful stdout is one compact JSON
 object, while reviews, prompts, and diagnostics use stderr. Protected Ed25519
 keys prompt through the inherited terminal, and passphrases are not placed in
-arguments, the environment, or output. One person may operate the distinct
-request, approval, and CA roles in the same time frame, but this is key
-separation and must not be represented as independent-human approval. Identical
-requester and approver key blobs retain the protocol's 24-hour delay.
+arguments, the environment, or output. Trust checks, signing, and race-safe key
+rechecks are separate OpenSSH operations, so a protected key can prompt more
+than once; every prompt identifies the approval or response key and its current
+phase. One person may operate the distinct request, approval, and CA roles in
+the same time frame, but this is key separation and must not be represented as
+independent-human approval. Identical requester and approver key blobs retain
+the protocol's 24-hour delay.
 
 Signing neither exports the response nor acts on a target. Continue with
 `certificate-export publish|resolve`; if signer recovery evidence remains, use
