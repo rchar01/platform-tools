@@ -9,6 +9,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added unified `platform-pki csr-outcome publish|resolve` routes for exact
+  terminal host-local CSR signer-outcome packages, retained-response-principal
+  Ed25519 signing, immutable six-file no-clobber publication, and fully
+  reauthenticated digest-pinned path or JSON resolution.
 - Added unified `platform-pki offline-csr approve|sign` routes with exact
   untrusted-directory snapshots, protected local staging, authenticated
   no-clobber approval publication, fixed-order JSON results, exact TTY review,

@@ -4,6 +4,11 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki csr-outcome publish|resolve` for authenticated immutable
+  terminal host-local CSR signer outcomes. It publishes exact six-file packages
+  under `export/csr-outcomes/v1`, signs canonical manifests with the retained
+  response signer under `platform-pki-csr-outcome-v1`, and resolves only exact
+  digest-pinned packages without claiming live target state.
 - Added `platform-pki offline-csr approve|sign` for exact-directory offline
   host-local CSR review. Approval authenticates and no-clobber-publishes the
   canonical five files without changing CA or replay state; signing adds an

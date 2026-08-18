@@ -31,6 +31,7 @@ from src.platform_pki.csr_history import (
     CSR_DECISION_FIELDS as CANDIDATE_DECISION_FIELDS,
     CSR_DEPLOYMENT_FIELDS as CANDIDATE_DEPLOYMENT_FIELDS,
 )
+from src.platform_pki.csr_outcome import CSR_OUTCOME_FIELDS
 from src.platform_pki.csr_protocol import (
     CSR_APPROVAL_FIELDS,
     CSR_CANDIDATE_FIELDS as CANDIDATE_RECORD_FIELDS,
@@ -272,6 +273,13 @@ PKI_COMMAND_CONTRACTS = (
         ("test-pki-certificate-export",),
     ),
     CommandContract(
+        None,
+        "csr-outcome",
+        ("publish", "resolve"),
+        _locks(LOCK_ORDER),
+        ("test-pki-csr-outcome",),
+    ),
+    CommandContract(
         "platform-pki-csr-candidate",
         "csr-candidate",
         ("verify", "finalize", "abandon"),
@@ -425,6 +433,19 @@ PKI_PARSER_ROUTES = (
     _route(
         "platform-pki-certificate-export", ("certificate-export", "resolve"),
         positionals=("service",),
+        long_flags=("--request-id", "--manifest-sha256", "--format", *_NAMESPACE_FLAGS),
+        required_names=("service", "--request-id", "--manifest-sha256"), defaults=(("--format", "path"),),
+        allowed_values=(("--format", ("path", "json")),),
+        validators=(("--request-id", "not_empty"), ("--manifest-sha256", "not_empty"), *_NAMESPACE_VALIDATORS),
+    ),
+    _route(
+        None, ("csr-outcome", "publish"), positionals=("service",),
+        long_flags=("--request-id", "--outcome-key", *_NAMESPACE_FLAGS),
+        required_names=("service", "--request-id", "--outcome-key"),
+        validators=(("--request-id", "not_empty"), ("--outcome-key", "not_empty"), *_NAMESPACE_VALIDATORS),
+    ),
+    _route(
+        None, ("csr-outcome", "resolve"), positionals=("service",),
         long_flags=("--request-id", "--manifest-sha256", "--format", *_NAMESPACE_FLAGS),
         required_names=("service", "--request-id", "--manifest-sha256"), defaults=(("--format", "path"),),
         allowed_values=(("--format", ("path", "json")),),
@@ -649,6 +670,8 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
 
 
 _CERTIFICATE_EXPORT_DUPLICATES = ("--request-id", "--manifest-sha256", "--format", "--namespace", "--pki-dir")
+_CSR_OUTCOME_PUBLISH_DUPLICATES = ("--request-id", "--outcome-key", "--namespace", "--pki-dir")
+_CSR_OUTCOME_RESOLVE_DUPLICATES = ("--request-id", "--manifest-sha256", "--format", "--namespace", "--pki-dir")
 _CANDIDATE_DECISION_DUPLICATES = ("--request-id", "--artifact-manifest-sha256", "--evidence-file", "--evidence-signature", "--yes", "--namespace", "--pki-dir")
 PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("inventory-install",), ("--private-repo", "--namespace", "--pki-dir"), "bashly/platform-pki-inventory-install/src/root_command.sh", "reject_repeated_options"),
@@ -659,6 +682,8 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("offline-csr", "sign"), ("--operation", "--request-id", "--input-dir", "--response-key", "--current-cert-file", "--intermediate-pass-file", "--issuer-safety-days", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("certificate-export", "publish"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("certificate-export", "resolve"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
+    DuplicateOptionContract(("csr-outcome", "publish"), _CSR_OUTCOME_PUBLISH_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("csr-outcome", "resolve"), _CSR_OUTCOME_RESOLVE_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("csr-candidate", "verify"), ("--request-id", "--format", "--namespace", "--pki-dir"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("csr-candidate", "finalize"), _CANDIDATE_DECISION_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("csr-candidate", "abandon"), _CANDIDATE_DECISION_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
@@ -696,6 +721,8 @@ OUTPUT_STATUS_DEFERRED_ROUTES = frozenset(
         ("offline-csr", "approve"),
         ("offline-csr", "sign"),
         ("certificate-export", "publish"),
+        ("csr-outcome", "publish"),
+        ("csr-outcome", "resolve"),
         ("csr-candidate", "finalize"),
         ("csr-candidate", "abandon"),
         ("root-create",),
@@ -1104,6 +1131,13 @@ PERSISTED_RECORD_CONTRACTS = (
         "literal Python certificate export manifest",
         "src/platform_pki/csr_history.py",
         CANDIDATE_ARTIFACT_FIELDS,
+    ),
+    RecordContract(
+        "CSR outcome export manifest",
+        1,
+        "literal Python CSR outcome export manifest",
+        "src/platform_pki/csr_outcome.py",
+        CSR_OUTCOME_FIELDS,
     ),
     RecordContract("deployment evidence", 1, "literal Python deployment evidence", "src/platform_pki/csr_history.py", CANDIDATE_DEPLOYMENT_FIELDS),
     RecordContract("active candidate", 1, "literal Python active candidate", "src/platform_pki/csr_history.py", CANDIDATE_ACTIVE_FIELDS),

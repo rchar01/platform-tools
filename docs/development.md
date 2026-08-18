@@ -88,11 +88,15 @@ took 61.17 seconds with four workers, compared with 185.58 seconds for the
 added. The test counts differ, so this is an operational timing comparison, not
 a like-for-like benchmark or performance guarantee.
 
-The CSR signing, certificate-export, candidate, and schema-2 trust-install
-suites create one immutable PKI seed per pytest process. Every test receives a
-metadata-preserving private copy with its managed OpenSSL paths rebased and
-fresh signed exchange timestamps, avoiding repeated root and intermediate
-creation while retaining per-test state and process isolation.
+The CSR signing, certificate-export, outcome-export, candidate, and schema-2
+trust-install suites create one immutable PKI seed per pytest process. Every
+test receives a metadata-preserving private copy with its managed OpenSSL paths
+rebased and fresh signed exchange timestamps, avoiding repeated root and
+intermediate creation while retaining per-test state and process isolation.
+
+`make test-pki-csr-outcome` exercises terminal finalized and abandoned package
+publication and digest-pinned resolution, retained response-principal signing,
+canonical manifest validation, and source/package replacement safety.
 
 `make test-pki-offline-csr` exercises the generated unified command with real
 OpenSSL and OpenSSH subprocesses, exact-directory publication, interactive PTY

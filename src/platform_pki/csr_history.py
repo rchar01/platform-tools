@@ -247,6 +247,22 @@ class CsrFreshDeploymentAuthentication:
 
 
 @dataclass(frozen=True, slots=True)
+class CsrOutcomeExportAuthentication:
+    """Authenticated terminal outcome bytes and retained response signer trust."""
+
+    history: CsrHistoryAuthentication
+    files: Mapping[str, bytes]
+    outcome_principal: str
+    outcome_public_key: str
+    response_trust_path: str
+    response_trust_identity: FileIdentity
+    _recheck: Callable[[], None]
+
+    def __call__(self) -> None:
+        self._recheck()
+
+
+@dataclass(frozen=True, slots=True)
 class CsrManagedPredecessorAuthentication:
     """Authenticated managed migration predecessor and preservation recheck."""
 
@@ -2355,6 +2371,76 @@ def authenticate_retained_terminal_outcome(
         environment,
         root_request_id=request_id,
         trust_mode="retained",
+    )
+
+
+def authenticate_outcome_export_source(
+    pki_dir: str,
+    service: InventoryService,
+    request_id: str,
+    environment: Mapping[str, str],
+) -> CsrOutcomeExportAuthentication:
+    """Authenticate exact terminal package bytes and their retained signer root."""
+
+    history = authenticate_retained_terminal_outcome(
+        pki_dir, service, request_id, environment
+    )
+    evidence = _Evidence()
+    response_file = evidence.file(
+        f"{pki_dir}/state/csr/responses/{service.name}/{request_id}/response",
+        "CSR outcome response",
+    )
+    transaction_path = f"{pki_dir}/state/csr/transactions/csr-{request_id}"
+    response_trust = evidence.file(
+        f"{transaction_path}/responses.allowed_signers",
+        "Retained CSR response trust",
+    )
+    outcome = evidence.tree(
+        f"{pki_dir}/state/csr/outcomes/{service.name}/{request_id}",
+        frozenset(
+            ("deployment", "deployment.sig", "deployers.allowed_signers", "decision")
+        ),
+        "CSR outcome",
+    )
+    try:
+        response = parse_csr_response(response_file.data).record
+    except CsrProtocolError as error:
+        raise CsrHistoryError(str(error)) from None
+    principal = response["response_principal"]
+    keys = _allowed_signers(
+        response_trust, principal, "Retained CSR response trust", sole=True
+    )
+    decision = history.decision
+    if (
+        response["service"] != service.name
+        or response["request_id"] != request_id
+        or response["target"] != service.target
+        or response["operation"] != history.operation.value
+        or response["request_sha256"] != decision["request_sha256"]
+        or response_file.digest != history.response_sha256
+        or outcome.files["deployment"].digest != history.deployment_sha256
+        or outcome.files["deployment.sig"].digest
+        != history.deployment_signature_sha256
+        or outcome.files["deployers.allowed_signers"].digest
+        != history.deployers_sha256
+        or outcome.files["decision"].digest != history.decision_sha256
+        or outcome.files["decision"].data != decision.to_bytes()
+    ):
+        raise CsrHistoryError("CSR outcome export source binding failed")
+
+    def recheck() -> None:
+        history()
+        evidence.recheck()
+
+    recheck()
+    return CsrOutcomeExportAuthentication(
+        history=history,
+        files={name: item.data for name, item in outcome.files.items()},
+        outcome_principal=principal,
+        outcome_public_key=keys[principal],
+        response_trust_path=response_trust.path,
+        response_trust_identity=response_trust.identity,
+        _recheck=recheck,
     )
 
 

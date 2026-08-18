@@ -40,6 +40,7 @@ _OPTION_METAVARS = {
     "--private-repo": "PATH",
     "--transaction": "ID",
     "--response-key": "PATH",
+    "--outcome-key": "PATH",
     "--approval-key": "PATH",
     "--input-dir": "PATH",
     "--output-dir": "PATH",
@@ -207,6 +208,19 @@ def _options(
 _NS = ("--namespace", "--pki-dir")
 _NS_VALIDATORS = (("--namespace", "not_empty"), ("--pki-dir", "not_empty"))
 _CERT_EXPORT_DUPLICATES = (
+    "--request-id",
+    "--manifest-sha256",
+    "--format",
+    "--namespace",
+    "--pki-dir",
+)
+_CSR_OUTCOME_PUBLISH_DUPLICATES = (
+    "--request-id",
+    "--outcome-key",
+    "--namespace",
+    "--pki-dir",
+)
+_CSR_OUTCOME_RESOLVE_DUPLICATES = (
     "--request-id",
     "--manifest-sha256",
     "--format",
@@ -399,6 +413,32 @@ ROUTES = (
         choices=(("--format", ("path", "json")),),
         validators=(("--request-id", "not_empty"), ("--manifest-sha256", "not_empty"), *_NS_VALIDATORS),
         reject_duplicates=_CERT_EXPORT_DUPLICATES,
+    ),
+    _route(
+        ("csr-outcome", "publish"),
+        ("--request-id", "--outcome-key", *_NS),
+        positionals=_service(),
+        required=("--request-id", "--outcome-key"),
+        validators=(
+            ("--request-id", "not_empty"),
+            ("--outcome-key", "not_empty"),
+            *_NS_VALIDATORS,
+        ),
+        reject_duplicates=_CSR_OUTCOME_PUBLISH_DUPLICATES,
+    ),
+    _route(
+        ("csr-outcome", "resolve"),
+        ("--request-id", "--manifest-sha256", "--format", *_NS),
+        positionals=_service(),
+        required=("--request-id", "--manifest-sha256"),
+        defaults=(("--format", "path"),),
+        choices=(("--format", ("path", "json")),),
+        validators=(
+            ("--request-id", "not_empty"),
+            ("--manifest-sha256", "not_empty"),
+            *_NS_VALIDATORS,
+        ),
+        reject_duplicates=_CSR_OUTCOME_RESOLVE_DUPLICATES,
     ),
     _route(
         ("csr-candidate", "verify"),
@@ -855,6 +895,15 @@ def render_usage(spec: RouteSpec) -> str:
 
 
 _ROUTE_FOOTERS: dict[tuple[str, ...], str] = {
+    ("csr-outcome", "publish"): (
+        "Authenticates one immutable finalized or abandoned signer outcome, "
+        "requires the retained response signer key, and no-clobber-publishes "
+        "an exact signed six-file package."
+    ),
+    ("csr-outcome", "resolve"): (
+        "Requires the exact outcome-manifest digest and reauthenticates the "
+        "package and retained source without claiming live target state."
+    ),
     ("offline-csr", "approve"): (
         "Authenticates an exact three-file request snapshot, requires explicit "
         "review, and no-clobber-publishes one protected five-file approval "

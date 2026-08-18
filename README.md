@@ -267,6 +267,12 @@ Run the focused immutable certificate-only export scenarios:
 make test-pki-certificate-export
 ```
 
+Run the focused authenticated terminal CSR outcome export scenarios:
+
+```bash
+make test-pki-csr-outcome
+```
+
 Run the focused removable-media CSR approval and signing facade scenarios:
 
 ```bash
@@ -545,6 +551,25 @@ platform-pki certificate-export resolve platform-example \
 
 Publication contains no private key; resolution requires the reported exact
 manifest digest and performs no deployment or finalization.
+
+After a candidate has an authenticated immutable finalized or abandoned signer
+outcome, publish or resolve its exact historical outcome package:
+
+```bash
+platform-pki csr-outcome publish platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --outcome-key /absolute/path/to/response-signing-key
+
+platform-pki csr-outcome resolve platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --manifest-sha256 <sha256> \
+  --format json
+```
+
+The external Ed25519 key must exactly match the immutable retained response
+signer principal and trust for that request. The signer publishes no key or new
+trust. Resolution reauthenticates the six-file package and retained source and
+reports terminal historical action/state without claiming current target state.
 
 Install reviewed public trust before signing:
 

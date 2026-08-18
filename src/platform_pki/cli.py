@@ -59,6 +59,10 @@ def _handler(route: tuple[str, ...]):
         from .certificate_export import certificate_export
 
         return certificate_export
+    if route in (("csr-outcome", "publish"), ("csr-outcome", "resolve")):
+        from .csr_outcome import csr_outcome
+
+        return csr_outcome
     if route == ("export-ansible",):
         from .export_ansible import export_ansible
 

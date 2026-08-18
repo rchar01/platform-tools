@@ -325,7 +325,7 @@ def _expanded_shell_array(
 
 
 def test_command_contract_inventory_is_complete_and_unique() -> None:
-    assert len(PKI_COMMAND_CONTRACTS) == 20
+    assert len(PKI_COMMAND_CONTRACTS) == 21
     compatibility_names = [
         contract.compatibility_name
         for contract in PKI_COMMAND_CONTRACTS
@@ -344,7 +344,7 @@ def test_command_contract_inventory_is_complete_and_unique() -> None:
         contract.unified_route
         for contract in PKI_COMMAND_CONTRACTS
         if contract.compatibility_name is None
-    ] == ["offline-csr", "service-recover"]
+    ] == ["offline-csr", "csr-outcome", "service-recover"]
 
 
 def test_python_command_map_matches_frozen_command_inventory() -> None:
@@ -403,6 +403,7 @@ def test_nested_command_inventory_matches_current_command_families() -> None:
     }
     assert nested == {
         "certificate-export": ("publish", "resolve"),
+        "csr-outcome": ("publish", "resolve"),
         "csr-candidate": ("verify", "finalize", "abandon"),
         "offline-csr": ("approve", "sign"),
         "ca-rollover": ("migrate", "status", "prepare", "recover"),
@@ -487,9 +488,9 @@ def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
 
 def test_output_status_route_coverage_is_complete_and_disjoint() -> None:
     routes = {route.unified_route for route in PKI_PARSER_ROUTES}
-    assert len(routes) == 27
+    assert len(routes) == 29
     assert len(OUTPUT_STATUS_COVERED_ROUTES) == 7
-    assert len(OUTPUT_STATUS_DEFERRED_ROUTES) == 20
+    assert len(OUTPUT_STATUS_DEFERRED_ROUTES) == 22
     assert OUTPUT_STATUS_COVERED_ROUTES.isdisjoint(OUTPUT_STATUS_DEFERRED_ROUTES)
     assert OUTPUT_STATUS_COVERED_ROUTES | OUTPUT_STATUS_DEFERRED_ROUTES == routes
 
@@ -636,7 +637,7 @@ def test_declared_record_fields_exactly_match_authoritative_sources() -> None:
 
 
 def test_all_record_contracts_declare_unique_fields_and_valid_schema() -> None:
-    assert len(PERSISTED_RECORD_CONTRACTS) == 31
+    assert len(PERSISTED_RECORD_CONTRACTS) == 32
     for contract in PERSISTED_RECORD_CONTRACTS:
         assert contract.fields
         assert len(contract.fields) == len(set(contract.fields))

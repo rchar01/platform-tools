@@ -5,6 +5,7 @@ COMMANDS = {
     "csr-recover": (),
     "offline-csr": ("approve", "sign"),
     "certificate-export": ("publish", "resolve"),
+    "csr-outcome": ("publish", "resolve"),
     "csr-candidate": ("verify", "finalize", "abandon"),
     "root-create": (),
     "intermediate-create": (),

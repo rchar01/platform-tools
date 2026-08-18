@@ -936,6 +936,98 @@ back or reuses CA state. The journal binds every candidate, response, export,
 retained response-trust, outcome-stage, and active-pointer identity and digest;
 recovery accepts only the exact pre- or post-rename object states.
 
+## Authenticated Terminal Outcome Export
+
+Only after `csr-candidate finalize` or `csr-candidate abandon` has published a
+fully authenticated immutable terminal outcome, publish its host-local export:
+
+```bash
+platform-pki csr-outcome publish platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --outcome-key /absolute/path/to/response-signing-key
+```
+
+Pending candidates and all recovery-required state are rejected. Publication
+acquires lifecycle, root, intermediate, inventory, and export locks and keeps
+them through source authentication, signing, durable same-parent no-clobber
+publication, and final validation. `--outcome-key` must name an external,
+current-user-owned, singly linked Ed25519 private key with no group or world
+permission. Its derived public key must exactly match the sole signer for the
+retained response principal in the immutable signing transaction trust. The key
+path is not emitted or added to child environments, and no key or new trust is
+published.
+
+The deterministic package is:
+
+```text
+export/csr-outcomes/v1/artifacts/<service>/<request-id>/
+├── outcome
+├── outcome.sig
+├── deployment
+├── deployment.sig
+├── deployers.allowed_signers
+└── decision
+```
+
+The directory is current-user-owned mode `700`. Every file is exactly mode
+`600`, singly linked, and current-user-owned; symlinks and extra entries are
+rejected. The four source files are byte-for-byte equal to the fully
+authenticated immutable signer outcome. Their digests and semantics are
+cross-bound by `decision` and the signed `outcome`; `decision` itself is not
+changed. Exact repeated publication is idempotent, while any conflict is left
+untouched and fails closed.
+
+`outcome` is printable ASCII with one final newline and this exact field order:
+
+```text
+schema=1
+kind=csr-signer-outcome
+service=<service>
+target=<target>
+request_id=<request-id>
+operation=<issue|migrate|renew>
+request_sha256=<sha256>
+response_sha256=<sha256>
+response_signature_sha256=<sha256>
+candidate_sha256=<sha256>
+artifact_manifest_sha256=<sha256>
+certificate_sha256=<sha256>
+certificate_spki_sha256=<sha256>
+chain_sha256=<sha256>
+fullchain_sha256=<sha256>
+deployment_sha256=<sha256>
+deployment_signature_sha256=<sha256>
+deployers_sha256=<sha256>
+decision_sha256=<sha256>
+action=<finalize|abandon>
+state=<finalized|abandoned>
+resulting_active_request_id=<request-id|none>
+created_epoch=<deployment-created-epoch>
+outcome_principal=<retained-response-principal>
+```
+
+`outcome.sig` authenticates the exact canonical `outcome` bytes under OpenSSH
+namespace `platform-pki-csr-outcome-v1`. Publication validates the signature
+against immutable retained response trust before the package is visible.
+Compact JSON output reports `status` as `created` or `existing`, plus `service`,
+`request_id`, `path`, and `manifest_sha256`.
+
+Resolve only the exact digest-pinned package:
+
+```bash
+platform-pki csr-outcome resolve platform-example \
+  --request-id 0123456789abcdef0123456789abcdef \
+  --manifest-sha256 <sha256> \
+  --format path
+```
+
+`--format path|json` reauthenticates the complete historical source, retained
+response and deployer trust, both signatures, exact package bytes and metadata,
+and the supplied manifest digest before output. JSON kind is
+`csr-outcome-export-resolution`; its terminal `action` and `state` describe
+accepted signer evidence only, and `live_target_state_claimed` is always false.
+There is no latest/current selection and no target mutation or discovery.
+
 ## Host-Local Exchange Runbooks
 
 The signer commands do not implement network transport, target activation, or
