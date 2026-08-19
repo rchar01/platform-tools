@@ -25,13 +25,13 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
 - [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md): Proposed production GitLab 18.11.3 Generic Package exchange for public host-local PKI workflow artifacts.
-- [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md): Development-only direct SSH/SFTP registry migration design and manual handoff; not executable or crash-safe.
+- [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md): Pointer to the implemented cross-repository host-local registry PKI workflow and its signer-side references.
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
 - [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md): How to manage short-lived Proxmox VE 9 development snapshots safely.
 - [`proxmox-vm-snapshot-acceptance.md`](./proxmox-vm-snapshot-acceptance.md): How to run live acceptance against the isolated disposable VM environment.
 - [`handoffs/config-namespace-handoff.md`](./handoffs/config-namespace-handoff.md): Downstream ownership notes for the local secret namespace.
-- [`handoffs/pki-host-local-csr-handoff.md`](./handoffs/pki-host-local-csr-handoff.md): Implemented host-local signer contract and future downstream activation contract.
+- [`handoffs/pki-host-local-csr-handoff.md`](./handoffs/pki-host-local-csr-handoff.md): Implemented host-local signer and downstream lifecycle contract.
 - [`handoffs/tofu-ansible-handoff.md`](./handoffs/tofu-ansible-handoff.md): Example handoff that separates OpenTofu infrastructure work from Ansible guest configuration.
 
 ## Common Tasks
@@ -47,7 +47,7 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - Approve and sign an exact removable-media CSR directory: use [`pki-openssl.md`](./pki-openssl.md#offline-csr-approval-and-signing).
 - Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).
 - Plan production CI exchange through GitLab Generic Packages: use [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md).
-- Review the direct development-host registry migration design/manual handoff: use [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md).
+- Run the complete host-local registry PKI lifecycle: start with [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md).
 - Inspect or migrate legacy PKI CA state: use [`pki-openssl.md`](./pki-openssl.md#migrate-legacy-ca-state).
 - Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).
 - Bootstrap the Proxmox API token identity: use [`proxmox-token-init.md`](./proxmox-token-init.md).

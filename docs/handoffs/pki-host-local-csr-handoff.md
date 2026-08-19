@@ -216,9 +216,9 @@ host key remains on `dev-registry-01` and is never copied to the controller.
 
 ## Target State Contract
 
-The coding agent must implement the registry pilot with these ownership
-boundaries. Equivalent paths require a reviewed handoff update before coding;
-they must not be chosen implicitly by an Ansible role.
+The implemented registry pilot preserves these ownership boundaries. Equivalent
+paths require a reviewed handoff update; they must not be chosen implicitly by
+an Ansible role.
 
 ```text
 /etc/zot/
@@ -373,8 +373,8 @@ its detached signature against installed requester trust, and matching service,
 target, inventory, CSR, request ID, and freshness. It is non-authoritative audit
 evidence: the signer does not consume it, and it cannot replace request or
 approval signatures, replay state, an artifact digest, or deployment evidence.
-The production request-job profile records `transport=ssh`; the direct
-development profile records `transport=sftp`. No other value is accepted.
+The direct profile records `transport=ssh`. The explicit controller-local
+compatibility profile may record `transport=sftp`. No other value is accepted.
 
 The five trust digests are SHA-256 over the exact bytes of the frozen `policy`,
 `requesters.allowed_signers`, `approvers.allowed_signers`,
@@ -419,9 +419,8 @@ workspace or PKI rules:
 
 - [GitLab Generic Package Exchange for Host-Local PKI](../pki-gitlab-package-exchange.md)
   is the production CI transport contract.
-- [Development Direct SSH/SFTP Host-Local CSR Runbook](../pki-host-local-csr-development-runbook.md)
-  is the direct development-host design/manual handoff; it is not executable or
-  crash-safe.
+- [Development Host-Local Registry PKI Runbook](../pki-host-local-csr-development-runbook.md)
+  points to the implemented transport-neutral cross-repository lifecycle.
 
 Transport authentication, package checksums, SSH success, and transport
 manifests never replace canonical protocol signatures or exact digest pins.
@@ -437,10 +436,13 @@ service.
    `077`, then create and locally verify the CSR from exact reviewed identities.
 3. Build the canonical request, sign it with the pinned SSH host identity, and
    re-verify the signature locally.
-4. Fetch only the CSR, request manifest, detached host signature, and non-secret
-   collection inputs into an owner-only outside-Git controller directory.
-5. Verify the host signature through the authenticated inventory binding and
-   write the collection receipt. End with the request pending.
+4. In direct mode, publish only exact request coordinates; an authorized
+   transfer station pulls the three public files through pinned SSH. The
+   controller-local compatibility mode may collect those same three files
+   through its explicit Ansible action.
+5. Run the separate controller-only intake to verify the host signature through
+   the authenticated inventory binding and write the collection receipt. End
+   with the request pending.
 
 For `registry-dev`, require `operation=migrate` while the managed identity is
 active. The request uses `target=requester_principal=dev-registry-01`,
@@ -494,10 +496,11 @@ The registry activation run must additionally:
    rollback deadline at least 1209600 seconds after evidence creation, and sign
    it with `/etc/ssh/ssh_host_ed25519_key` under
    `platform-pki-csr-deployment-v1`.
-8. Fetch only deployment evidence, its detached signature, and the canonical
-   validation files and validation-result signature into the controller
-   workspace, then publish them through the selected reviewed transport when
-   that profile requires publication.
+8. In direct mode, publish exact evidence coordinates; an authorized transfer
+   station pulls the five public files through pinned SSH and runs the separate
+   controller-only evidence intake. The controller-local compatibility mode may
+   collect the same files through its explicit Ansible action. Publish the
+   authenticated result through the selected reviewed transport when required.
 
 ### Canonical Validation Files
 
@@ -663,10 +666,10 @@ non-mutation, and idempotency before a real VM is used.
 
 ## Coding And Live Gates
 
-Public `platform-config` coding may implement this contract without changing
-real inventory or contacting a live host. It must use separate explicit request
-and activation playbooks; neither is imported by `site.yml` or normal registry
-convergence.
+Public `platform-config` implements this contract without changing real
+inventory or contacting a live host. Maintenance must preserve separate explicit
+request and activation playbooks; neither is imported by `site.yml` or normal
+registry convergence.
 
 The coding agent must not change `platform-private`, set
 `key_custody: host-local`, remove managed registry inputs, enable strict client

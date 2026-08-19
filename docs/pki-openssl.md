@@ -1039,10 +1039,9 @@ select one reviewed workflow:
   defines the proposed production CI exchange through one dedicated private
   GitLab 18.11 project. GitLab remains untrusted transport and the offline
   signer never connects to it.
-- [Development Direct SSH/SFTP Host-Local CSR Runbook](pki-host-local-csr-development-runbook.md)
-  defines the development-only direct host-to-VM registry migration design and
-  manual handoff. It is not executable or crash-safe, and the current
-  development host is not production offline custody.
+- [Development Host-Local Registry PKI Runbook](pki-host-local-csr-development-runbook.md)
+  points to the implemented cross-repository request, activation, evidence,
+  terminal outcome, recovery, backup, and verification workflow.
 
 Neither document authorizes a live request, CA mutation, target restart,
 deployment, rollback, finalization, or cleanup. Exact protocol signatures,

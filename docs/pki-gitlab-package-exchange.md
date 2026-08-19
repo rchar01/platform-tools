@@ -1,11 +1,12 @@
 # GitLab Generic Package Exchange for Host-Local PKI
 
-> **STATUS: SELECTED PRODUCTION TRANSPORT DESIGN; NOT IMPLEMENTED,
-> RUNTIME-VERIFIED, OR LIVE-AUTHORIZED.**
+> **STATUS: TRANSPORT HELPER IMPLEMENTED WITH FAKE HTTPS TESTS; NOT
+> GITLAB-RUNTIME-VERIFIED, END-TO-END PRODUCTION-READY, OR LIVE-AUTHORIZED.**
 >
 > This document selects self-managed GitLab CE 18.11.3 Generic Packages as the
-> production online exchange for public host-local PKI artifacts. It is a design
-> and future operator runbook, not an execution contract. It authorizes no live
+> production online exchange for public host-local PKI artifacts. The Generic
+> Package helper implements this transport contract, but the document remains a
+> design and future operator runbook for the full workflow. It authorizes no live
 > request, signing, activation, restart, validation, rollback, finalization,
 > abandonment, token creation, package deletion, or cleanup.
 
@@ -18,9 +19,9 @@ Transport-neutral ownership and controller/target state remain in
 [Host-Local PKI CSR Handoff](handoffs/pki-host-local-csr-handoff.md). Stop if
 this design conflicts with either canonical document.
 
-The [development direct SSH/SFTP runbook](pki-host-local-csr-development-runbook.md)
-is a different development transport. It is not the production break-glass
-path defined below and is not evidence of production readiness.
+The [development host-local registry runbook](pki-host-local-csr-development-runbook.md)
+points to the implemented transport-neutral lifecycle. It does not make this
+GitLab transport runtime-qualified or production-ready.
 
 ## Security Boundary
 
@@ -51,8 +52,8 @@ blocking, deletion, quota exhaustion, or other denial of service.
 | Role | Required responsibility | Forbidden responsibility |
 | --- | --- | --- |
 | Target | Generate and retain the leaf key; sign the request; activate one exact pinned response; sign deployment evidence. | Export the leaf key; select newest; trust GitLab as PKI authority. |
-| CI/controller | Collect request files; create the collection receipt; preserve frozen requester, response, and deployer trust; publish and retrieve exact coordinates; run separately gated request and activation jobs. | Hold approver, CA, response-signing, or leaf keys; infer approval or live state. |
-| GitLab transport | Store four Generic Package families in one dedicated private project and enforce configured package access. | Promise atomic multi-file publication, immutability, PKI authorization, or recovery sufficiency. |
+| Online controller/transfer station | Pull request and evidence through pinned SSH; create the collection receipt; preserve frozen requester, response, and deployer trust; publish and retrieve exact coordinates; run separately gated target operations. | Hold approver, CA, response-signing, or leaf keys; infer approval or live state. |
+| GitLab transport | Store five Generic Package families in one dedicated private project and enforce configured package access. | Promise atomic multi-file publication, immutability, PKI authorization, or recovery sufficiency. |
 | Online retrieval/transfer station | Enumerate, download, hash, and validate exact packages; stage allowlisted public files for controlled media. | Hold an approver or CA private key; choose newest package attempts. |
 | Offline approver | Review the exact request and create `approval` and `approval.sig` while disconnected. | Connect to GitLab or place its private key on any networked host. |
 | Transfer operator | Maintain media custody and move only stage-specific public allowlists. | Introduce exchange-provided trust or supply transport evidence as signer input. |
@@ -69,7 +70,7 @@ The image is `18.11.3-ce.0`; visibility is private. Use only placeholders
 `<GITLAB_ORIGIN>` outside protected configuration.
 
 Resolve placeholders only from protected configuration. Before any API request,
-the future helper must bind the configured origin, project ID, and project path
+the helper must bind the configured origin, project ID, and project path
 to one provisioned exchange-project record, then address all package endpoints
 by that exact project ID. It must not infer the project from package results.
 
@@ -81,6 +82,7 @@ pki-exchange-request-<service>
 pki-exchange-approval-<service>
 pki-exchange-response-<service>
 pki-exchange-evidence-<service>
+pki-exchange-outcome-<service>
 ```
 
 The request ID is exactly 32 lowercase hexadecimal characters matching
@@ -92,10 +94,12 @@ The request ID is exactly 32 lowercase hexadecimal characters matching
 | Approval | `<request-id>-<approval-file-sha256>` |
 | Response | `<request-id>` |
 | Evidence | `<request-id>-<deployment-file-sha256>` |
+| Outcome | `<request-id>-<outcome-file-sha256>` |
 
 Each suffix is 64 lowercase hexadecimal characters and hashes the exact
-canonical `approval` or `deployment` file, not its detached signature. The
-digest suffix makes each fresh approval or deployment-evidence attempt a new
+canonical `approval`, `deployment`, or `outcome` file, not its detached
+signature. The digest suffix makes each fresh approval, deployment-evidence, or
+terminal-outcome attempt a new
 immutable coordinate. It is not a selector. The operator/controller must supply
 the exact full stage version; no consumer may discover or choose newest, latest,
 first, last, highest ID, or a neighboring digest suffix.
@@ -125,8 +129,8 @@ page for each query: `default`, `hidden`, `processing`, `error`,
 
 Exactly one exact package object across all status queries is permitted. Accept
 only status `default`. An exact `processing` object may be polled only for a
-fixed, reviewed maximum attempt count and interval configured in the future
-helper. Each poll repeats all status queries. Exhausting the bound fails closed.
+fixed, reviewed maximum attempt count and interval configured in the helper.
+Each poll repeats all status queries. Exhausting the bound fails closed.
 An exact object in `hidden`, `error`, `pending_destruction`, `deprecated`, an
 unknown status, or more than one status/object blocks the coordinate and opens
 an incident. Status order and package ID never choose among objects.
@@ -145,6 +149,7 @@ Each package contains exactly its payload plus `stage-manifest`:
 | Approval | `approval`, `approval.sig` |
 | Response | `artifact`, `tls.crt`, `ca-chain.crt`, `fullchain.crt`, `response`, `response.sig` |
 | Evidence | `deployment`, `deployment.sig`, `validation-boundary`, `validation-result`, `validation-result.sig` |
+| Outcome | `outcome`, `outcome.sig`, `deployment`, `deployment.sig`, `deployers.allowed_signers`, `decision` |
 
 Directories, archives, hidden files, nested paths, duplicate filenames,
 alternate names, and extras are forbidden. The controller creates
@@ -153,8 +158,12 @@ files under the exact [controller workspace schema](handoffs/pki-host-local-csr-
 It is audit evidence, not signer input.
 
 The six response payload files are the immutable certificate export and contain
-no leaf key. Frozen requester, response, and deployer trust is separately
-provisioned and is never package payload. Before request creation, the
+no leaf key. Frozen requester, response, and activation-time deployer trust is
+separately provisioned and is never selected from request, response, or evidence
+payloads. The outcome family intentionally carries the exact signer-retained
+`deployers.allowed_signers` bytes as historical terminal evidence; consumers
+must authenticate the signed outcome and exact digest bindings and must not
+treat those package bytes as current trust. Before request creation, the
 controller must retain the exact protected trust paths, identities, and digests;
 collection records the five canonical trust digests in its receipt. Every
 normal or break-glass activation requires the exact expected response-trust
@@ -163,10 +172,10 @@ response package. Evidence handling applies the same rule to deployer trust.
 
 The evidence supplemental files must conform to the canonical
 [validation-boundary and validation-result schemas](handoffs/pki-host-local-csr-handoff.md#canonical-validation-files).
-Until their builders and parsers are implemented and tested, production
-readiness is blocked. The signed canonical `deployment` fields remain authority;
-supplemental files support exact reconstruction and validation but cannot
-override them.
+The transport helper parses their exact grammar and cross-bindings, but full
+production readiness remains separately gated. The signed canonical
+`deployment` fields remain authority; supplemental files support exact
+reconstruction and validation but cannot override them.
 
 ## Stage Manifest
 `stage-manifest` is unsigned transport completion evidence, not PKI approval,
@@ -177,19 +186,20 @@ one final newline, no blanks, and this exact ordered grammar:
 ```text
 schema=1
 kind=pki-exchange-stage
-stage=<request|approval|response|evidence>
+stage=<request|approval|response|evidence|outcome>
 service=<canonical-inventory-service>
 request_id=<32-lowercase-hex>
 package_version=<exact-stage-version>
-payload_count=<4|2|6|5>
+payload_count=<4|2|6|5|6>
 payload=<first-allowlisted-filename> sha256=<64-lowercase-hex>
 payload=<next-allowlisted-filename> sha256=<64-lowercase-hex>
 ```
 
 There is one `payload` line per allowlisted payload in table order. For approval,
 the `package_version` suffix must equal the `approval` payload digest. For
-evidence, it must equal the `deployment` payload digest. Request and response
-`package_version` must equal `request_id`. Unknown, duplicate, reordered, or
+evidence, it must equal the `deployment` payload digest. For outcome, it must
+equal the `outcome` payload digest. Request and response `package_version` must
+equal `request_id`. Unknown, duplicate, reordered, or
 trailing fields; CRLF; uppercase digests; missing final newline; and a listed
 `stage-manifest` fail closed.
 
@@ -198,6 +208,19 @@ time, and uploads `stage-manifest` last. Manifest presence marks only attempted
 completion. Consumers accept only after exact status/list checks, GitLab
 `file_sha256` comparison, fresh local download hashing, manifest validation,
 and independent canonical protocol verification all pass.
+
+The implemented `platform-config/scripts/platform-pki-gitlab-package` exposes
+generic `publish` and `download` operations. Both require explicit stage,
+service, target, request ID, exact full package version, protected project
+record, token file/type, and CA file. Publish accepts one protected payload-only
+`--source-dir` and generates the manifest. Download accepts one exact
+`--destination-dir`; after complete validation and a second coordinate
+inspection, it publishes payload plus manifest from a same-parent protected
+stage with atomic no-clobber rename. An exact safe existing destination is
+idempotent and a conflict is preserved and rejected. Request transport also
+requires the reviewed inventory record, frozen five-file trust directory, and
+transport host-key digest so its existing CSR, request-signature, inventory,
+receipt, and trust validation is not weakened.
 
 ## Non-Atomic Publication
 Generic multi-file upload is not atomic. Missing manifest, partial or extra
@@ -209,16 +232,19 @@ GitLab checksum headers may be absent for redirected object-storage downloads.
 Use package-file API SHA256 plus locally computed SHA256, and never headers
 alone. A successful HTTP status proves only one request was accepted.
 
-The future helper must implement application-level publish-once:
+The helper implements application-level resume and idempotency within one
+invocation. External publication must serialize each exact coordinate:
 
-1. Acquire a protected CI `resource_group` keyed by exact project, stage,
-   service, and full package version; one global exchange lock is also safe.
-2. Query every documented status and all exact files before upload.
-3. If absent, upload each payload once and the manifest last.
-4. Resume a manifest-absent partial only when every existing asset exactly
+1. Acquire a protected CI `resource_group` or an equivalent reviewed operator
+   lock keyed by exact project, stage, service, and full package version; one
+   global exchange lock is also safe. The helper does not acquire this lock.
+2. The helper queries every documented status and all exact files before upload.
+3. If absent, it uploads each payload once and the manifest last.
+4. It resumes a manifest-absent partial only when every existing asset exactly
    matches the protected original source; upload only missing exact files.
-5. Treat a complete exact package as idempotent success after full revalidation.
-6. Preserve and fail on any conflict, duplicate, unexpected manifest, ambiguous
+5. It treats a complete exact package as idempotent success after full
+   revalidation.
+6. It preserves and fails on any conflict, duplicate, unexpected manifest, ambiguous
    timeout, status anomaly, or uncertain source identity.
 
 The configured duplicate behavior and this multi-file resume behavior must be
@@ -267,8 +293,10 @@ only `read_package_registry` where Generic Package and project-protection
 behavior is compatible. It receives no write scope. A dedicated project access
 token with `api` and Developer role is a documented fallback only: `api` is
 broad, and package protection must still deny deletion and settings authority.
-No human directly publishes a package; disconnected outputs return to a
-protected controller workspace and protected CI publishes them.
+Disconnected outputs return to a protected online workspace. An explicitly
+authorized transfer operator may run the helper with a dedicated protected
+publisher credential, or protected CI may publish them. Neither path gives the
+offline approver or signer network access.
 
 The audited helper allows only these methods and endpoint shapes:
 
@@ -280,8 +308,8 @@ PUT  /api/v4/projects/:id/packages/generic/:name/:version/:file
 ```
 
 It rejects `DELETE`, settings, membership, token-management, arbitrary project,
-and unrecognized endpoints. It validates redirect destinations under a reviewed
-policy, never forwards credentials to an unapproved origin, constructs headers
+unrecognized endpoints, and every redirect. It never forwards credentials to
+another origin, constructs headers
 without token bytes in argv/URLs, suppresses tracing, redacts errors, and never
 persists token values in workspace or artifacts. Credentials remain revocable,
 purpose-specific, expiration-bound, and inventoried by non-secret identifier.
@@ -291,16 +319,19 @@ purpose-specific, expiration-bound, and inventoried by non-secret identifier.
    package version from the operator, queries all statuses, downloads each exact
    file, and independently verifies package, manifest, request signature, CSR,
    inventory binding, service, target, profile, and freshness.
-2. The station writes a custody record and transfers only the four request
-   payload files plus `stage-manifest` and the custody record to fresh controlled
-   media. No credential or newly introduced trust key crosses this boundary.
+2. The station retains `collection-receipt`, `stage-manifest`, package metadata,
+   and its custody record in the protected online workspace. It transfers only
+   `tls.csr`, `request`, and `request.sig` to fresh controlled media. No
+   credential, transport record, or newly introduced trust key crosses this
+   boundary.
 3. The disconnected approver rehashes and revalidates the exact request against
    independently provisioned trust and policy, then creates canonical `approval`
    and `approval.sig`. The approver private key never enters a networked host.
 4. Only `approval` and `approval.sig` return through controlled media into a
    protected controller workspace. The controller validates both, derives the
-   approval-file digest version, creates `stage-manifest`, and protected CI
-   publishes that exact approval attempt. Humans never publish directly.
+   approval-file digest version, creates `stage-manifest`, and an authorized
+   online transfer station or protected CI publishes that exact approval
+   attempt.
 
 A GitLab manual-job approval may gate CI, but never replaces detached PKI
 `approval.sig` under `platform-pki-csr-approval-v1`.
@@ -320,8 +351,8 @@ are independently installed protected local state.
 The signer exports exactly the six response payload files. A transfer operator
 moves them out through controlled media; the controller verifies them against
 the independently frozen response trust and protected request state, creates the
-response manifest, and protected CI publishes the response package at version
-`<request-id>`.
+   response manifest, and an authorized online transfer station or protected CI
+   publishes the response package at version `<request-id>`.
 
 ## Fresh Attempts And Asynchronous Flow
 Requests are valid for at most 604800 seconds. Approvals and deployment evidence
@@ -350,31 +381,42 @@ The complete asynchronous flow is:
    key, creates/signs the request, collects the three public target files,
    creates `collection-receipt` with `transport=ssh`, publishes request version
    `<request-id>`, and ends pending without activation.
-2. The disconnected approval flow publishes one exact digest-suffixed approval
-   attempt through protected CI.
+2. The disconnected approval flow returns one exact digest-suffixed approval
+   attempt for publication by an authorized online transfer station or protected
+   CI.
 3. The transfer operator supplies only the exact five signer command inputs.
    The offline signer verifies and signs through canonical commands, records
    permanent replay/transaction state, and publishes a local exact certificate
    export without network access.
-4. Controlled media returns the six response files. Protected CI publishes
-   response version `<request-id>`.
-5. A separate manually authorized activation pipeline receives exact service,
+4. Controlled media returns the six response files. The authorized online
+   transfer station publishes response version `<request-id>`.
+5. A separate manually authorized target operation receives exact service,
    request ID, response package version, artifact-manifest SHA256, and the
    protected frozen response- and deployment-trust digests captured at request
    collection. It downloads no inferred package and verifies the separately
    provisioned trust.
-6. The same future target activation helper verifies key/CSR/certificate,
+6. The implemented target lifecycle helper verifies key/CSR/certificate,
    response signature, profile, chain, SANs, validity, exact artifact pin, and
    reconstructed candidate digest before durable activation and restart/reload.
 7. The target and real-client validator perform strict canonical validation.
    The target creates signed deployment evidence, canonical supplemental
-   validation files, and the detached validation-result signature. Protected CI
-   publishes the operator-supplied exact
+   validation files, and the detached validation-result signature. The
+   authorized online transfer station publishes the operator-supplied exact
    digest-suffixed evidence attempt.
 8. Controlled media carries the exact evidence payload to the offline signer.
    The operator may review the authenticated supplemental files, but supplies
    only `deployment` and `deployment.sig` to exact `finalize` or `abandon`.
    GitLab never claims or discovers live deployment.
+9. After the signer publishes and reauthenticates the immutable six-file
+   terminal outcome export, controlled media returns those exact files.
+   The authorized online transfer station publishes outcome version
+   `<request-id>-<sha256(exact-outcome-bytes)>`. Retrieval reports historical
+   signer evidence only and never claims current target state.
+10. The transfer station downloads that exact outcome coordinate, pushes only
+    the six outcome payload files through pinned SSH, and invokes the target's
+    authenticated check then import sequence. It verifies terminal status,
+    decision preflight, normal configuration convergence, and smoke checks
+    before separately authorized exact cleanup.
 
 ## Production Break-Glass Import
 GitLab must never be the sole recovery channel, especially when replacing a
@@ -391,7 +433,7 @@ The production break-glass design requires all of the following before use:
    response material and separately identified frozen trust snapshot/digests.
 2. A pre-provisioned management workstation and controller local-transport mode
    that do not depend on GitLab package, DNS, TLS, database, or object storage.
-3. The same future target activation helper used by normal transport, with an
+3. The same implemented target lifecycle helper used by normal transport, with an
    input provider that reads the exact local package instead of weakening any
    verification or state transition.
 4. Operator-supplied exact service, request ID, artifact-manifest digest,
@@ -403,14 +445,15 @@ The production break-glass design requires all of the following before use:
    and retention rules.
 
 Do not improvise with the development runbook, email, browser downloads, a new
-trust file, or insecure TLS. Production readiness remains blocked until this
-local mode, read-only media procedure, same-helper behavior, GitLab-certificate
-circular-dependency scenario, and recovery custody are implemented and
-rehearsed without production mutation.
+trust file, or insecure TLS. Production readiness remains blocked until the
+read-only media procedure, same-helper behavior, GitLab-certificate
+circular-dependency scenario, and recovery custody are reviewed and rehearsed
+without production mutation.
 
 ## Retention And Failure Rules
 Keep package cleanup disabled and retain every request, response, approval
-attempt, evidence attempt, stage manifest, digest, and custody record. Define no
+attempt, evidence attempt, terminal outcome package, stage manifest, digest, and
+custody record. Define no
 automatic duration. Separate deletion review is possible only after a canonical
 terminal outcome and after certificate, predecessor, rollback, evidence, audit,
 backup, legal, and operational policies permit it. It requires exact package
@@ -459,8 +502,10 @@ digest checks, and comparison with independent canonical state.
 
 ## Readiness Checklist
 
-- [ ] Status remains selected design only; downstream implementation, runtime
-  verification, and every live authorization are still separate gates.
+- [x] The five-family helper, bounded fake HTTPS transport tests, exact manifest
+  contract, publish/resume, and atomic no-clobber download are implemented.
+- [ ] Exact GitLab runtime verification, end-to-end workflow qualification, and
+  every live authorization remain separate gates.
 - [ ] Image is exactly `18.11.3-ce.0`, or this design is re-evaluated against the
   deployed version's official documentation and fixtures.
 - [ ] One private project is bound by protected exact ID/path/origin; package
@@ -478,12 +523,14 @@ digest checks, and comparison with independent canonical state.
   input boundary are implemented, custody-tested, and free of private keys.
 - [ ] The exact policy and requester, approver, response, and deployer trust are
   separately provisioned before request creation, captured as five receipt
-  digests, rechecked through decision, and absent from package payloads.
+  digests, and rechecked through decision. Outcome payload may retain the exact
+  historical deployer trust only as signed digest-bound terminal evidence; it
+  never selects current trust.
 - [ ] Canonical validation-boundary/result schemas and parsers are present;
   `validation-result.sig` authenticates exact detailed results under frozen
   deployer trust, and fresh evidence repeats strict target and client validation.
 - [ ] No fuzzy/newest selection exists; every stage receives its exact package
-  version and all prior approval/evidence attempts remain retained.
+  version and all prior approval/evidence/outcome attempts remain retained.
 - [ ] Schema-2 trust rotation is blocked while any request/candidate is pending.
   The installer now lifecycle-locks and authenticates persisted candidate/outcome
   state; transport automation must still prove that no external request remains
@@ -504,6 +551,7 @@ digest checks, and comparison with independent canonical state.
 - [CI/CD Job Token](https://docs.gitlab.com/18.11/ci/jobs/ci_job_token/)
 - [Package Registry Cleanup](https://docs.gitlab.com/18.11/user/packages/package_registry/reduce_package_registry_storage/)
 
-These sources support the selected design only. No GitLab instance, package
-operation, helper, pipeline, credential, approver station, signer, target,
-break-glass path, or runtime behavior has been verified by this document.
+These sources support the selected design and implemented API shape. Fake HTTPS
+tests do not verify a GitLab instance. No live package operation, pipeline,
+credential, approver station, signer, target, break-glass path, or production
+runtime behavior has been verified by this document.
