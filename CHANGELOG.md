@@ -7,6 +7,15 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added protected content-addressed inventory history under
+  `inventory/history/<sha256>.yml`. `platform-pki inventory-install` now
+  durably archives exact outgoing inventory bytes before byte-different
+  replacement, fails closed on unsafe, conflicting, or ambiguous snapshots,
+  and permits retained CSR authentication after unrelated inventory additions
+  only while the selected service policy remains unchanged.
+
 ## [3.0.0] - 2026-08-19
 
 ### Added

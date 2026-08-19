@@ -89,6 +89,44 @@ target identity, local key/certificate match, served leaf and issuer,
 validation boundary and result, activation time, rollback hold, and authorized
 deployment signer.
 
+## Service Identity Generations
+
+A PKI service name is stable across normal certificate issuance and renewal.
+Request IDs, serials, certificate and SPKI digests, candidates, and immutable
+history identify individual certificate generations; do not add `-gN` for an
+ordinary key rotation or certificate renewal.
+
+An exceptional clean reset may use `<service>-gN` only when the old target-local
+key and lifecycle state are intentionally unavailable, the signer still retains
+finalized history for the base service, and same-service replacement is not
+implemented. The unsuffixed service is implicitly generation 1, so the first
+such reset uses `-g2`. Retain the old service inventory entry and history, never
+reuse a generation number, and select the next number from reviewed retained
+inventory rather than by scanning for `latest`. The new generation may retain
+the same target, common name, DNS names, and IP addresses, but every protocol
+record and transport package uses its exact suffixed service name.
+
+A truly fresh PKI namespace with no retained signer state for the service uses
+the normal unsuffixed service name, even if a similarly named VM or certificate
+existed in a lost namespace. That situation is a new PKI epoch, not a retained-
+history generation transition. Recover or regenerate the CA hierarchy and trust
+deliberately, record the epoch boundary, and do not invent `-g2` merely because
+the target was rebuilt.
+
+Before replacing a byte-different active service inventory,
+`platform-pki inventory-install` preserves the exact outgoing bytes as
+`inventory/history/<sha256>.yml` with an owner-only mode-`0700` history directory
+and mode-`0600`, singly linked snapshot. Publication is content-addressed,
+no-clobber, and complete before the active inventory changes. Retained CSR
+authentication selects only the snapshot named by the signed
+`inventory_sha256`; a legacy namespace without that snapshot may use the active
+inventory only when its exact digest matches. The selected service entry must
+also remain identical in current inventory, so unrelated service additions are
+allowed without permitting a target, custody, SAN, lifetime, validation
+boundary, or rollback-policy change. History snapshots are protected signer
+state, are included in encrypted PKI backups, and are never selected by
+`latest` or automatically removed.
+
 The installed trust contract freezes OpenSSH `ssh-keygen -Y` detached Ed25519
 signatures, the request, approval, and response namespaces, request and
 approval timing limits, exact canonical request/approval/response schemas,

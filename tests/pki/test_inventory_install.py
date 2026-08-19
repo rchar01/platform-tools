@@ -184,6 +184,210 @@ def test_inventory_install_initial_noop_and_mode_normalization(tmp_path, process
     assert mode(destination) == 0o600
 
 
+def test_inventory_install_archives_exact_outgoing_inventory(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    original_digest = hashlib.sha256(original).hexdigest()
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+
+    result = run(process_runner, isolated_environment, namespace, private)
+
+    assert_result(result, 0)
+    snapshot = pki / f"inventory/history/{original_digest}.yml"
+    assert snapshot.read_bytes() == original
+    assert mode(snapshot.parent) == 0o700
+    assert mode(snapshot) == 0o600
+    assert snapshot.stat().st_uid == os.getuid()
+    assert snapshot.stat().st_nlink == 1
+    assert destination.read_text() == UPDATED_INVENTORY
+
+
+def test_inventory_install_rejects_conflicting_history_snapshot(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    history = pki / "inventory/history"
+    history.mkdir(mode=0o700)
+    write_private(
+        history / f"{hashlib.sha256(original).hexdigest()}.yml",
+        "conflicting inventory\n",
+    )
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+
+    result = run(process_runner, isolated_environment, namespace, private)
+
+    assert result.status == 1
+    assert "Inventory history snapshot" in result.stderr
+    assert destination.read_bytes() == original
+
+
+def test_inventory_install_accepts_competing_exact_history_publication(
+    tmp_path, process_runner, process_starter, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+    marker = tmp_path / "history-before-publication"
+    release = tmp_path / "history-before-publication-release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
+        namespace,
+        private,
+        "inventory-history-before-publication",
+        marker,
+        release,
+    )
+    wait_for_path(marker)
+    snapshot = pki / (
+        "inventory/history/" + hashlib.sha256(original).hexdigest() + ".yml"
+    )
+    write_private(snapshot, original.decode("ascii"))
+    release.touch()
+
+    result = process.wait()
+
+    assert result.status == 0
+    assert destination.read_text(encoding="ascii") == UPDATED_INVENTORY
+    assert snapshot.read_bytes() == original
+
+
+def test_inventory_install_rejects_competing_conflicting_history_publication(
+    tmp_path, process_runner, process_starter, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+    marker = tmp_path / "history-before-publication"
+    release = tmp_path / "history-before-publication-release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
+        namespace,
+        private,
+        "inventory-history-before-publication",
+        marker,
+        release,
+    )
+    wait_for_path(marker)
+    snapshot = pki / (
+        "inventory/history/" + hashlib.sha256(original).hexdigest() + ".yml"
+    )
+    write_private(snapshot, "foreign inventory\n")
+    release.touch()
+
+    result = process.wait()
+
+    assert result.status == 1
+    assert destination.read_bytes() == original
+    assert snapshot.read_text(encoding="ascii") == "foreign inventory\n"
+
+
+def test_inventory_install_rechecks_history_before_replacing_active_inventory(
+    tmp_path, process_runner, process_starter, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+    marker = tmp_path / "history-published"
+    release = tmp_path / "history-release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
+        namespace,
+        private,
+        "inventory-history-after-publication",
+        marker,
+        release,
+    )
+    wait_for_path(marker)
+    snapshot = pki / (
+        "inventory/history/" + hashlib.sha256(original).hexdigest() + ".yml"
+    )
+    snapshot.unlink()
+    write_private(snapshot, "foreign inventory\n")
+    release.touch()
+
+    result = process.wait()
+
+    assert result.status == 1
+    assert destination.read_bytes() == original
+
+
+def test_inventory_install_rechecks_active_bytes_after_history_publication(
+    tmp_path, process_runner, process_starter, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+    marker = tmp_path / "history-published"
+    release = tmp_path / "history-release"
+    process = start_paused(
+        process_starter,
+        isolated_environment,
+        namespace,
+        private,
+        "inventory-history-after-publication",
+        marker,
+        release,
+    )
+    wait_for_path(marker)
+    destination.write_bytes(original + b"\n")
+    release.touch()
+
+    result = process.wait()
+
+    assert result.status == 1
+    assert destination.read_bytes() == original + b"\n"
+
+
+def test_inventory_install_rejects_unsafe_history_directory(
+    tmp_path, process_runner, isolated_environment
+) -> None:
+    namespace, pki, private = setup_workspace(
+        tmp_path, process_runner, isolated_environment
+    )
+    assert_result(run(process_runner, isolated_environment, namespace, private), 0)
+    destination = pki / "inventory/services.yml"
+    original = destination.read_bytes()
+    target = tmp_path / "foreign-history"
+    target.mkdir(mode=0o700)
+    (pki / "inventory/history").symlink_to(target, target_is_directory=True)
+    write_private(private / "pki/services.yml", UPDATED_INVENTORY)
+
+    result = run(process_runner, isolated_environment, namespace, private)
+
+    assert result.status == 1
+    assert destination.read_bytes() == original
+
+
 def test_inventory_install_prepares_missing_legacy_control_state(tmp_path, process_runner, isolated_environment) -> None:
     namespace, pki, private = setup_workspace(tmp_path, process_runner, isolated_environment)
     shutil.rmtree(pki / "state")
@@ -583,7 +787,26 @@ def test_bash_python_existing_destination_replacement_is_equivalent(
         extra_environment=extra_environment,
     )
 
-    result.assert_equivalent()
+    assert result.bash.process == result.python.process
+    assert result.bash.before == result.python.before
+    assert tuple(
+        entry
+        for entry in result.python.after
+        if entry.path != "inventory"
+        and not entry.path.startswith("inventory/history")
+    ) == tuple(
+        entry for entry in result.bash.after if entry.path != "inventory"
+    )
+    assert tuple(
+        transition
+        for transition in result.python.transitions
+        if transition[0] != "inventory"
+        and not transition[0].startswith("inventory/history")
+    ) == tuple(
+        transition
+        for transition in result.bash.transitions
+        if transition[0] != "inventory"
+    )
 
 
 def test_bash_python_overlap_rejection_is_equivalent(

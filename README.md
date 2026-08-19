@@ -496,10 +496,16 @@ PKI initialization paths must be absolute, non-root, and symlink-free.
 `platform-pki init` creates `inventory/services.yml.example`, not active
 inventory. `platform-pki inventory-install` installs
 `../platform-private/pki/services.yml` by default; use `--private-repo` for a
-different private repository. `platform-pki init --force` refreshes only the
-example and does not replace active inventory, CA keys, certificates, or
-database state. Existing PKI directories must
-be owned by the current user and must not be group- or world-writable.
+different private repository. Before a byte-different replacement, the command
+durably preserves the exact active bytes under the owner-only,
+content-addressed `inventory/history/<sha256>.yml` store. It never overwrites or
+automatically removes history; an unsafe or conflicting snapshot blocks the
+replacement. Retain these snapshots with signer backups because authenticated
+CSR history uses the exact snapshot named by its signed inventory digest while
+still requiring the service's current policy to match. `platform-pki init
+--force` refreshes only the example and does not replace active inventory, CA
+keys, certificates, or database state. Existing PKI directories must be owned
+by the current user and must not be group- or world-writable.
 Managed service transaction recovery uses:
 
 ```bash

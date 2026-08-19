@@ -449,6 +449,40 @@ def _record(item: _File, spec: RecordSpec, label: str) -> OrderedRecord:
         raise CsrHistoryError(f"{label} is invalid: {error}") from None
 
 
+def _historical_inventory_service(
+    evidence: _Evidence,
+    pki_dir: str,
+    inventory_sha256: str,
+    service_name: str,
+) -> InventoryService:
+    _require_digest(inventory_sha256, "Historical inventory digest")
+    snapshot_path = (
+        f"{pki_dir}/inventory/history/{inventory_sha256}.yml"
+    )
+    path = (
+        snapshot_path
+        if os.path.lexists(snapshot_path)
+        else f"{pki_dir}/inventory/services.yml"
+    )
+    source = evidence.file(path, "Historical service inventory")
+    if source.digest != inventory_sha256:
+        raise CsrHistoryError(
+            "Historical service inventory does not match its signed digest"
+        )
+    try:
+        inventory = parse_inventory(source.data)
+    except InventoryError as error:
+        raise CsrHistoryError(str(error)) from None
+    service = next(
+        (item for item in inventory.services if item.name == service_name), None
+    )
+    if service is None:
+        raise CsrHistoryError(
+            f"Service is not defined in historical inventory: {service_name}"
+        )
+    return service
+
+
 def _require_digest(value: str, label: str, *, allow_none: bool = False) -> None:
     if allow_none and value == "none":
         return
@@ -1359,6 +1393,13 @@ def authenticate_candidate_source(
         if artifact.files[name].data != pending.files[name]:
             raise CsrHistoryError(f"{name} differs across immutable CSR artifacts")
     response = pending.response
+    historical_service = _historical_inventory_service(
+        evidence, pki_dir, response["inventory_sha256"], service.name
+    )
+    if historical_service != service:
+        raise CsrHistoryError(
+            "Current service policy differs from retained CSR inventory"
+        )
     if (
         artifact_record["kind"] != "certificate-export"
         or artifact_record["service"] != service.name
@@ -1424,9 +1465,6 @@ def authenticate_candidate_source(
     terminal = evidence.file(
         f"{transaction_path}/terminal", "CSR signing terminal record"
     )
-    inventory = evidence.file(
-        f"{pki_dir}/inventory/services.yml", "Current service inventory", public=True
-    )
     try:
         request = parse_csr_request(retained_request.data)
         approval = parse_csr_approval(retained_approval.data)
@@ -1439,7 +1477,6 @@ def authenticate_candidate_source(
         retained_request.digest != response["request_sha256"]
         or retained_approval.digest != response["approval_sha256"]
         or retained_csr.digest != response["csr_sha256"]
-        or inventory.digest != response["inventory_sha256"]
         or request.record["request_id"] != request_id
         or request.record["nonce"] != response["nonce"]
         or request.record["operation"] != response["operation"]
@@ -1749,6 +1786,16 @@ def _authenticate_history(
             except CsrProtocolError as error:
                 raise CsrHistoryError(str(error)) from None
             response_record = response.record
+            historical_service = _historical_inventory_service(
+                evidence,
+                pki_dir,
+                response_record["inventory_sha256"],
+                service.name,
+            )
+            if historical_service != service:
+                raise CsrHistoryError(
+                    "Current service policy differs from retained CSR inventory"
+                )
             candidate_values = candidate_record.record
             artifact_record = _record(artifact.files["artifact"], _ARTIFACT_SPEC, "Certificate export manifest")
             deployment = _record(outcome.files["deployment"], _DEPLOYMENT_SPEC, "Deployment evidence")

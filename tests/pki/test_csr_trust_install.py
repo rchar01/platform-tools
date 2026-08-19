@@ -1102,6 +1102,48 @@ def test_terminal_history_fails_closed_without_current_inventory_binding(
     )
 
 
+def test_terminal_history_allows_unrelated_current_inventory_addition(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    inventory = workspace.pki / "inventory/services.yml"
+    historical = inventory.read_bytes()
+    history = workspace.pki / "inventory/history"
+    history.mkdir(mode=0o700)
+    write_private(
+        history / f"{hashlib.sha256(historical).hexdigest()}.yml",
+        historical.decode("ascii"),
+    )
+    write_private(
+        inventory,
+        historical.decode("ascii")
+        + "  unrelated:\n"
+        + "    common_name: unrelated.example.internal\n"
+        + "    dns:\n"
+        + "      - unrelated.example.internal\n",
+    )
+    replace_deployer_trust(workspace)
+
+    result = run(
+        workspace.runner, workspace.env, workspace.namespace, workspace.private
+    )
+
+    assert_result(result, 0)
+    assert "CSR trust updated:" in result.stdout
+
+
 def test_superseded_terminal_history_allows_schema_two_rotation(
     csr_workspace: CsrWorkspace,
 ) -> None:

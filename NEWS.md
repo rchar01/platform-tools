@@ -4,6 +4,13 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- `platform-pki inventory-install` now archives exact outgoing inventories in
+  the protected content-addressed `inventory/history/<sha256>.yml` store before
+  byte-different replacement. Retained CSR authentication can therefore survive
+  unrelated inventory additions while still rejecting changes to the selected
+  service policy. Unsafe, conflicting, or unconfirmed snapshots block active
+  inventory replacement, and snapshots must be retained with signer backups.
+
 ## v3.0.0 - 2026-08-19
 
 - Added `platform-pki direct-exchange` and `platform-pki gitlab-package` as the

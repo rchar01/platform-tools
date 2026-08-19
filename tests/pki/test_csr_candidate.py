@@ -1192,6 +1192,83 @@ def test_migration_finalization_preserves_managed_state(
     assert "accepted_evidence_state=active\n" in status.stdout
 
 
+def test_finalized_candidate_allows_unrelated_inventory_addition(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    inventory = workspace.pki / "inventory/services.yml"
+    historical = inventory.read_bytes()
+    history = workspace.pki / "inventory/history"
+    history.mkdir(mode=0o700)
+    write_private(
+        history / f"{hashlib.sha256(historical).hexdigest()}.yml",
+        historical.decode("ascii"),
+    )
+    write_private(
+        inventory,
+        historical.decode("ascii")
+        + "  unrelated:\n"
+        + "    common_name: unrelated.example.internal\n"
+        + "    dns:\n"
+        + "      - unrelated.example.internal\n",
+    )
+
+    status = run(workspace, "verify", "external", "--request-id", REQUEST_ID)
+
+    assert_result(status, 0)
+    assert "state=finalized\n" in status.stdout
+    assert "accepted_evidence_state=active\n" in status.stdout
+
+
+def test_finalized_candidate_rejects_current_service_policy_change(
+    csr_workspace: CsrWorkspace,
+) -> None:
+    workspace = csr_workspace
+    artifact, manifest_digest = prepare(workspace)
+    assert_result(
+        decide(
+            workspace,
+            REQUEST_ID,
+            artifact,
+            manifest_digest,
+            action="finalize",
+            result="activated",
+        ),
+        0,
+    )
+    inventory = workspace.pki / "inventory/services.yml"
+    historical = inventory.read_bytes()
+    history = workspace.pki / "inventory/history"
+    history.mkdir(mode=0o700)
+    write_private(
+        history / f"{hashlib.sha256(historical).hexdigest()}.yml",
+        historical.decode("ascii"),
+    )
+    write_private(
+        inventory,
+        historical.decode("ascii").replace("    days: 35\n", "    days: 36\n"),
+    )
+
+    status = run(workspace, "verify", "external", "--request-id", REQUEST_ID)
+
+    assert status.status == 1
+    assert status.stderr == (
+        "[ERROR] Current service policy differs from retained CSR inventory\n"
+    )
+
+
 def test_abandon_rejects_evidence_binding_time_and_result_mismatches(
     csr_workspace: CsrWorkspace,
 ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 import sys
@@ -380,6 +381,119 @@ def _recheck_destination(
         _die("Inventory destination identity changed after validation")
 
 
+def _archive_inventory(
+    parent: OpenedDirectory,
+    data: bytes,
+    pause: PauseHook,
+) -> None:
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        os.mkdir("history", 0o700, dir_fd=parent.fileno())
+        os.fsync(parent.fileno())
+    except FileExistsError:
+        pass
+    except OSError:
+        _die("Cannot create inventory history directory")
+
+    try:
+        history = parent.open_directory(
+            "history", policy=DirectoryPolicy(owner=os.geteuid(), mode=0o700)
+        )
+    except FilesystemError:
+        _die("Inventory history directory is unsafe")
+
+    name = f"{digest}.yml"
+    staged: StagedFile | None = None
+    publication_failed = False
+    try:
+        existing = _identity(history, name)
+        if existing is ABSENT:
+            try:
+                staged = stage_file_bytes(
+                    history,
+                    "platform-pki-inventory-history",
+                    data,
+                    mode=0o600,
+                )
+                pause("inventory-history-before-publication")
+                try:
+                    publish_no_clobber(
+                        history,
+                        staged.name,
+                        staged.identity,
+                        history,
+                        name,
+                    )
+                    staged.mark_consumed()
+                except PublicationDestinationExistsError:
+                    pass
+                except PublicationError:
+                    publication_failed = True
+            except PublicationError:
+                _die("Cannot stage inventory history snapshot")
+
+        if staged is not None and not staged.consumed:
+            current_stage = _identity(history, staged.name)
+            if (
+                isinstance(current_stage, FileIdentity)
+                and _same_inode(current_stage, staged.identity)
+            ):
+                if not _remove_exact_name(history, staged.name, staged.identity):
+                    _die("Cannot remove inventory history staging file")
+                staged.mark_consumed()
+
+        pause("inventory-history-after-publication")
+        try:
+            with history.open_file(
+                name,
+                policy=FilePolicy(
+                    owner=os.geteuid(), mode=0o600, links=1, max_size=len(data)
+                ),
+            ) as snapshot:
+                if snapshot.read(len(data)) != data:
+                    _die("Inventory history snapshot conflicts with its digest")
+                snapshot.recheck()
+        except FilesystemError:
+            _die("Inventory history snapshot is unsafe")
+        if publication_failed:
+            _die("Inventory history snapshot publication is ambiguous")
+        history.recheck()
+        parent.recheck()
+    finally:
+        if staged is not None:
+            try:
+                staged.close()
+            except PublicationError:
+                pass
+        try:
+            history.close()
+        except FilesystemError:
+            pass
+
+
+def _recheck_destination_bytes(
+    parent: OpenedDirectory,
+    expected: FileIdentity,
+    expected_bytes: bytes,
+) -> None:
+    try:
+        with parent.open_file(
+            "services.yml",
+            policy=FilePolicy(
+                owner=os.geteuid(),
+                forbidden_bits=0o022,
+                links=1,
+                max_size=len(expected_bytes),
+            ),
+            expected_identity=expected,
+        ) as destination:
+            if destination.read(len(expected_bytes)) != expected_bytes:
+                _die("Inventory destination changed after history publication")
+            destination.recheck()
+    except FilesystemError:
+        _die("Inventory destination changed after history publication")
+
+
 def _create_guard(
     parent: OpenedDirectory,
     destination: FileIdentity,
@@ -545,6 +659,11 @@ def _install_locked(
                 )
                 return 0
             status = "normalized" if destination_bytes == source_bytes else "updated"
+            if destination_bytes != source_bytes:
+                _archive_inventory(inventory_parent, destination_bytes, pause)
+                _recheck_destination_bytes(
+                    inventory_parent, destination, destination_bytes
+                )
         else:
             status = "installed"
 
