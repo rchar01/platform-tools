@@ -62,6 +62,20 @@ MINIMAL_ARGUMENTS = {
         "--manifest-sha256",
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ),
+    ("csr-outcome", "publish"): (
+        "api",
+        "--request-id",
+        "0123456789abcdef0123456789abcdef",
+        "--outcome-key",
+        "/protected/outcome-key",
+    ),
+    ("csr-outcome", "resolve"): (
+        "api",
+        "--request-id",
+        "0123456789abcdef0123456789abcdef",
+        "--manifest-sha256",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ),
     ("csr-candidate", "verify"): (
         "api",
         "--request-id",
@@ -204,6 +218,7 @@ def test_production_routes_exactly_match_source_backed_parser_inventory() -> Non
     assert tuple(spec.route for spec in ROUTES) == tuple(
         contract.unified_route for contract in PKI_PARSER_ROUTES
     )
+    assert set(MINIMAL_ARGUMENTS) == {spec.route for spec in ROUTES}
     assert len(ROUTES) == len(ROUTE_SPECS) == 36
     for spec, contract in zip(ROUTES, PKI_PARSER_ROUTES, strict=True):
         assert tuple(positional.name for positional in spec.positionals) == contract.positionals

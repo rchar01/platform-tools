@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v3.0.0 - 2026-08-19
+
 - Added `platform-pki direct-exchange` and `platform-pki gitlab-package` as the
   unified operator-side transports for exact host-local PKI packages. Restricted
   target configuration remains owned by `platform-config`.
@@ -36,8 +38,10 @@ This file gives a short, release-oriented view of what changed between versions.
   Installation checks those exact paths before any mutation, fails closed if
   any path or dangling symlink remains, lists the blockers, and never deletes or
   replaces them.
-- This remains post-v2.3.0 release development. `VERSION` stays at `2.3.0`
-  until the next-major release gate is complete.
+- PKI commands require Python 3.14 or newer. External downstream inventory
+  reconciliation, unified-only canary acceptance, and per-host runtime evidence
+  remain deployment prerequisites; this release does not certify target-host
+  readiness.
 
 ## v2.3.0 - 2026-08-13
 

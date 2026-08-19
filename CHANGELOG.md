@@ -7,6 +7,8 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-19
+
 ### Added
 
 - Added unified `platform-pki direct-exchange` and `platform-pki gitlab-package`
@@ -49,8 +51,9 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Changed protected offline CSR approval and response key prompts to identify
   the key role and the trust, signing, or race-safe recheck phase while keeping
   passphrases off arguments, environment, and output.
-- Kept this work under the Unreleased heading with `VERSION` at `2.3.0` while
-  the next-major release gate remains pending.
+- Released the unified-only package as `3.0.0`. External downstream inventory
+  reconciliation, unified-only canary acceptance, and Python 3.14 evidence for
+  every PKI execution host remain deployment prerequisites.
 
 ## [2.3.0] - 2026-08-13
 

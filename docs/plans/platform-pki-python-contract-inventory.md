@@ -8,9 +8,10 @@ generation and installation now contain one canonical PKI zipapp,
 transaction recovery is exposed through unified `service-recover`. A copied or
 renamed archive still behaves canonically as `platform-pki`. Retained Bash
 executables, libraries, source fragments, and historical command mappings are
-immutable evidence rather than runtime ownership. The v3 release gate remains
-pending on external downstream inventory, canary validation, and Python 3.14
-target-host prerequisites; `VERSION` remains `2.3.0` until that gate completes.
+immutable evidence rather than runtime ownership. Version 3.0.0 is authorized
+for software publication. External downstream inventory, canary validation, and
+Python 3.14 target-host evidence remain post-release deployment prerequisites
+and do not certify target readiness.
 
 ## Runtime and Interfaces
 
@@ -843,10 +844,9 @@ of the ordinary non-rollover Make pool.
 
 ## Open Items
 
-- Complete the v3 release gate outside this implementation: reconcile external
-  downstream command inventory, complete canary validation, and prove Python
-  3.14 or newer on every target host that executes PKI commands. `VERSION`
-  remains `2.3.0` until these blockers close.
+- Complete the post-release deployment gate outside this implementation:
+  reconcile external downstream command inventory, complete canary validation,
+  and prove Python 3.14 or newer on every target host that executes PKI commands.
 - Extend output/status and runtime-boundary contracts from the seven covered
   routes to the 20 explicitly deferred parser leaves. This is a machine-readable
   documentation expansion, not a v3 release blocker; focused

@@ -72,10 +72,10 @@ Ensure the install directory is on `PATH` when using tools by command name.
 
 ### Upgrade From v2.3.0
 
-This working tree is post-v2.3.0 next-major development. `VERSION` remains
-`2.3.0` until the release gate is complete.
+Version 3.0.0 is the unified-only PKI command boundary. It requires Python 3.14
+or newer on every host that executes `platform-pki`.
 
-Before installing this boundary over a v2.3.0 installation, inspect these exact
+Before installing v3.0.0 over a v2.3.0 installation, inspect these exact
 legacy paths under `INSTALL_DIR`:
 
 - `platform-pki-init`

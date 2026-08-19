@@ -35,15 +35,18 @@ EXPECTED_MEMBERS = (
     "platform_pki/cli.py",
     "platform_pki/csr_candidate.py",
     "platform_pki/csr_history.py",
+    "platform_pki/csr_outcome.py",
     "platform_pki/csr_protocol.py",
     "platform_pki/csr_recover.py",
     "platform_pki/csr_recovery.py",
     "platform_pki/csr_trust_install.py",
     "platform_pki/custody_report.py",
+    "platform_pki/direct_exchange.py",
     "platform_pki/errors.py",
     "platform_pki/export_ansible.py",
     "platform_pki/faults.py",
     "platform_pki/filesystem.py",
+    "platform_pki/gitlab_package.py",
     "platform_pki/init.py",
     "platform_pki/intermediate_create.py",
     "platform_pki/inventory.py",
@@ -291,11 +294,31 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
         )
     elif route.unified_route == ("ca-rollover", "recover"):
         assert result.stderr == "[ERROR] Recovery transaction ID is invalid\n"
+    elif route.unified_route[0] == "direct-exchange":
+        assert result.stderr == (
+            "[ERROR] [Errno 2] No such file or directory: '/protected'\n"
+        )
+    elif route.unified_route == ("gitlab-package", "publish"):
+        assert result.stderr == (
+            "[ERROR] cannot resolve source directory: No such file or directory\n"
+        )
+    elif route.unified_route == ("gitlab-package", "download"):
+        assert result.stderr == (
+            "[ERROR] cannot open GitLab exchange project record: "
+            "No such file or directory\n"
+        )
+    elif route.unified_route == ("gitlab-package", "publish-request"):
+        assert result.stderr == (
+            "[ERROR] cannot open PKI request inventory record: "
+            "No such file or directory\n"
+        )
     elif route.unified_route in {
         ("ca-passphrase-verify",),
         ("backup",),
         ("certificate-export", "publish"),
         ("certificate-export", "resolve"),
+        ("csr-outcome", "publish"),
+        ("csr-outcome", "resolve"),
         ("custody-report",),
         ("csr-candidate", "verify"),
         ("csr-candidate", "finalize"),

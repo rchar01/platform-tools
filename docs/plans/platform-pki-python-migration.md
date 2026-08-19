@@ -9,11 +9,11 @@ are removed. Exact managed recovery is public through
 `platform-pki service-recover`. Phase 8 retired production PKI Bashly workspaces
 and shell libraries while preserving immutable final-Bash evidence and
 historical mappings under `tests/pki/oracles/`. A copied or renamed archive
-still behaves as `platform-pki`. The v3 release gate remains pending on external
-downstream inventory, canary validation, and Python 3.14 target-host prerequisites;
-`VERSION` remains `2.3.0` until those blockers close. Migration remains
-forward-only: installing an older Bash release after Python has written state is
-unsupported.
+still behaves as `platform-pki`. Version 3.0.0 is the unified-only release
+boundary. By explicit release decision, external downstream inventory, canary
+validation, and Python 3.14 target-host evidence remain post-release deployment
+gates rather than software publication blockers. Migration remains forward-only:
+installing an older Bash release after Python has written state is unsupported.
 
 ## Goal
 
@@ -701,8 +701,12 @@ Validation gate:
 - [x] Targeted next-major implementation evidence covers one generated/installed
   PKI zipapp, absent alias artifacts, canonical renamed-copy behavior, and
   pre-mutation install refusal for exact stale aliases.
-- [ ] Release gate: external downstream command inventory is reconciled, the
-  canary is accepted, and every PKI target host provides Python 3.14 or newer.
+- [x] Stable v3.0.0 publication is authorized before external deployment
+  validation; defects found during live validation require a later patch
+  release rather than retagging v3.0.0.
+- [ ] Post-release deployment gate: external downstream command inventory is
+  reconciled, the canary is accepted, and every PKI target host provides Python
+  3.14 or newer.
 
 ## Packaging and Installation
 
@@ -813,8 +817,9 @@ Phase 8 progress entry records the final aggregate acceptance run.
   older Bash implementations must not be used with Python-written transaction
   state and are not guaranteed to interpret it.
 - Every deployment target that executes a PKI command must provide Python 3.14
-  or newer before the v3 release. Target provisioning is owned by the deployment
-  environment rather than this tool repository and remains a release blocker.
+  or newer before installing v3.0.0 on that target. Target provisioning is owned
+  by the deployment environment rather than this tool repository and remains a
+  deployment blocker.
 
 ## Open Questions
 
@@ -884,6 +889,7 @@ Phase 8 progress entry records the final aggregate acceptance run.
 | 2026-08-13 | Phase 8 production Bash retirement completed. | PKI Bashly workspaces and installed shell libraries were removed after pre-cleanup acceptance. Current-release compatibility names remain deterministic Python zipapps. Required final-Bash source evidence was relocated byte-for-byte under `tests/pki/oracles/final-bash-source/` with a complete SHA-256 manifest; command-specific executable oracles remain unchanged. Final `make container-check` passed remaining Bash generation, ShellCheck, static checks, all 4,849 maintained tests including 544 rollover cases, and the 10-test archive smoke. |
 | 2026-08-13 | Next-major unified-only implementation completed; release gate remains open. | Current worktree source and targeted test changes remove all 18 alias artifacts and compatibility-name dispatch, generate/install only `platform-pki`, keep renamed copies canonical, and make installation reject exact stale alias paths before mutation without deleting them. Final bounded parser/help verification passed 40 tests; unified-only install inventory and exact legacy-alias preflight verification passed 3 tests; deterministic zipapp verification, Python compilation, whitespace validation, and frozen-oracle checks passed. Documentation and Unreleased notes carry exact manual cleanup guidance. External downstream inventory, canary validation, and Python 3.14 target-host readiness remain blockers; `VERSION` is still `2.3.0`. |
 | 2026-08-17 | Unified-only candidate hardening completed without closing the release gate. | Current route documentation now records all 27 unified leaves and 20 deferred output/status contracts. Exact legacy-alias install preflight covers regular files, directories, dangling symlinks, and live symlinks; runtime-evidence races cover one immutable artifact-state snapshot, descriptor-bound executable status, replacement during and after hashing, sealed-snapshot invocation, and one immutable alias snapshot for both detail fields and aggregate status; offline signing rejects approved-source or installed-trust changes after confirmation before journal/replay mutation. Persisted rollover recovery and migration action bytes retain their exact historical alias spellings despite unified-only runtime dispatch. The focused install, offline, and persisted-action additions passed 4, 2, and 2 cases, and the complete 26-test runtime-evidence target passed. Pinned deterministic Bash generation, ShellCheck, Python zipapp verification, Python compilation, and whitespace checks passed. Full `make container-check` and the external downstream, canary, and target-host Python gates remain pending; `VERSION` remains `2.3.0`. |
+| 2026-08-19 | Stable v3.0.0 release prepared and canonical acceptance completed. | `VERSION`, development image tags, release notes, and all committed executables are synchronized at `3.0.0`. `make container-check` passed deterministic generated-artifact verification, ShellCheck, static checks, 4,063 non-rollover tests, 544 rollover tests, and the 10-test archive smoke, for 4,617 passing tests and no failures. Stable publication was explicitly authorized while downstream reconciliation, unified-only canary acceptance, and per-host Python 3.14 evidence remain post-release deployment gates. |
 
 ## Decision Log
 
@@ -905,3 +911,4 @@ Phase 8 progress entry records the final aggregate acceptance run.
 | 2026-08-10 | Require a post-confirmation CSR journal-kind recheck before Python recovery mutation. | Recovery must not switch between signing and candidate-finalization protocols after the operator confirms one kind; a changed selection under the required locks fails closed. The public Python route now enforces this decision. |
 | 2026-08-10 | Remove `platform-pki-*` compatibility executables in the next major release. | Compatibility names remain available while routes migrate, but the completed migration will install only `platform-pki`; frozen Bash oracles remain test evidence rather than public launchers. This supersedes the 2026-08-07 decision to preserve compatibility names indefinitely. |
 | 2026-08-13 | Complete the unified-only implementation before opening the v3 release gate. | Alias removal, canonical copied-name behavior, and fail-closed manual-cleanup installation are implemented, but release remains blocked on external downstream inventory, canary acceptance, and target-host Python prerequisites. |
+| 2026-08-19 | Publish stable v3.0.0 before external live validation. | The release owner explicitly accepted external downstream reconciliation, unified-only canary acceptance, and target-host Python evidence as post-release deployment gates; any defect found after tagging requires a patch release. |
