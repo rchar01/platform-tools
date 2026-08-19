@@ -75,8 +75,8 @@ Ensure the install directory is on `PATH` when using tools by command name.
 Version 3.0.0 is the unified-only PKI command boundary. It requires Python 3.14
 or newer on every host that executes `platform-pki`.
 
-Before installing v3.0.0 over a v2.3.0 installation, inspect these exact
-legacy paths under `INSTALL_DIR`:
+Before installing v3.0.0 or newer over a v2.3.0 installation, inspect these
+exact legacy paths under `INSTALL_DIR`:
 
 - `platform-pki-init`
 - `platform-pki-inventory-install`

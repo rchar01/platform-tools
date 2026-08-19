@@ -7,7 +7,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-image=${PLATFORM_TOOLS_DEV_IMAGE:-localhost/platform-tools-dev:3.0.0}
+image=${PLATFORM_TOOLS_DEV_IMAGE:-localhost/platform-tools-dev:3.0.1}
 
 podman build --file "$repo_root/Containerfile.dev" --tag "$image" "$repo_root"
 

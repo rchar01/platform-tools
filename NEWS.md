@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v3.0.1 - 2026-08-19
+
 - `platform-pki inventory-install` now archives exact outgoing inventories in
   the protected content-addressed `inventory/history/<sha256>.yml` store before
   byte-different replacement. Retained CSR authentication can therefore survive
