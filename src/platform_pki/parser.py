@@ -79,6 +79,23 @@ _OPTION_METAVARS = {
     "--root-days": "DAYS",
     "--intermediate-days": "DAYS",
     "--action": "ACTION",
+    "--exchange-root": "PATH",
+    "--stage": "STAGE",
+    "--service": "SERVICE",
+    "--target": "TARGET",
+    "--package-version": "VERSION",
+    "--source-dir": "PATH",
+    "--destination-dir": "PATH",
+    "--project-record": "PATH",
+    "--token-type": "TYPE",
+    "--token-file": "PATH",
+    "--ca-file": "PATH",
+    "--inventory-record": "PATH",
+    "--trust-dir": "PATH",
+    "--transport-host-key-sha256": "DIGEST",
+    "--timeout": "SECONDS",
+    "--processing-attempts": "COUNT",
+    "--processing-interval": "SECONDS",
 }
 
 
@@ -584,6 +601,171 @@ ROUTES = (
         validators=(*_NS_VALIDATORS, ("--transaction", "not_empty")),
         reject_duplicates=(*_NS, "--transaction", "--action", "--yes"),
     ),
+    _route(
+        ("direct-exchange", "request-pull"),
+        (),
+        positionals=(
+            PositionalSpec("endpoint", "ENDPOINT", required=True),
+            PositionalSpec("request_id", "REQUEST_ID", required=True),
+            PositionalSpec("output_dir", "OUTPUT_DIR", required=True),
+        ),
+    ),
+    _route(
+        ("direct-exchange", "evidence-pull"),
+        (),
+        positionals=(
+            PositionalSpec("endpoint", "ENDPOINT", required=True),
+            PositionalSpec("request_id", "REQUEST_ID", required=True),
+            PositionalSpec("artifact_sha256", "ARTIFACT_SHA256", required=True),
+            PositionalSpec("deployment_sha256", "DEPLOYMENT_SHA256", required=True),
+            PositionalSpec("output_dir", "OUTPUT_DIR", required=True),
+        ),
+    ),
+    _route(
+        ("direct-exchange", "response-push"),
+        (),
+        positionals=(
+            PositionalSpec("endpoint", "ENDPOINT", required=True),
+            PositionalSpec("request_id", "REQUEST_ID", required=True),
+            PositionalSpec("artifact_sha256", "ARTIFACT_SHA256", required=True),
+            PositionalSpec("input_dir", "INPUT_DIR", required=True),
+        ),
+    ),
+    _route(
+        ("direct-exchange", "outcome-push"),
+        (),
+        positionals=(
+            PositionalSpec("endpoint", "ENDPOINT", required=True),
+            PositionalSpec("request_id", "REQUEST_ID", required=True),
+            PositionalSpec("artifact_sha256", "ARTIFACT_SHA256", required=True),
+            PositionalSpec("deployment_sha256", "DEPLOYMENT_SHA256", required=True),
+            PositionalSpec("outcome_sha256", "OUTCOME_SHA256", required=True),
+            PositionalSpec("input_dir", "INPUT_DIR", required=True),
+        ),
+    ),
+    _route(
+        ("gitlab-package", "publish"),
+        (
+            "--stage", "--service", "--target", "--request-id",
+            "--package-version", "--source-dir", "--project-record",
+            "--token-type", "--token-file", "--ca-file",
+            "--inventory-record", "--trust-dir",
+            "--transport-host-key-sha256", "--timeout",
+            "--processing-attempts", "--processing-interval",
+        ),
+        required=(
+            "--stage", "--service", "--target", "--request-id",
+            "--package-version", "--source-dir", "--project-record",
+            "--token-type", "--token-file", "--ca-file",
+        ),
+        defaults=(
+            ("--timeout", "30"),
+            ("--processing-attempts", "3"),
+            ("--processing-interval", "2"),
+        ),
+        choices=(
+            ("--stage", ("request", "approval", "response", "evidence", "outcome")),
+            ("--token-type", ("job", "private", "deploy")),
+        ),
+        validators=tuple(
+            (name, "not_empty")
+            for name in (
+                "--stage", "--service", "--target", "--request-id",
+                "--package-version", "--source-dir", "--project-record",
+                "--token-type", "--token-file", "--ca-file",
+                "--inventory-record", "--trust-dir",
+                "--transport-host-key-sha256", "--timeout",
+                "--processing-attempts", "--processing-interval",
+            )
+        ),
+        reject_duplicates=(
+            "--stage", "--service", "--target", "--request-id",
+            "--package-version", "--source-dir", "--project-record",
+            "--token-type", "--token-file", "--ca-file",
+            "--inventory-record", "--trust-dir",
+            "--transport-host-key-sha256", "--timeout",
+            "--processing-attempts", "--processing-interval",
+        ),
+    ),
+    _route(
+        ("gitlab-package", "download"),
+        (
+            "--stage", "--service", "--target", "--request-id",
+            "--package-version", "--destination-dir", "--project-record",
+            "--token-type", "--token-file", "--ca-file",
+            "--inventory-record", "--trust-dir",
+            "--transport-host-key-sha256", "--timeout",
+            "--processing-attempts", "--processing-interval",
+        ),
+        required=(
+            "--stage", "--service", "--target", "--request-id",
+            "--package-version", "--destination-dir", "--project-record",
+            "--token-type", "--token-file", "--ca-file",
+        ),
+        defaults=(
+            ("--timeout", "30"),
+            ("--processing-attempts", "3"),
+            ("--processing-interval", "2"),
+        ),
+        choices=(
+            ("--stage", ("request", "approval", "response", "evidence", "outcome")),
+            ("--token-type", ("job", "private", "deploy")),
+        ),
+        validators=tuple(
+            (name, "not_empty")
+            for name in (
+                "--stage", "--service", "--target", "--request-id",
+                "--package-version", "--destination-dir", "--project-record",
+                "--token-type", "--token-file", "--ca-file",
+                "--inventory-record", "--trust-dir",
+                "--transport-host-key-sha256", "--timeout",
+                "--processing-attempts", "--processing-interval",
+            )
+        ),
+        reject_duplicates=(
+            "--stage", "--service", "--target", "--request-id",
+            "--package-version", "--destination-dir", "--project-record",
+            "--token-type", "--token-file", "--ca-file",
+            "--inventory-record", "--trust-dir",
+            "--transport-host-key-sha256", "--timeout",
+            "--processing-attempts", "--processing-interval",
+        ),
+    ),
+    _route(
+        ("gitlab-package", "publish-request"),
+        (
+            "--exchange-root", "--service", "--target", "--request-id",
+            "--inventory-record", "--transport-host-key-sha256",
+            "--project-record", "--token-type", "--token-file", "--ca-file",
+            "--timeout", "--processing-attempts", "--processing-interval",
+        ),
+        required=(
+            "--exchange-root", "--service", "--target", "--request-id",
+            "--inventory-record", "--transport-host-key-sha256",
+            "--project-record", "--token-type", "--token-file", "--ca-file",
+        ),
+        defaults=(
+            ("--timeout", "30"),
+            ("--processing-attempts", "3"),
+            ("--processing-interval", "2"),
+        ),
+        choices=(("--token-type", ("job", "private")),),
+        validators=tuple(
+            (name, "not_empty")
+            for name in (
+                "--exchange-root", "--service", "--target", "--request-id",
+                "--inventory-record", "--transport-host-key-sha256",
+                "--project-record", "--token-type", "--token-file", "--ca-file",
+                "--timeout", "--processing-attempts", "--processing-interval",
+            )
+        ),
+        reject_duplicates=(
+            "--exchange-root", "--service", "--target", "--request-id",
+            "--inventory-record", "--transport-host-key-sha256",
+            "--project-record", "--token-type", "--token-file", "--ca-file",
+            "--timeout", "--processing-attempts", "--processing-interval",
+        ),
+    ),
 )
 
 ROUTE_SPECS = MappingProxyType({spec.route: spec for spec in ROUTES})
@@ -924,6 +1106,27 @@ _ROUTE_FOOTERS: dict[tuple[str, ...], str] = {
         "age headers, and only the first PEM header line of validated private-key "
         "files. It never decrypts, parses, hashes, copies, or prints private-key "
         "content."
+    ),
+    ("direct-exchange", "request-pull"): (
+        "Pull one exact request package over host-key-pinned restricted SSH."
+    ),
+    ("direct-exchange", "evidence-pull"): (
+        "Pull one exact deployment evidence package over host-key-pinned restricted SSH."
+    ),
+    ("direct-exchange", "response-push"): (
+        "Push one exact response package to the restricted target ingress."
+    ),
+    ("direct-exchange", "outcome-push"): (
+        "Push one exact signer outcome package to the restricted target ingress."
+    ),
+    ("gitlab-package", "publish"): (
+        "Validate and publish one exact host-local PKI package through GitLab."
+    ),
+    ("gitlab-package", "download"): (
+        "Download, validate, and no-clobber-publish one exact GitLab PKI package."
+    ),
+    ("gitlab-package", "publish-request"): (
+        "Compatibility publication for an existing validated request workspace."
     ),
 }
 

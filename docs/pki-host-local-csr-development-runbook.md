@@ -21,8 +21,9 @@ Signer command and schema details remain canonical in:
 - [OpenSSL PKI Helpers](pki-openssl.md)
 - [Host-Local PKI CSR Handoff](handoffs/pki-host-local-csr-handoff.md)
 
-`platform-config` implements host-key-pinned direct SSH for exact package
-movement across the target boundary. GitLab provides the normal durable online
+`platform-tools` implements the operator-side `platform-pki direct-exchange`
+client and `platform-pki gitlab-package` transport. `platform-config` installs
+the restricted target facade and owns Ansible lifecycle actions. GitLab provides the normal durable online
 exchange; protected local custody is the fallback. Controlled media separates
 the online transfer station from the offline approver and signer. Transport
 success never replaces canonical signatures, frozen trust, or digest pins. The

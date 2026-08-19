@@ -6,6 +6,13 @@ COMMANDS = {
     "offline-csr": ("approve", "sign"),
     "certificate-export": ("publish", "resolve"),
     "csr-outcome": ("publish", "resolve"),
+    "direct-exchange": (
+        "request-pull",
+        "evidence-pull",
+        "response-push",
+        "outcome-push",
+    ),
+    "gitlab-package": ("publish", "download", "publish-request"),
     "csr-candidate": ("verify", "finalize", "abandon"),
     "root-create": (),
     "intermediate-create": (),

@@ -63,6 +63,14 @@ def _handler(route: tuple[str, ...]):
         from .csr_outcome import csr_outcome
 
         return csr_outcome
+    if route[0] == "direct-exchange":
+        from .direct_exchange import direct_exchange
+
+        return direct_exchange
+    if route[0] == "gitlab-package":
+        from .gitlab_package import gitlab_package
+
+        return gitlab_package
     if route == ("export-ansible",):
         from .export_ansible import export_ansible
 

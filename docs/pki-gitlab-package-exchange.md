@@ -213,7 +213,7 @@ completion. Consumers accept only after exact status/list checks, GitLab
 `file_sha256` comparison, fresh local download hashing, manifest validation,
 and independent canonical protocol verification all pass.
 
-The implemented `platform-config/scripts/platform-pki-gitlab-package` exposes
+The implemented `platform-pki gitlab-package` command exposes
 generic `publish` and `download` operations. Both require explicit stage,
 service, target, request ID, exact full package version, protected project
 record, token file/type, and CA file. Publish accepts one protected payload-only

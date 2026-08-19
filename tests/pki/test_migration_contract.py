@@ -325,7 +325,7 @@ def _expanded_shell_array(
 
 
 def test_command_contract_inventory_is_complete_and_unique() -> None:
-    assert len(PKI_COMMAND_CONTRACTS) == 21
+    assert len(PKI_COMMAND_CONTRACTS) == 23
     compatibility_names = [
         contract.compatibility_name
         for contract in PKI_COMMAND_CONTRACTS
@@ -344,7 +344,13 @@ def test_command_contract_inventory_is_complete_and_unique() -> None:
         contract.unified_route
         for contract in PKI_COMMAND_CONTRACTS
         if contract.compatibility_name is None
-    ] == ["offline-csr", "csr-outcome", "service-recover"]
+    ] == [
+        "offline-csr",
+        "csr-outcome",
+        "service-recover",
+        "direct-exchange",
+        "gitlab-package",
+    ]
 
 
 def test_python_command_map_matches_frozen_command_inventory() -> None:
@@ -407,6 +413,13 @@ def test_nested_command_inventory_matches_current_command_families() -> None:
         "csr-candidate": ("verify", "finalize", "abandon"),
         "offline-csr": ("approve", "sign"),
         "ca-rollover": ("migrate", "status", "prepare", "recover"),
+        "direct-exchange": (
+            "request-pull",
+            "evidence-pull",
+            "response-push",
+            "outcome-push",
+        ),
+        "gitlab-package": ("publish", "download", "publish-request"),
     }
 
 
@@ -488,9 +501,9 @@ def test_duplicate_option_inventory_exactly_matches_runtime_calls() -> None:
 
 def test_output_status_route_coverage_is_complete_and_disjoint() -> None:
     routes = {route.unified_route for route in PKI_PARSER_ROUTES}
-    assert len(routes) == 29
+    assert len(routes) == 36
     assert len(OUTPUT_STATUS_COVERED_ROUTES) == 7
-    assert len(OUTPUT_STATUS_DEFERRED_ROUTES) == 22
+    assert len(OUTPUT_STATUS_DEFERRED_ROUTES) == 29
     assert OUTPUT_STATUS_COVERED_ROUTES.isdisjoint(OUTPUT_STATUS_DEFERRED_ROUTES)
     assert OUTPUT_STATUS_COVERED_ROUTES | OUTPUT_STATUS_DEFERRED_ROUTES == routes
 

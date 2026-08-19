@@ -377,6 +377,20 @@ PKI_COMMAND_CONTRACTS = (
         _locks(LOCK_ORDER),
         ("test-pki-ca-rollover", "test-pki-ca-rollover-parser"),
     ),
+    CommandContract(
+        None,
+        "direct-exchange",
+        ("request-pull", "evidence-pull", "response-push", "outcome-push"),
+        _locks(()),
+        ("test-pki-direct-exchange",),
+    ),
+    CommandContract(
+        None,
+        "gitlab-package",
+        ("publish", "download", "publish-request"),
+        _locks(()),
+        ("test-pki-gitlab-package",),
+    ),
 )
 
 
@@ -390,6 +404,23 @@ _CSR_INPUT_FLAGS = (
     "--approval-signature",
     "--response-key",
     "--current-cert-file",
+)
+_GITLAB_TRANSPORT_FLAGS = (
+    "--stage", "--service", "--target", "--request-id", "--package-version",
+)
+_GITLAB_CONNECTION_FLAGS = (
+    "--project-record", "--token-type", "--token-file", "--ca-file",
+    "--inventory-record", "--trust-dir", "--transport-host-key-sha256",
+    "--timeout", "--processing-attempts", "--processing-interval",
+)
+_GITLAB_DEFAULTS = (
+    ("--timeout", "30"),
+    ("--processing-attempts", "3"),
+    ("--processing-interval", "2"),
+)
+_GITLAB_VALIDATORS = tuple(
+    (name, "not_empty")
+    for name in (*_GITLAB_TRANSPORT_FLAGS, *_GITLAB_CONNECTION_FLAGS)
 )
 
 PKI_PARSER_ROUTES = (
@@ -556,6 +587,91 @@ PKI_PARSER_ROUTES = (
         required_names=("--transaction", "--action"), allowed_values=(("--action", ("resume", "rollback")),),
         validators=(*_NAMESPACE_VALIDATORS, ("--transaction", "not_empty")),
     ),
+    _route(
+        None, ("direct-exchange", "request-pull"),
+        positionals=("endpoint", "request_id", "output_dir"),
+        required_names=("endpoint", "request_id", "output_dir"),
+    ),
+    _route(
+        None, ("direct-exchange", "evidence-pull"),
+        positionals=(
+            "endpoint", "request_id", "artifact_sha256", "deployment_sha256",
+            "output_dir",
+        ),
+        required_names=(
+            "endpoint", "request_id", "artifact_sha256", "deployment_sha256",
+            "output_dir",
+        ),
+    ),
+    _route(
+        None, ("direct-exchange", "response-push"),
+        positionals=("endpoint", "request_id", "artifact_sha256", "input_dir"),
+        required_names=("endpoint", "request_id", "artifact_sha256", "input_dir"),
+    ),
+    _route(
+        None, ("direct-exchange", "outcome-push"),
+        positionals=(
+            "endpoint", "request_id", "artifact_sha256", "deployment_sha256",
+            "outcome_sha256", "input_dir",
+        ),
+        required_names=(
+            "endpoint", "request_id", "artifact_sha256", "deployment_sha256",
+            "outcome_sha256", "input_dir",
+        ),
+    ),
+    _route(
+        None, ("gitlab-package", "publish"),
+        long_flags=(*_GITLAB_TRANSPORT_FLAGS, "--source-dir", *_GITLAB_CONNECTION_FLAGS),
+        required_names=(*_GITLAB_TRANSPORT_FLAGS, "--source-dir", *_GITLAB_CONNECTION_FLAGS[:4]),
+        defaults=_GITLAB_DEFAULTS,
+        allowed_values=(
+            ("--stage", ("request", "approval", "response", "evidence", "outcome")),
+            ("--token-type", ("job", "private", "deploy")),
+        ),
+        validators=(
+            *_GITLAB_VALIDATORS[:5], ("--source-dir", "not_empty"),
+            *_GITLAB_VALIDATORS[5:],
+        ),
+    ),
+    _route(
+        None, ("gitlab-package", "download"),
+        long_flags=(*_GITLAB_TRANSPORT_FLAGS, "--destination-dir", *_GITLAB_CONNECTION_FLAGS),
+        required_names=(*_GITLAB_TRANSPORT_FLAGS, "--destination-dir", *_GITLAB_CONNECTION_FLAGS[:4]),
+        defaults=_GITLAB_DEFAULTS,
+        allowed_values=(
+            ("--stage", ("request", "approval", "response", "evidence", "outcome")),
+            ("--token-type", ("job", "private", "deploy")),
+        ),
+        validators=(
+            *_GITLAB_VALIDATORS[:5], ("--destination-dir", "not_empty"),
+            *_GITLAB_VALIDATORS[5:],
+        ),
+    ),
+    _route(
+        None, ("gitlab-package", "publish-request"),
+        long_flags=(
+            "--exchange-root", "--service", "--target", "--request-id",
+            "--inventory-record", "--transport-host-key-sha256",
+            "--project-record", "--token-type", "--token-file", "--ca-file",
+            "--timeout", "--processing-attempts", "--processing-interval",
+        ),
+        required_names=(
+            "--exchange-root", "--service", "--target", "--request-id",
+            "--inventory-record", "--transport-host-key-sha256",
+            "--project-record", "--token-type", "--token-file", "--ca-file",
+        ),
+        defaults=_GITLAB_DEFAULTS,
+        allowed_values=(("--token-type", ("job", "private")),),
+        validators=tuple(
+            (name, "not_empty")
+            for name in (
+                "--exchange-root", "--service", "--target", "--request-id",
+                "--inventory-record", "--transport-host-key-sha256",
+                "--project-record", "--token-type", "--token-file", "--ca-file",
+                "--timeout", "--processing-attempts", "--processing-interval",
+            )
+        ),
+    ),
 )
 
 
@@ -697,6 +813,9 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("ca-rollover", "status"), ("--namespace", "--pki-dir", "--format"), "bashly/platform-pki-ca-rollover/src/status_command.sh"),
     DuplicateOptionContract(("ca-rollover", "prepare"), ("--namespace", "--pki-dir", "--type", "--backup-receipt", "--root-name", "--intermediate-name", "--org", "--country", "--root-days", "--intermediate-days", "--root-pass-file", "--intermediate-pass-file", "--issuer-safety-days", "--private-repo"), "bashly/platform-pki-ca-rollover/src/prepare_command.sh"),
     DuplicateOptionContract(("ca-rollover", "recover"), ("--namespace", "--pki-dir", "--transaction", "--action", "--yes"), "bashly/platform-pki-ca-rollover/src/recover_command.sh"),
+    DuplicateOptionContract(("gitlab-package", "publish"), (*_GITLAB_TRANSPORT_FLAGS, "--source-dir", *_GITLAB_CONNECTION_FLAGS), "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("gitlab-package", "download"), (*_GITLAB_TRANSPORT_FLAGS, "--destination-dir", *_GITLAB_CONNECTION_FLAGS), "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("gitlab-package", "publish-request"), ("--exchange-root", "--service", "--target", "--request-id", "--inventory-record", "--transport-host-key-sha256", "--project-record", "--token-type", "--token-file", "--ca-file", "--timeout", "--processing-attempts", "--processing-interval"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
 )
 
 
@@ -736,6 +855,13 @@ OUTPUT_STATUS_DEFERRED_ROUTES = frozenset(
         ("ca-rollover", "migrate"),
         ("ca-rollover", "prepare"),
         ("ca-rollover", "recover"),
+        ("direct-exchange", "request-pull"),
+        ("direct-exchange", "evidence-pull"),
+        ("direct-exchange", "response-push"),
+        ("direct-exchange", "outcome-push"),
+        ("gitlab-package", "publish"),
+        ("gitlab-package", "download"),
+        ("gitlab-package", "publish-request"),
     }
 )
 

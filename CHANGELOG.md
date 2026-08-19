@@ -9,6 +9,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added unified `platform-pki direct-exchange` and `platform-pki gitlab-package`
+  routes for pinned restricted-SSH transfer and exact GitLab Generic Package
+  publication/download. Operator transport now lives with shared tools while
+  target configuration and lifecycle actions remain in `platform-config`.
 - Added unified `platform-pki csr-outcome publish|resolve` routes for exact
   terminal host-local CSR signer-outcome packages, retained-response-principal
   Ed25519 signing, immutable six-file no-clobber publication, and fully

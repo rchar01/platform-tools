@@ -24,7 +24,8 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
 - [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
-- [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md): Proposed production GitLab 18.11.3 Generic Package exchange for public host-local PKI workflow artifacts.
+- [`pki-direct-exchange.md`](./pki-direct-exchange.md): How to move exact public PKI packages through the pinned restricted target SSH endpoint.
+- [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md): Implemented GitLab 18.11.3 Generic Package exchange and its remaining production gates.
 - [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md): Pointer to the implemented cross-repository host-local registry PKI workflow and its signer-side references.
 - [`proxmox-token-init.md`](./proxmox-token-init.md): How to bootstrap the Proxmox API user/token with `platform-proxmox-token-init`.
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
@@ -46,7 +47,8 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
 - Approve and sign an exact removable-media CSR directory: use [`pki-openssl.md`](./pki-openssl.md#offline-csr-approval-and-signing).
 - Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).
-- Plan production CI exchange through GitLab Generic Packages: use [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md).
+- Move exact packages through a restricted target endpoint: use [`pki-direct-exchange.md`](./pki-direct-exchange.md).
+- Publish or download exact packages through GitLab: use [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md).
 - Run the complete host-local registry PKI lifecycle: start with [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md).
 - Inspect or migrate legacy PKI CA state: use [`pki-openssl.md`](./pki-openssl.md#migrate-legacy-ca-state).
 - Validate or render bastion access policy: use [`bastion-policy.md`](./bastion-policy.md).

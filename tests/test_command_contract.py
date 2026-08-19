@@ -102,6 +102,12 @@ def pki_route_argv(route: ParserRouteContract) -> tuple[Path | str, ...]:
 PKI_ROUTE_IDS = tuple("-".join(route.unified_route) for route in PKI_PARSER_ROUTES)
 PKI_NESTED_ROUTES = tuple(route for route in PKI_PARSER_ROUTES if len(route.unified_route) > 1)
 PKI_NESTED_ROUTE_IDS = tuple("-".join(route.unified_route) for route in PKI_NESTED_ROUTES)
+PKI_NAMESPACE_ROUTES = tuple(
+    route for route in PKI_PARSER_ROUTES if "--namespace" in route.long_flags
+)
+PKI_NAMESPACE_ROUTE_IDS = tuple(
+    "-".join(route.unified_route) for route in PKI_NAMESPACE_ROUTES
+)
 
 
 @pytest.mark.parametrize("tool", SHELL_TOOLS, ids=SHELL_TOOLS)
@@ -218,7 +224,7 @@ def test_pki_positional_prefix_before_help(
     assert result.stdout.startswith(f"Usage: platform-pki {' '.join(route)} ")
 
 
-@pytest.mark.parametrize("route", PKI_PARSER_ROUTES, ids=PKI_ROUTE_IDS)
+@pytest.mark.parametrize("route", PKI_NAMESPACE_ROUTES, ids=PKI_NAMESPACE_ROUTE_IDS)
 @pytest.mark.parametrize(
     ("arguments", "expected_stderr"),
     (

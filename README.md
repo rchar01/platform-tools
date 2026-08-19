@@ -37,12 +37,17 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
-| `platform-pki` | Unified Python PKI interface for all maintained PKI routes. |
+| `platform-pki` | Unified Python PKI and operator exchange interface for all maintained PKI routes. |
 | `platform-bastion-policy` | Validate and render Kubernetes bastion access-policy documents. |
 
 PKI operations use only `platform-pki <command>`. Production packaging generates
 and installs one PKI executable, `platform-pki`; the 18 v2 compatibility aliases
 are not part of the current command surface.
+
+Operator-side host-local transport is provided by
+`platform-pki direct-exchange ...` for pinned restricted SSH and
+`platform-pki gitlab-package ...` for exact GitLab Generic Packages. Ansible and
+target-side exchange components remain in `platform-config`.
 
 ## Install
 
@@ -747,7 +752,8 @@ sudo ./bin/platform-vm-env-collect
 | `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
 | `docs/bastion-policy.md` | Kubernetes bastion access-policy validation and rendering flow. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
-| `docs/pki-gitlab-package-exchange.md` | Proposed production GitLab 18.11.3 Generic Package exchange contract for public host-local PKI artifacts. |
+| `docs/pki-direct-exchange.md` | Pinned restricted-SSH operator transfer commands for host-local PKI packages. |
+| `docs/pki-gitlab-package-exchange.md` | Implemented GitLab 18.11.3 Generic Package exchange contract and remaining production gates. |
 | `docs/pki-host-local-csr-development-runbook.md` | Pointer to the implemented cross-repository host-local registry PKI workflow and signer-side references. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |

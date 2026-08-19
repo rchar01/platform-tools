@@ -135,6 +135,68 @@ MINIMAL_ARGUMENTS = {
         "resume",
         "--yes",
     ),
+    ("direct-exchange", "request-pull"): (
+        "/protected/endpoint.json",
+        "0123456789abcdef0123456789abcdef",
+        "/protected/request",
+    ),
+    ("direct-exchange", "evidence-pull"): (
+        "/protected/endpoint.json",
+        "0123456789abcdef0123456789abcdef",
+        "a" * 64,
+        "b" * 64,
+        "/protected/evidence",
+    ),
+    ("direct-exchange", "response-push"): (
+        "/protected/endpoint.json",
+        "0123456789abcdef0123456789abcdef",
+        "a" * 64,
+        "/protected/response",
+    ),
+    ("direct-exchange", "outcome-push"): (
+        "/protected/endpoint.json",
+        "0123456789abcdef0123456789abcdef",
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        "/protected/outcome",
+    ),
+    ("gitlab-package", "publish"): (
+        "--stage", "response",
+        "--service", "registry-test",
+        "--target", "test-target",
+        "--request-id", "0123456789abcdef0123456789abcdef",
+        "--package-version", "0123456789abcdef0123456789abcdef",
+        "--source-dir", "/protected/response",
+        "--project-record", "/protected/project",
+        "--token-type", "private",
+        "--token-file", "/protected/publisher.token",
+        "--ca-file", "/protected/ca.pem",
+    ),
+    ("gitlab-package", "download"): (
+        "--stage", "response",
+        "--service", "registry-test",
+        "--target", "test-target",
+        "--request-id", "0123456789abcdef0123456789abcdef",
+        "--package-version", "0123456789abcdef0123456789abcdef",
+        "--destination-dir", "/protected/response",
+        "--project-record", "/protected/project",
+        "--token-type", "private",
+        "--token-file", "/protected/reader.token",
+        "--ca-file", "/protected/ca.pem",
+    ),
+    ("gitlab-package", "publish-request"): (
+        "--exchange-root", "/protected/exchange",
+        "--service", "registry-test",
+        "--target", "test-target",
+        "--request-id", "0123456789abcdef0123456789abcdef",
+        "--inventory-record", "/protected/inventory",
+        "--transport-host-key-sha256", "a" * 64,
+        "--project-record", "/protected/project",
+        "--token-type", "private",
+        "--token-file", "/protected/publisher.token",
+        "--ca-file", "/protected/ca.pem",
+    ),
 }
 
 
@@ -142,7 +204,7 @@ def test_production_routes_exactly_match_source_backed_parser_inventory() -> Non
     assert tuple(spec.route for spec in ROUTES) == tuple(
         contract.unified_route for contract in PKI_PARSER_ROUTES
     )
-    assert len(ROUTES) == len(ROUTE_SPECS) == 29
+    assert len(ROUTES) == len(ROUTE_SPECS) == 36
     for spec, contract in zip(ROUTES, PKI_PARSER_ROUTES, strict=True):
         assert tuple(positional.name for positional in spec.positionals) == contract.positionals
         assert tuple(option.name for option in spec.options) == contract.long_flags

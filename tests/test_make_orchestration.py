@@ -44,12 +44,15 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-pki-ca-passphrase-verify",
     "test-pki-export",
     "test-pki-certificate-export",
+    "test-pki-csr-outcome",
     "test-pki-csr-candidate",
     "test-pki-inventory",
     "test-pki-inventory-install",
     "test-pki-csr-trust-install",
     "test-pki-csr-signing",
     "test-pki-offline-csr",
+    "test-pki-direct-exchange",
+    "test-pki-gitlab-package",
 }
 
 

@@ -4,6 +4,9 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki direct-exchange` and `platform-pki gitlab-package` as the
+  unified operator-side transports for exact host-local PKI packages. Restricted
+  target configuration remains owned by `platform-config`.
 - Added `platform-pki csr-outcome publish|resolve` for authenticated immutable
   terminal host-local CSR signer outcomes. It publishes exact six-file packages
   under `export/csr-outcomes/v1`, signs canonical manifests with the retained
