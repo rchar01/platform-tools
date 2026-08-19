@@ -7,6 +7,7 @@ status handling are now implemented by `platform-config`.
 
 Use the canonical cross-repository procedure:
 
+- [PKI Exchange Setup](https://codeberg.org/rch/platform-config/src/branch/main/docs/pki-exchange-setup.md)
 - [Host-Local Registry PKI Workflow](https://codeberg.org/rch/platform-config/src/branch/main/docs/registry-host-local-pki-workflow.md)
 
 That runbook covers every implemented phase from prerequisite trust and backup

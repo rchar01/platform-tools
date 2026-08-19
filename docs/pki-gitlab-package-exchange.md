@@ -23,6 +23,10 @@ The [development host-local registry runbook](pki-host-local-csr-development-run
 points to the implemented transport-neutral lifecycle. It does not make this
 GitLab transport runtime-qualified or production-ready.
 
+Transfer-station directories, GitLab project controls and credentials, target
+SSH preparation, and offline workspace setup are canonical in the public
+[`platform-config` PKI Exchange Setup](https://codeberg.org/rch/platform-config/src/branch/main/docs/pki-exchange-setup.md).
+
 ## Security Boundary
 
 GitLab is an authenticated online transport for public artifacts. It is not a
@@ -279,20 +283,35 @@ where applicable, independent digests, and protected custody records. GitLab
 administrators can alter or delete GitLab-local evidence; none is PKI authority.
 
 ## Credentials And Endpoint Allowlist
-Primary publishers are protected manual CI jobs using `CI_JOB_TOKEN` on
-protected refs and runners. Bind cross-project access to the exact exchange
-project allowlist. Where supported, grant only fine-grained `READ_PACKAGES` and
-`ADMIN_PACKAGES` needed for the allowed package endpoints. The protected
-triggering user and effective publisher role must be able to push protected
-packages but must not have package-delete, protection-setting, project-setting,
-or membership authority. Fine-grained endpoint permission never overrides role
-and package-protection denial.
+Primary publishers are protected manual CI jobs using a dedicated project
+access token with `api` scope and the minimum package-push role. Provide it only
+through a protected masked file variable on protected refs and runners. The
+helper requires `GET /api/v4/projects/:id`, but current GitLab ordinary and
+fine-grained job-token documentation does not list that endpoint. Treat
+`CI_JOB_TOKEN` as unqualified until exact-version runtime tests prove the
+complete endpoint set or the authentication design removes that request. The
+effective publisher role must be able to push protected packages but must not
+have package-delete, protection-setting, project-setting, or membership
+authority. Token permission never overrides role and package-protection denial.
 
-An external online transfer downloader should use a dedicated deploy token with
-only `read_package_registry` where Generic Package and project-protection
-behavior is compatible. It receives no write scope. A dedicated project access
-token with `api` and Developer role is a documented fallback only: `api` is
-broad, and package protection must still deny deletion and settings authority.
+GitLab 18.11's Generic Packages documentation explicitly supports an external
+online transfer downloader using a dedicated project access token with `api`
+scope and Developer role. This credential is not inherently read-only. The
+helper permits only GET requests in reader operations, but the same credential
+can call broader APIs outside the helper. Role-based package protection cannot
+deny publication to a Developer reader while allowing a Developer publisher; it
+may still impose a higher deletion threshold. Treat this as a qualification
+blocker unless the narrower `read_api` scope passes complete exact-version tests
+or the credential design changes. GitLab describes `read_api` as including
+package-registry reads but does not document it for the complete Generic Package
+project-token flow; tests must cover project authentication, package listing,
+package-file listing, and download.
+The helper authenticates `GET /api/v4/projects/:id` before every package
+operation, and deploy tokens cannot authenticate the GitLab public API, so a
+deploy token with only `read_package_registry` cannot run the complete helper.
+A publisher project access token needs `api` and the minimum package-push role;
+`api` is broad, so package protection must still deny deletion and settings
+authority.
 Disconnected outputs return to a protected online workspace. An explicitly
 authorized transfer operator may run the helper with a dedicated protected
 publisher credential, or protected CI may publish them. Neither path gives the
@@ -301,6 +320,7 @@ offline approver or signer network access.
 The audited helper allows only these methods and endpoint shapes:
 
 ```text
+GET  /api/v4/projects/:id
 GET  /api/v4/projects/:id/packages?...exact approved query keys...
 GET  /api/v4/projects/:id/packages/:package_id/package_files
 GET  /api/v4/projects/:id/packages/generic/:name/:version/:file
@@ -515,8 +535,11 @@ digest checks, and comparison with independent canonical state.
   digest-suffixed attempts, and concurrent `resource_group` publishers.
 - [ ] CI publishers use exact allowlists and endpoint restrictions; publisher
   roles cannot delete packages or change project/package settings.
-- [ ] External download is read-only; broad `api` Developer project tokens are
-  documented fallback only; no human directly publishes.
+- [ ] External download either qualifies a narrower truly read-only credential
+  against every helper endpoint or explicitly accepts the documented `api`
+  Developer token's write capability; role-based package protection cannot
+  separate same-role reader and publisher push access, and no human directly
+  publishes.
 - [ ] No token value reaches payloads, artifacts, logs, media, argv, URLs, Git,
   tickets, or chat; helper errors and redirects are tested for redaction.
 - [ ] Offline approval media ingress/egress and exact five-file signer command
