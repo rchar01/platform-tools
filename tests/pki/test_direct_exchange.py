@@ -341,6 +341,15 @@ def test_request_pull_reports_receipt_compatible_host_key_digest(
     )
 
     assert status == 0
+    expected = {
+        "request_id": REQUEST_ID,
+        "service": "registry-test",
+        "status": "stored",
+        "target": "target.test",
+        "transport_host_key_sha256": endpoint.transport_host_key_sha256,
+        "destination_dir": os.fspath(output_dir),
+    }
+    assert output.getvalue() == client.canonical_json(expected) + b"\n"
     result = json.loads(output.getvalue())
     assert result["transport_host_key_sha256"] == endpoint.transport_host_key_sha256
     assert set(result) == {
@@ -349,9 +358,61 @@ def test_request_pull_reports_receipt_compatible_host_key_digest(
         "status",
         "target",
         "transport_host_key_sha256",
+        "destination_dir",
     }
+    assert result["destination_dir"] == os.fspath(output_dir)
     assert set(path.name for path in output_dir.iterdir()) == set(client.REQUEST_NAMES)
     assert "tls" + ".key" not in set(path.name for path in output_dir.iterdir())
+
+
+def test_evidence_pull_reports_validated_destination_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    endpoint_path, endpoint = endpoint_fixture(tmp_path)
+    output_dir = tmp_path / "evidence-output"
+    files = {
+        "deployment": b"deployment\n",
+        "deployment.sig": b"deployment signature\n",
+        "validation-boundary": b"validation boundary\n",
+        "validation-result": b"validation result\n",
+        "validation-result.sig": b"validation result signature\n",
+    }
+    artifact_sha = "a" * 64
+    deployment_sha = "d" * 64
+    values = {
+        "request_id": REQUEST_ID,
+        "artifact_sha256": artifact_sha,
+        "deployment_sha256": deployment_sha,
+    }
+    frame = client.encode_frame(
+        "evidence", files, values, "registry-test", "target.test"
+    )
+    output = io.BytesIO()
+    monkeypatch.setattr(client, "load_endpoint", lambda _path: endpoint)
+    monkeypatch.setattr(client, "invoke", lambda *_args: frame)
+    monkeypatch.setattr(client.sys, "stdout", SimpleNamespace(buffer=output))
+
+    assert client.direct_exchange(
+        parsed(
+            "evidence-pull",
+            endpoint=os.fspath(endpoint_path),
+            request_id=REQUEST_ID,
+            artifact_sha256=artifact_sha,
+            deployment_sha256=deployment_sha,
+            output_dir=os.fspath(output_dir),
+        )
+    ) == 0
+
+    expected = {
+        **values,
+        "service": "registry-test",
+        "status": "stored",
+        "target": "target.test",
+        "destination_dir": os.fspath(output_dir),
+    }
+    assert output.getvalue() == client.canonical_json(expected) + b"\n"
+    assert json.loads(output.getvalue())["destination_dir"] == os.fspath(output_dir)
+    assert set(path.name for path in output_dir.iterdir()) == set(client.EVIDENCE_NAMES)
 
 
 def test_response_push_runs_leaf_operation_and_emits_canonical_result(

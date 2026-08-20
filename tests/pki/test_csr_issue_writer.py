@@ -955,6 +955,56 @@ exec "$REAL_OPENSSL" "$@"
         ).read_text().strip() == "1000"
 
 
+def test_python_writer_response_is_not_created_before_certificate(
+    csr_workspace: CsrWorkspace,
+    executable_directory: Path,
+) -> None:
+    real_openssl = executable("openssl")
+    fake = executable_directory / "openssl-created-epoch"
+    write_executable(
+        fake / "openssl",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == ca ]]; then
+  created=
+  while IFS='=' read -r name value; do
+    if [[ $name == created_epoch ]]; then created=$value; break; fi
+  done <"$PKI_TEST_DIR/state/csr/recovery-journal"
+  while (( $(date +%s) <= created )); do sleep 0.05; done
+fi
+exec "$REAL_OPENSSL" "$@"
+""",
+    )
+
+    result = _write(
+        csr_workspace,
+        env=environment(
+            csr_workspace.env,
+            PATH=f"{fake}{os.pathsep}{csr_workspace.env['PATH']}",
+            PKI_TEST_DIR=os.fspath(csr_workspace.pki),
+            REAL_OPENSSL=real_openssl,
+        ),
+    )
+
+    assert_result(result, 0)
+    candidate = dict(
+        line.split("=", 1)
+        for line in (
+            csr_workspace.pki
+            / f"state/csr/candidates/external/{REQUEST_ID}/candidate"
+        ).read_text(encoding="ascii").splitlines()
+    )
+    response = dict(
+        line.split("=", 1)
+        for line in (
+            csr_workspace.pki
+            / f"state/csr/responses/external/{REQUEST_ID}/response"
+        ).read_text(encoding="ascii").splitlines()
+    )
+    assert int(response["not_before_epoch"]) > int(candidate["created_epoch"])
+    assert response["created_epoch"] == response["not_before_epoch"]
+
+
 def test_python_writer_rejects_request_and_nonce_replay_retries(
     csr_workspace: CsrWorkspace,
 ) -> None:

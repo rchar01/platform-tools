@@ -704,13 +704,19 @@ def _run_direct_exchange(parsed: ParseResult) -> dict[str, object]:
         values = coordinates(parsed["request_id"])
         data = invoke(endpoint, "export-request", tuple(values.values()), None)
         files, service, target = decode_frame(data, "request", values)
-        status_value = publish_tree(canonical_path(parsed["output_dir"], "request output directory"), files, REQUEST_NAMES, "request output directory")
+        destination_dir = canonical_path(
+            parsed["output_dir"], "request output directory"
+        )
+        status_value = publish_tree(
+            destination_dir, files, REQUEST_NAMES, "request output directory"
+        )
         return {
             **values,
             "service": service,
             "status": status_value,
             "target": target,
             "transport_host_key_sha256": endpoint.transport_host_key_sha256,
+            "destination_dir": destination_dir,
         }
     if command == "evidence-pull":
         values = coordinates(
@@ -720,8 +726,19 @@ def _run_direct_exchange(parsed: ParseResult) -> dict[str, object]:
         )
         data = invoke(endpoint, "export-evidence", tuple(values.values()), None)
         files, service, target = decode_frame(data, "evidence", values)
-        status_value = publish_tree(canonical_path(parsed["output_dir"], "evidence output directory"), files, EVIDENCE_NAMES, "evidence output directory")
-        return {**values, "service": service, "status": status_value, "target": target}
+        destination_dir = canonical_path(
+            parsed["output_dir"], "evidence output directory"
+        )
+        status_value = publish_tree(
+            destination_dir, files, EVIDENCE_NAMES, "evidence output directory"
+        )
+        return {
+            **values,
+            "service": service,
+            "status": status_value,
+            "target": target,
+            "destination_dir": destination_dir,
+        }
     if command == "response-push":
         kind = "response"
         remote_command = "stage-response"

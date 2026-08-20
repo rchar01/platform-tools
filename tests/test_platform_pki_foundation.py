@@ -54,6 +54,7 @@ EXPECTED_MEMBERS = (
     "platform_pki/list_expiry.py",
     "platform_pki/locks.py",
     "platform_pki/offline_csr.py",
+    "platform_pki/offline_workspace.py",
     "platform_pki/operational.py",
     "platform_pki/parser.py",
     "platform_pki/paths.py",
@@ -273,6 +274,8 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
     arguments = MINIMAL_ARGUMENTS[route.unified_route]
     if route.unified_route == ("init",):
         arguments = (*arguments, "--namespace", "/")
+    elif route.unified_route == ("offline-workspace", "init"):
+        arguments = (*arguments, "--root", "/")
     result = _run(
         process_runner,
         clean_environment,
@@ -284,6 +287,11 @@ def test_every_frozen_unified_route_parses_then_fails_closed_without_state(
     assert result.stdout == ""
     if route.unified_route == ("init",):
         assert result.stderr == "[ERROR] Namespace must not be the filesystem root\n"
+    elif route.unified_route == ("offline-workspace", "init"):
+        assert result.stderr == (
+            "[ERROR] Offline workspace path is invalid: "
+            "Path must not be the filesystem root\n"
+        )
     elif route.unified_route == ("inventory-install",):
         assert result.stderr.startswith(
             "[ERROR] Private repository ancestor "

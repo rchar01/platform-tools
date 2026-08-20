@@ -4,6 +4,7 @@ COMMANDS = {
     "csr-trust-install": (),
     "csr-recover": (),
     "offline-csr": ("approve", "sign"),
+    "offline-workspace": ("init",),
     "certificate-export": ("publish", "resolve"),
     "csr-outcome": ("publish", "resolve"),
     "direct-exchange": (

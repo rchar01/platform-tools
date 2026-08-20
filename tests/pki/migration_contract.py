@@ -266,6 +266,13 @@ PKI_COMMAND_CONTRACTS = (
         ("test-pki-offline-csr",),
     ),
     CommandContract(
+        None,
+        "offline-workspace",
+        ("init",),
+        _locks(()),
+        ("test-pki-offline-workspace",),
+    ),
+    CommandContract(
         "platform-pki-certificate-export",
         "certificate-export",
         ("publish", "resolve"),
@@ -454,6 +461,11 @@ PKI_PARSER_ROUTES = (
         defaults=(("--issuer-safety-days", "1"),),
         allowed_values=(("--operation", ("issue", "migrate", "renew")),),
         validators=(("--request-id", "not_empty"), ("--input-dir", "not_empty"), ("--response-key", "not_empty"), ("--current-cert-file", "not_empty"), ("--intermediate-pass-file", "not_empty"), ("--issuer-safety-days", "days"), *_NAMESPACE_VALIDATORS),
+    ),
+    _route(
+        None, ("offline-workspace", "init"), positionals=("service",),
+        long_flags=("--root",), required_names=("service",),
+        validators=(("--root", "not_empty"),),
     ),
     _route(
         "platform-pki-certificate-export", ("certificate-export", "publish"),
@@ -796,6 +808,7 @@ PKI_DUPLICATE_OPTION_CONTRACTS = (
     DuplicateOptionContract(("csr-recover",), ("--transaction", "--response-key", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("offline-csr", "approve"), ("--operation", "--request-id", "--input-dir", "--approval-key", "--output-dir", "--current-cert-file", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("offline-csr", "sign"), ("--operation", "--request-id", "--input-dir", "--response-key", "--current-cert-file", "--intermediate-pass-file", "--issuer-safety-days", "--namespace", "--pki-dir", "--yes"), "src/platform_pki/parser.py", "parser_reject_duplicates"),
+    DuplicateOptionContract(("offline-workspace", "init"), ("--root",), "src/platform_pki/parser.py", "parser_reject_duplicates"),
     DuplicateOptionContract(("certificate-export", "publish"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("certificate-export", "resolve"), _CERTIFICATE_EXPORT_DUPLICATES, "bashly/platform-pki-certificate-export/src/initialize.sh"),
     DuplicateOptionContract(("csr-outcome", "publish"), _CSR_OUTCOME_PUBLISH_DUPLICATES, "src/platform_pki/parser.py", "parser_reject_duplicates"),
@@ -839,6 +852,7 @@ OUTPUT_STATUS_DEFERRED_ROUTES = frozenset(
         ("csr-recover",),
         ("offline-csr", "approve"),
         ("offline-csr", "sign"),
+        ("offline-workspace", "init"),
         ("certificate-export", "publish"),
         ("csr-outcome", "publish"),
         ("csr-outcome", "resolve"),

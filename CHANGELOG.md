@@ -7,6 +7,18 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added unified `platform-pki offline-workspace init` with XDG/HOME default and
+  explicit-root resolution, owner-only exact directory and metadata policy,
+  fail-closed reruns, safe partial completion, and fixed-order secret-free JSON.
+  The workspace is removable-media custody/staging only and never authoritative
+  signer replay, transaction, candidate, or recovery state. Reruns validate the
+  initializer-owned skeleton without enumerating workflow-owned descendants of
+  leaf payload roots. Roots must remain component-wise disjoint from the known
+  default authoritative PKI tree; explicit roots need no configuration-home
+  environment and report an unavailable authoritative default as JSON `null`.
+
 ## [3.0.1] - 2026-08-19
 
 ### Added

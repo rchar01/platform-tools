@@ -3834,7 +3834,9 @@ def _run_host_local_csr(
                             "not_after_epoch": str(not_after),
                             "candidate_state": "pending",
                             "response_principal": trust.response_principal,
-                            "created_epoch": control.values["created_epoch"],
+                            "created_epoch": str(
+                                max(int(control.values["created_epoch"]), not_before)
+                            ),
                         }
                     )
                     response_identity = _write_new_file(

@@ -50,6 +50,7 @@ MINIMAL_ARGUMENTS = {
         "response-key",
         "--yes",
     ),
+    ("offline-workspace", "init"): ("api",),
     ("certificate-export", "publish"): (
         "api",
         "--request-id",
@@ -219,7 +220,7 @@ def test_production_routes_exactly_match_source_backed_parser_inventory() -> Non
         contract.unified_route for contract in PKI_PARSER_ROUTES
     )
     assert set(MINIMAL_ARGUMENTS) == {spec.route for spec in ROUTES}
-    assert len(ROUTES) == len(ROUTE_SPECS) == 36
+    assert len(ROUTES) == len(ROUTE_SPECS) == 37
     for spec, contract in zip(ROUTES, PKI_PARSER_ROUTES, strict=True):
         assert tuple(positional.name for positional in spec.positionals) == contract.positionals
         assert tuple(option.name for option in spec.options) == contract.long_flags

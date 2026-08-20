@@ -47,6 +47,10 @@ def _handler(route: tuple[str, ...]):
         from .offline_csr import offline_csr
 
         return offline_csr
+    if route == ("offline-workspace", "init"):
+        from .offline_workspace import initialize_offline_workspace
+
+        return initialize_offline_workspace
     if route in (
         ("csr-candidate", "verify"),
         ("csr-candidate", "finalize"),

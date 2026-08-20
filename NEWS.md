@@ -4,6 +4,15 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+- Added `platform-pki offline-workspace init SERVICE [--root PATH]` to create an
+  exact owner-only removable-media custody and staging skeleton. It creates only
+  directories and fixed non-secret metadata, never signer keys, protocol state,
+  transactions, candidates, replay, recovery state, or symlinks. Reruns treat
+  leaf payload descendants as opaque workflow-owned content while validating
+  the fixed skeleton, and roots cannot overlap the known default authoritative
+  PKI tree. Explicit roots work without configuration-home environment and then
+  report the unavailable authoritative default as JSON `null`.
+
 ## v3.0.1 - 2026-08-19
 
 - `platform-pki inventory-install` now archives exact outgoing inventories in

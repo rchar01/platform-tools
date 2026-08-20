@@ -21,9 +21,10 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
 - [`platform-vm-env-collect.md`](./platform-vm-env-collect.md): How to use `platform-vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
 - [`platform-runtime-evidence.md`](./platform-runtime-evidence.md): How to collect and review secret-free PKI runtime and installation evidence without reading PKI state.
-- [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local secret namespace under `~/.config/platform-infrastructure/`.
+- [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local security-sensitive namespace under `~/.config/platform-infrastructure/`.
 - [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
 - [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
+- [`pki-offline-workspace.md`](./pki-offline-workspace.md): How to initialize an owner-only removable-media custody and staging workspace without creating signer state.
 - [`pki-direct-exchange.md`](./pki-direct-exchange.md): How to move exact public PKI packages through the pinned restricted target SSH endpoint.
 - [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md): Implemented GitLab 18.11.3 Generic Package exchange and its remaining production gates.
 - [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md): Pointer to the implemented cross-repository host-local registry PKI workflow and its signer-side references.
@@ -31,7 +32,7 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - [`proxmox-vm-cleanup.md`](./proxmox-vm-cleanup.md): How to safely stop and destroy exactly one Proxmox VM by VMID.
 - [`proxmox-vm-snapshot.md`](./proxmox-vm-snapshot.md): How to manage short-lived Proxmox VE 9 development snapshots safely.
 - [`proxmox-vm-snapshot-acceptance.md`](./proxmox-vm-snapshot-acceptance.md): How to run live acceptance against the isolated disposable VM environment.
-- [`handoffs/config-namespace-handoff.md`](./handoffs/config-namespace-handoff.md): Downstream ownership notes for the local secret namespace.
+- [`handoffs/config-namespace-handoff.md`](./handoffs/config-namespace-handoff.md): Downstream ownership notes for the local security-sensitive namespace.
 - [`handoffs/pki-host-local-csr-handoff.md`](./handoffs/pki-host-local-csr-handoff.md): Implemented host-local signer and downstream lifecycle contract.
 - [`handoffs/tofu-ansible-handoff.md`](./handoffs/tofu-ansible-handoff.md): Example handoff that separates OpenTofu infrastructure work from Ansible guest configuration.
 
@@ -43,9 +44,10 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 - Decide where real SSH configs live: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
 - Collect PKI runtime and installation evidence: use [`platform-runtime-evidence.md`](./platform-runtime-evidence.md).
-- Create the outside-Git local secret namespace: use [`platform-config-init.md`](./platform-config-init.md).
+- Create the outside-Git local security-sensitive namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
 - Approve and sign an exact removable-media CSR directory: use [`pki-openssl.md`](./pki-openssl.md#offline-csr-approval-and-signing).
+- Initialize removable-media custody and staging directories: use [`pki-offline-workspace.md`](./pki-offline-workspace.md).
 - Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).
 - Move exact packages through a restricted target endpoint: use [`pki-direct-exchange.md`](./pki-direct-exchange.md).
 - Publish or download exact packages through GitLab: use [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md).

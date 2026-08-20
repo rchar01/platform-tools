@@ -1035,6 +1035,12 @@ GitLab integration. Use the transport-neutral ownership and workspace contract
 in [Host-Local PKI CSR Handoff](handoffs/pki-host-local-csr-handoff.md), then
 select one reviewed workflow:
 
+- [Offline PKI Workspace](pki-offline-workspace.md) documents the owner-only
+  custody and staging skeleton, its disjointness from default authoritative
+  signer state, and opaque workflow ownership below leaf payload roots. It
+  contains no authoritative signer replay, transaction, candidate, or recovery
+  state.
+
 - [GitLab Generic Package Exchange for Host-Local PKI](pki-gitlab-package-exchange.md)
   defines the proposed production CI exchange through one dedicated private
   GitLab 18.11 project. GitLab remains untrusted transport and the offline

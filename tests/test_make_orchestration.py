@@ -25,6 +25,7 @@ EXPECTED_NON_ROLLOVER_TARGETS = {
     "test-proxmox-vm-cleanup",
     "test-proxmox-vm-snapshot",
     "test-pki-init",
+    "test-pki-offline-workspace",
     "test-pki-root-create",
     "test-pki-intermediate-create",
     "test-pki-service-issue",

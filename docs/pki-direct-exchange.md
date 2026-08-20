@@ -47,7 +47,11 @@ platform-pki direct-exchange outcome-push \
 ```
 
 Pull destinations are no-clobber-published owner-only directories and verified
-after every file is written.
+after every file is written. Successful `request-pull` and `evidence-pull`
+compact JSON output includes `destination_dir`, the canonical absolute
+destination directory validated by the command. Downstream commands should
+consume and record `destination_dir` rather than reconstructing the path from
+request or artifact coordinates.
 Push inputs must be owner-only directories containing exactly the fixed package
 allowlist. Coordinates, frame metadata, file sizes, remote results, endpoint
 paths, identity metadata, and the host-key pin fail closed on disagreement.

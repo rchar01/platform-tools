@@ -33,7 +33,7 @@ All shared platform helper tools live in this repository. The platform repositor
 | `platform-ssh-init` | Create purpose-specific SSH identities and optional SSH config blocks. |
 | `platform-vm-env-collect` | Collect VM environment facts for rebuild planning. |
 | `platform-runtime-evidence` | Collect secret-free PKI runtime and installation evidence from one reviewed environment. |
-| `platform-config-init` | Create the local outside-Git secret namespace under `~/.config/platform-infrastructure/`. |
+| `platform-config-init` | Create the local outside-Git security-sensitive namespace under `~/.config/platform-infrastructure/`. |
 | `platform-proxmox-token-init` | Bootstrap the Proxmox API user/token expected by platform OpenTofu runs. |
 | `platform-proxmox-vm-cleanup` | Stop and destroy exactly one Proxmox VM by VMID with confirmation and optional SSH execution. |
 | `platform-proxmox-vm-snapshot` | Create, list, roll back, and delete short-lived Proxmox VE 9 development snapshots. |
@@ -414,7 +414,7 @@ intended as filesystem readiness evidence. Collection does not certify a role;
 review the fixed-order schema-1 record and its `runtime_status` as described in
 [`docs/platform-runtime-evidence.md`](docs/platform-runtime-evidence.md).
 
-Create the outside-Git local secret namespace with `infra/`, `config/`, and `pki/`:
+Create the outside-Git local security-sensitive namespace with `infra/`, `config/`, and `pki/`:
 
 ```bash
 platform-config-init
@@ -548,6 +548,29 @@ its key role and phase. Identical requester and approver keys retain the
 protocol's 24-hour delay. Signing does not export a response or act on a target,
 and any retained signing transaction recovers only through
 `platform-pki csr-recover`.
+
+Create the owner-only custody and staging skeleton before moving reviewed
+offline packages:
+
+```bash
+platform-pki offline-workspace init platform-example
+platform-pki offline-workspace init platform-example \
+  --root /absolute/offline/root
+```
+
+The default root is
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-offline`; each workspace is
+`<root>/<service>`. The initializer creates only the documented media and work
+directories plus a non-secret mode-`0600` README. It creates no keys,
+transactions, protocol files, or symlinks. Authoritative signer state remains
+under the default `platform-infrastructure/pki` directory or the explicit
+namespace/PKI directory used by signer commands. The workspace root must be
+disjoint from the known default authoritative PKI tree. Reruns validate only
+the fixed skeleton and README; descendants of leaf payload roots are
+workflow-owned opaque content and are not enumerated or authenticated. An
+explicit `--root` works without `HOME` or `XDG_CONFIG_HOME`, reporting
+`authoritative_pki_default` as JSON `null`. See
+[`docs/pki-offline-workspace.md`](docs/pki-offline-workspace.md).
 
 Publish or resolve one exact certificate-only pending response:
 
@@ -755,16 +778,17 @@ sudo ./bin/platform-vm-env-collect
 | `docs/ssh-identity-helper.md` | SSH helper usage with CLI flags or config files, private config layout, and CI/CD expectations. |
 | `docs/platform-vm-env-collect.md` | VM environment collector usage, output structure, and safety notes. |
 | `docs/platform-runtime-evidence.md` | Secret-free PKI runtime, artifact, prerequisite, capability, and exact legacy-alias evidence collection. |
-| `docs/platform-config-init.md` | Local outside-Git secret namespace initialization for platform secrets. |
+| `docs/platform-config-init.md` | Local outside-Git security-sensitive namespace initialization. |
 | `docs/bastion-policy.md` | Kubernetes bastion access-policy validation and rendering flow. |
 | `docs/pki-openssl.md` | OpenSSL PKI helper usage, state layout, and safety model. |
+| `docs/pki-offline-workspace.md` | Owner-only removable-media custody and staging workspace initialization. |
 | `docs/pki-direct-exchange.md` | Pinned restricted-SSH operator transfer commands for host-local PKI packages. |
 | `docs/pki-gitlab-package-exchange.md` | Implemented GitLab 18.11.3 Generic Package exchange contract and remaining production gates. |
 | `docs/pki-host-local-csr-development-runbook.md` | Pointer to the implemented cross-repository host-local registry PKI workflow and signer-side references. |
 | `docs/proxmox-token-init.md` | Proxmox API user/token bootstrap helper and manual `pveum` reference. |
 | `docs/proxmox-vm-cleanup.md` | Safe single-VM Proxmox cleanup helper usage and safety model. |
 | `docs/proxmox-vm-snapshot.md` | Proxmox VE 9 development snapshot workflows, safety model, and environment-tag gate. |
-| `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local secret namespace. |
+| `docs/handoffs/config-namespace-handoff.md` | Downstream ownership notes for the local security-sensitive namespace. |
 | `docs/handoffs/pki-host-local-csr-handoff.md` | Implemented signer contract, transport-neutral controller workspace, and platform-config lifecycle contract for host-local leaf keys. |
 | `docs/handoffs/tofu-ansible-handoff.md` | Example OpenTofu/Ansible handoff from a collected VM report. |
 | `assets/brand/` | Project brand assets for release metadata and forge profiles. |

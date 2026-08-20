@@ -37,6 +37,7 @@ _CSR_INPUT_OPTIONS = (
 _OPTION_METAVARS = {
     "--namespace": "PATH",
     "--pki-dir": "PATH",
+    "--root": "PATH",
     "--private-repo": "PATH",
     "--transaction": "ID",
     "--response-key": "PATH",
@@ -412,6 +413,13 @@ ROUTES = (
             *_NS,
             "--yes",
         ),
+    ),
+    _route(
+        ("offline-workspace", "init"),
+        ("--root",),
+        positionals=_service(),
+        validators=(("--root", "not_empty"),),
+        reject_duplicates=("--root",),
     ),
     _route(
         ("certificate-export", "publish"),
@@ -1095,6 +1103,12 @@ _ROUTE_FOOTERS: dict[tuple[str, ...], str] = {
         "Authenticates an exact five-file approval snapshot and delegates every "
         "signing mutation to the host-local writer. Recovery remains exclusively "
         "through platform-pki csr-recover."
+    ),
+    ("offline-workspace", "init"): (
+        "Creates only an owner-only custody and staging directory skeleton. "
+        "The root must be disjoint from the known default authoritative PKI tree. "
+        "Reruns validate the skeleton without inspecting leaf payload contents; "
+        "signer replay, transaction, candidate, and recovery state remains outside."
     ),
     ("ca-passphrase-verify",): (
         "Passphrases are supplied to OpenSSL through inherited file descriptors "
