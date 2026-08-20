@@ -819,7 +819,7 @@ parse_requirements() {
 }
 
 initialize() {
-  declare -g version="platform-vm-env-collect 3.0.1"
+  declare -g version="platform-vm-env-collect 3.0.2"
   set -Eeuo pipefail
 
   export INCLUDE_SENSITIVE="${INCLUDE_SENSITIVE:-0}"

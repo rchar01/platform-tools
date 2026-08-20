@@ -4,6 +4,8 @@ This file gives a short, release-oriented view of what changed between versions.
 
 ## Unreleased
 
+## v3.0.2 - 2026-08-20
+
 - Added `platform-pki offline-workspace init SERVICE [--root PATH]` to create an
   exact owner-only removable-media custody and staging skeleton. It creates only
   directories and fixed non-secret metadata, never signer keys, protocol state,
@@ -12,6 +14,13 @@ This file gives a short, release-oriented view of what changed between versions.
   the fixed skeleton, and roots cannot overlap the known default authoritative
   PKI tree. Explicit roots work without configuration-home environment and then
   report the unavailable authoritative default as JSON `null`.
+- Direct request and evidence pulls now report their exact destination directory
+  in fixed-order JSON so orchestration can consume materialized packages without
+  reconstructing paths.
+- Host-local response creation timestamps now remain within certificate validity
+  while preserving the protocol's bounded clock-skew acceptance.
+- `platform-config-init` documentation now distinguishes desired private
+  configuration from secrets and machine-specific security-sensitive records.
 
 ## v3.0.1 - 2026-08-19
 

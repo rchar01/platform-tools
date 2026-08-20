@@ -7,6 +7,8 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-08-20
+
 ### Added
 
 - Added unified `platform-pki offline-workspace init` with XDG/HOME default and
@@ -18,6 +20,18 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaf payload roots. Roots must remain component-wise disjoint from the known
   default authoritative PKI tree; explicit roots need no configuration-home
   environment and report an unavailable authoritative default as JSON `null`.
+
+### Changed
+
+- Added exact `destination_dir` fields to successful direct request and evidence
+  pull results so callers consume materialized package coordinates directly.
+- Clarified `platform-config-init` namespace ownership across private desired
+  configuration, outside-Git secrets, and machine-specific trusted records.
+
+### Fixed
+
+- Constrained host-local response `created_epoch` values to certificate validity
+  while retaining bounded target-side clock-skew compatibility.
 
 ## [3.0.1] - 2026-08-19
 
