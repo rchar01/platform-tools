@@ -2,7 +2,7 @@
 
 ## Scope
 
-`platform-tools` owns only the shared outside-Git secret namespace root:
+`platform-tools` owns only the shared outside-Git security-sensitive namespace root:
 
 ```text
 ~/.config/platform-infrastructure/

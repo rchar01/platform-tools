@@ -46,15 +46,15 @@ content_readme() {
   cat <<'EOF'
 # Platform Infrastructure Local Config
 
-This directory stores local platform secret material that must stay outside Git.
+This directory stores local platform secrets and machine-specific security-sensitive records that must stay outside Git.
 
 Shared namespaces:
 
-- `infra/`: OpenTofu and infrastructure bootstrap secrets, for example tokens.
-- `config/`: Ansible and service secrets, for example certs, keys, kubeconfigs, and passwords.
+- `infra/`: OpenTofu and infrastructure bootstrap material, for example tokens and reviewed local CA files.
+- `config/`: Ansible and service inputs, for example keys, kubeconfigs, passwords, and pinned endpoint records.
 - `pki/`: CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers.
 
-This initializer creates only the shared root namespaces. Each downstream platform project or helper owns its concrete secret subdirectories and files.
+This initializer creates only the shared root namespaces and this README. Each downstream platform project, helper, or explicit workflow owns its concrete subdirectories and files.
 
 Common environment variables:
 
@@ -73,6 +73,6 @@ Store the Proxmox token as one raw line in `infra/proxmox.token`. Do not export 
 
 Do not commit real values from this directory into any `platform-*` repository.
 
-Private but non-secret operator config belongs in private Git, for example `platform-private`.
+Desired private non-secret configuration belongs in private Git, for example `platform-private`. Keep only secrets and machine-specific security-sensitive records here.
 EOF
 }

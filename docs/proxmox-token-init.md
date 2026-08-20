@@ -158,7 +158,7 @@ tofu@pve!platform=TOKEN_SECRET
 
 Without `--write-token-file`, copy the generated token line into that file manually.
 
-Use `platform-config-init` to create the local outside-Git secret namespace before running the token helper:
+Use `platform-config-init` to create the local outside-Git security-sensitive namespace before running the token helper:
 
 ```bash
 platform-config-init

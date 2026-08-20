@@ -1,6 +1,7 @@
 # Platform Config Init
 
-`platform-config-init` creates the shared local secret namespace outside Git.
+`platform-config-init` creates the shared local security-sensitive namespace
+outside Git.
 
 The default location is:
 
@@ -8,11 +9,19 @@ The default location is:
 ~/.config/platform-infrastructure/
 ```
 
-Use this directory for local secret material needed by `platform-*` repositories, such as Proxmox API tokens, Kubernetes admin kubeconfigs, PKI CA material, service TLS private keys, runner tokens, and service passwords.
+Use this directory for local secret material and machine-specific trusted records
+needed by `platform-*` repositories, such as Proxmox API tokens, Kubernetes admin
+kubeconfigs, PKI CA material, service TLS private keys, runner tokens, reviewed
+CA files, and pinned exchange endpoint records.
 
-Only secret material that should stay outside every Git repository belongs here. Private but non-secret configuration still belongs in the relevant private repository, for example `platform-private`.
+Desired environment configuration still belongs in the relevant private
+repository, for example `platform-private`. Keep generated secrets and local
+security-sensitive records here when they are machine-specific, helper-managed,
+or intentionally outside every Git repository.
 
-The initializer creates only the major namespaces. Concrete subdirectories and files are owned by the consuming project or helper.
+The initializer creates only the major namespaces and its README. Concrete
+subdirectories and files are owned by the consuming project, helper, or explicit
+workflow.
 
 ## Install
 
@@ -26,7 +35,7 @@ make install
 
 ## Usage
 
-Create the default secret namespace:
+Create the default security-sensitive namespace:
 
 ```bash
 platform-config-init
@@ -69,7 +78,7 @@ Existing `README.md` is not overwritten and is chmodded to `600`. Existing names
 
 | Path | Owner |
 | --- | --- |
-| `~/.config/platform-infrastructure/` | Shared outside-Git local secret root created by `platform-tools`. |
+| `~/.config/platform-infrastructure/` | Shared outside-Git local security-sensitive root created by `platform-tools`. |
 | `infra/` | Infrastructure bootstrap secrets, especially Proxmox/OpenTofu token material used by `platform-infra` and `platform-proxmox-token-init`. |
 | `config/` | Ansible and service secrets consumed by `platform-config`. |
 | `pki/` | CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers. |
@@ -172,7 +181,9 @@ Do not commit real values from `~/.config/platform-infrastructure/` into any rep
 
 Do not copy these local token files, kubeconfigs, private keys, service passwords, or private TLS keys into `platform-tools`, `platform-infra`, `platform-config`, or other `platform-*` repositories.
 
-Keep real variable values in this outside-Git config directory or in a private secret store.
+Keep secret variable values in this outside-Git namespace or in a private secret
+store. Keep desired non-secret environment values in `platform-private`; only
+machine-specific security-sensitive trust records belong here alongside secrets.
 
 ## Downstream Repository Pattern
 
