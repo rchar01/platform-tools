@@ -160,6 +160,66 @@ Do not use one shared SSH key for every platform purpose. Prefer purpose-specifi
 ~/.ssh/platform-config-ansible_ed25519
 ```
 
+### PKI Operator Keys
+
+For the one-workstation PKI layout, keep stable operator signing keys outside
+both the authoritative PKI tree and generation-specific offline workspace:
+
+```bash
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+TRUST_DOMAIN=registry-dev
+PKI_KEY_ROOT="$CONFIG_HOME/platform-pki-keys"
+PKI_KEY_DIR="$PKI_KEY_ROOT/$TRUST_DOMAIN"
+APPROVAL_KEY="$PKI_KEY_DIR/offline-approver"
+RESPONSE_KEY="$PKI_KEY_DIR/offline-response"
+
+install -d -m 0700 -- "$PKI_KEY_ROOT" "$PKI_KEY_DIR"
+
+platform-ssh-init \
+  --key-path "$APPROVAL_KEY" \
+  --comment "$TRUST_DOMAIN offline approver"
+
+platform-ssh-init \
+  --key-path "$RESPONSE_KEY" \
+  --comment "$TRUST_DOMAIN offline response"
+```
+
+Invoke `platform-ssh-init` once for each key as shown. Do not use
+`--empty-passphrase` for these signing identities. The key root and
+service/trust-domain directory are mode `0700`, each private key is mode `0600`,
+and each `.pub` file is mode `0644`. The explicit `install` establishes both
+directory modes before `platform-ssh-init` creates each selected keypair.
+
+The stable trust domain is `registry-dev`, even when an exact protocol service
+and offline workspace is named `registry-dev-01`. Signing commands always take
+the exact private path through `--approval-key`, `--response-key`, or
+`--outcome-key`; there is no implicit key selection or trust enrollment. Review
+the public keys into private trust policy and install that public trust with the
+separate `platform-pki csr-trust-install` command.
+
+These keys are external to `platform-pki backup`. Include the complete
+`$PKI_KEY_DIR` tree in a separate encrypted operator-key backup after initial
+creation and after every rotation. Keep the backup recovery identity or
+passphrase separate from the workstation, key tree, and authoritative PKI
+backup. Test an owner-only restore and compare both restored public-key
+fingerprints with the reviewed allowed-signer records before depending on the
+backup.
+
+If only a `.pub` file is lost, rerun `platform-ssh-init` with the existing exact
+private-key path. It derives and safely publishes the missing public key without
+creating a new private identity. If a private key is lost, restore and verify
+the original key from the encrypted operator-key backup. A public key cannot
+reconstruct its private key.
+
+When no recovery copy exists, do not overwrite a surviving public key, manually
+copy replacement trust to a target, or continue a pending request with a new
+identity. Generate the replacement at a fresh explicit path and follow the
+cross-repository [operator-key loss and replacement procedure](https://codeberg.org/rch/platform-config/src/branch/main/docs/pki-local-layout.md#operator-key-loss-and-replacement).
+
+A one-workstation layout keeps role and signature boundaries but supplies no air
+gap or independent machine; one operator using both keys is not independent-human
+approval.
+
 Existing current-user-owned regular private keys are reused, but their mode is corrected to `600`. Current-user-owned regular public key files are corrected to `644`. Private and public key symlinks, including dangling links, and nonregular key paths are refused. Existing key-directory components are checked before creation for links, unexpected types, untrusted ownership, and unsafe writable permissions. Relative key paths remain supported from a safely owned current directory. A missing public key is derived into a private temporary file beside the key and published without replacing a concurrently created path.
 
 All argument and action prerequisites are validated before key generation. Host, user, and alias values are restricted to single safe SSH/config tokens; key paths and comments cannot contain control characters. Paths containing spaces remain supported and are quoted in generated SSH config blocks. In particular, `--test` requires a host, and `--write-config` requires both a host and alias and refuses an alias already present in `~/.ssh/config`.

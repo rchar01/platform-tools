@@ -420,6 +420,14 @@ Create the outside-Git local security-sensitive namespace with `infra/`, `config
 platform-config-init
 ```
 
+The authoritative PKI default is
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/pki`. The initializer
+creates only `infra/`, `config/`, `pki/`, and its README. Workflow-owned
+`pki-exchange/`, external `platform-pki-offline/` and `platform-pki-keys/`
+roots, and quarantine paths are not created by this command. Keep `pki/` for
+current authoritative state and quarantine reviewed retired or suspect material
+in a separate owner-only path outside it.
+
 Bootstrap the Proxmox API token identity over SSH:
 
 ```bash
@@ -539,8 +547,10 @@ authenticates an exact three-file request directory and atomically publishes an
 exact protected five-file approval directory. `platform-pki offline-csr sign`
 reopens that exact directory, presents the authoritative signer precommit
 review, and delegates issue, migration, or renewal to the existing host-local
-writer. Both commands require explicit service, operation, and request ID and an
-exact TTY confirmation unless `--yes` is supplied. The same human may operate
+writer. Both commands require explicit service, operation, and request ID and a
+default-deny TTY `[y/N]` confirmation unless `--yes` is supplied. The prompt
+shows the exact service, request ID, and operation before accepting `y` or
+`yes`. The same human may operate
 the distinct approval and CA roles, but this is key separation, not independent
 human approval. Protected keys may prompt more than once because trust, signing,
 and race-safe key rechecks are separate OpenSSH operations; each prompt names
@@ -553,24 +563,57 @@ Create the owner-only custody and staging skeleton before moving reviewed
 offline packages:
 
 ```bash
-platform-pki offline-workspace init platform-example
-platform-pki offline-workspace init platform-example \
-  --root /absolute/offline/root
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+PROTOCOL_SERVICE=registry-dev-01
+TRUST_DOMAIN=registry-dev
+OFFLINE_ROOT="$CONFIG_HOME/platform-pki-offline"
+OFFLINE_WORKSPACE="$OFFLINE_ROOT/$PROTOCOL_SERVICE"
+PKI_KEY_ROOT="$CONFIG_HOME/platform-pki-keys"
+PKI_KEY_DIR="$PKI_KEY_ROOT/$TRUST_DOMAIN"
+APPROVAL_KEY="$PKI_KEY_DIR/offline-approver"
+RESPONSE_KEY="$PKI_KEY_DIR/offline-response"
+
+platform-pki offline-workspace init "$PROTOCOL_SERVICE"
 ```
 
 The default root is
 `${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-offline`; each workspace is
-`<root>/<service>`. The initializer creates only the documented media and work
-directories plus a non-secret mode-`0600` README. It creates no keys,
-transactions, protocol files, or symlinks. Authoritative signer state remains
-under the default `platform-infrastructure/pki` directory or the explicit
-namespace/PKI directory used by signer commands. The workspace root must be
-disjoint from the known default authoritative PKI tree. Reruns validate only
-the fixed skeleton and README; descendants of leaf payload roots are
-workflow-owned opaque content and are not enumerated or authenticated. An
-explicit `--root` works without `HOME` or `XDG_CONFIG_HOME`, reporting
-`authoritative_pki_default` as JSON `null`. See
+`<root>/<exact-protocol-service>`. Here `registry-dev-01` is the exact protocol
+service and workspace, while `registry-dev` is the stable trust domain for the
+approval and response keys. The initializer creates only the documented media
+and work directories plus a non-secret mode-`0600` README. It creates no keys,
+transactions, protocol files, trust enrollment, or symlinks. Authoritative
+signer state remains under the default `platform-infrastructure/pki` directory
+or the explicit namespace/PKI directory used by signer commands. The workspace
+root must be disjoint from the known default authoritative PKI tree. Reruns
+validate only the fixed skeleton and README; descendants of leaf payload roots
+are workflow-owned opaque content and are not enumerated or authenticated. An
+explicit `--root` is a supported non-default override and works without `HOME`
+or `XDG_CONFIG_HOME`, reporting `authoritative_pki_default` as JSON `null`. See
 [`docs/pki-offline-workspace.md`](docs/pki-offline-workspace.md).
+
+Generate the two stable operator keys explicitly and do not use
+`--empty-passphrase`:
+
+```bash
+install -d -m 0700 -- "$PKI_KEY_ROOT" "$PKI_KEY_DIR"
+platform-ssh-init --key-path "$APPROVAL_KEY" \
+  --comment "$TRUST_DOMAIN offline approver"
+platform-ssh-init --key-path "$RESPONSE_KEY" \
+  --comment "$TRUST_DOMAIN offline response"
+```
+
+The key root and trust-domain directory are mode `0700`, private keys mode
+`0600`, and public keys mode `0644`. These external keys are not included in
+`platform-pki backup` and need a separate encrypted recovery process. Approval,
+signing, recovery, and outcome commands continue to require explicit key flags;
+there is no implicit key selection or trust enrollment. Install reviewed public
+trust separately with `platform-pki csr-trust-install`.
+
+On one workstation, logical path, signature, digest, and role boundaries remain
+in force, but there is no air gap or independent machine. A workstation
+compromise therefore has a larger blast radius, and one operator using separate
+keys must not be described as independent-human approval.
 
 Publish or resolve one exact certificate-only pending response:
 
@@ -802,6 +845,11 @@ Use `~/.config/platform-infrastructure/` for local secret material. Private but 
 Collected VM reports and PKI exports can contain sensitive environment details even when they do not contain obvious passwords. Review generated files before sharing them.
 
 PKI passphrase files are plaintext secrets. Keep them outside Git, restrict them to mode `600` or stricter, use a first-line passphrase of at least 16 characters with non-whitespace content, and prefer temporary secret-manager mounts over long-lived files. The parser minimum is not a production entropy recommendation: use separate secret-manager-generated root and intermediate credentials with independent recovery copies, and keep backup recipients separate from both CA passphrases and archived data.
+
+Stable PKI operator signing keys under
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-keys/<trust-domain>/` are also
+outside Git and outside the authoritative PKI backup boundary. Back them up
+through a separate encrypted recovery process.
 
 PKI Ansible exports contain service private keys. The controller service key and
 its Ansible-export copy are compatibility inputs for the current deployment

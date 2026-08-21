@@ -5,7 +5,32 @@ All notable changes to `platform-tools` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.3] - 2026-08-21
+
+### Changed
+
+- Replaced full-phrase TTY confirmation for `offline-csr approve|sign` and
+  `csr-candidate finalize|abandon` with a shared default-deny `[y/N]` prompt
+  that displays the exact service, request ID, and operation when applicable.
+  `--yes` continues to skip only the prompt.
+- Documented the canonical one-workstation PKI layout with authoritative,
+  exact-service offline-workspace, and stable trust-domain key paths;
+  explicit signing key flags and separate trust enrollment; key permissions and
+  encrypted recovery boundaries; and the larger non-air-gapped compromise
+  radius without independent-human approval. Expanded the generated
+  `platform-config-init` README source to describe workflow-owned exchange,
+  external offline/key, current-state, and quarantine boundaries without
+  creating additional directories.
+- Documented separate encrypted operator-key backups, public-key derivation,
+  original private-key restoration, and fail-closed irrecoverable replacement.
+  Updated custody examples to use node-specific `registry-dev-01` while keeping
+  approval and response keys in the stable `registry-dev` trust domain.
+
+### Fixed
+
+- Kept the retained signing journal, response, and candidate on the same
+  certificate-valid `created_epoch` when certificate `notBefore` advances past
+  the journal's original timestamp.
 
 ## [3.0.2] - 2026-08-20
 

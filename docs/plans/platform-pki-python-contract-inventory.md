@@ -122,13 +122,13 @@ also require that path to remain absent.
 | `inventory-install` | none | private repo `../platform-private` | `test_inventory_install.py`, inventory contract modules |
 | `csr-trust-install` | none | private repo `../platform-private` | `test_csr_trust_install.py` |
 | `csr-recover` | recovery-dependent transaction/key inputs | `--yes`; dispatches signing or finalization recovery | CSR signing and candidate modules |
-| `offline-csr approve` | service, operation, request ID, input directory, approval key, output directory | exact confirmation or `--yes`; renewal also requires current certificate | `test_offline_csr.py` |
-| `offline-csr sign` | service, operation, request ID, input directory, response key | exact confirmation or `--yes`; delegates to the host-local writer | `test_offline_csr.py` |
+| `offline-csr approve` | service, operation, request ID, input directory, approval key, output directory | default-deny TTY `[y/N]` confirmation or `--yes`; renewal also requires current certificate | `test_offline_csr.py` |
+| `offline-csr sign` | service, operation, request ID, input directory, response key | default-deny TTY `[y/N]` confirmation or `--yes`; delegates to the host-local writer | `test_offline_csr.py` |
 | `certificate-export publish` | service, request ID | immutable six-file artifact publication | `test_certificate_export.py` |
 | `certificate-export resolve` | service, request ID, manifest digest | format `path`; exact digest-pinned resolution | `test_certificate_export.py` |
 | `csr-candidate verify` | service, request ID | format `text` | `test_csr_candidate.py` |
-| `csr-candidate finalize` | service, request ID, artifact digest, evidence and signature | optional `--yes` | `test_csr_candidate.py` |
-| `csr-candidate abandon` | service, request ID, artifact digest, evidence and signature | optional `--yes` | `test_csr_candidate.py` |
+| `csr-candidate finalize` | service, request ID, artifact digest, evidence and signature | default-deny TTY `[y/N]` confirmation or `--yes` | `test_csr_candidate.py` |
+| `csr-candidate abandon` | service, request ID, artifact digest, evidence and signature | default-deny TTY `[y/N]` confirmation or `--yes` | `test_csr_candidate.py` |
 | `root-create` | name, organization, country | 3650 days; encrypted key unless explicitly allowed | `test_root_create.py` and shared pass/legacy tests |
 | `intermediate-create` | name, organization, country | 1825 days; one-day issuer margin | `test_intermediate_create.py` and shared pass/legacy tests |
 | `service-issue` | service | inventory days, environment days, then 397 | `test_service_issue.py`, `test_csr_signing.py` |

@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Literal, NoReturn
 
+from .confirmation import confirm_action
 from .csr_history import (
     CSR_ACTIVE_FIELDS,
     CSR_DECISION_FIELDS,
@@ -895,17 +896,13 @@ def csr_candidate(arguments: ParseResult) -> int:
     for program in ("openssl", "ssh-keygen"):
         require_program(program, environment)
     action = arguments.spec.route[1]
-    if action != "verify" and "--yes" not in arguments.provided:
-        if not sys.stdin.isatty():
-            _die(f"CSR candidate {action} requires a TTY or --yes")
-        print(
-            f"Type {action} {service_name} {request_id} to continue: ",
-            file=sys.stderr,
-            end="",
-            flush=True,
+    if action != "verify":
+        confirm_action(
+            action,
+            service_name,
+            request_id,
+            yes="--yes" in arguments.provided,
         )
-        if sys.stdin.readline().rstrip("\n") != f"{action} {service_name} {request_id}":
-            _die(f"CSR candidate {action} confirmation did not match")
 
     paths = resolve_paths(arguments.values, environment)
     require_pki_directory(paths.pki_dir)

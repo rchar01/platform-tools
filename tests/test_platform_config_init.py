@@ -72,9 +72,17 @@ def test_custom_namespace_is_created_with_private_modes(
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     readme = destination / "README.md"
     assert stat.S_IMODE(readme.stat().st_mode) == 0o600
-    assert "# Platform Infrastructure Local Config" in readme.read_text(
-        encoding="utf-8"
-    )
+    readme_text = readme.read_text(encoding="utf-8")
+    assert "# Platform Infrastructure Local Config" in readme_text
+    assert "creates only `infra/`, `config/`, `pki/`" in readme_text
+    assert "`pki-exchange/`: workflow-owned" in readme_text
+    assert "platform-pki-offline/<exact-protocol-service>" in readme_text
+    assert "platform-pki-keys/<trust-domain>" in readme_text
+    assert "external to authoritative PKI backups" in readme_text
+    assert "Quarantine retired, suspect, or unmanaged material" in readme_text
+    assert not (destination / "pki-exchange").exists()
+    assert not (destination.parent / "platform-pki-offline").exists()
+    assert not (destination.parent / "platform-pki-keys").exists()
 
 
 def test_existing_namespace_is_secured_without_overwriting_files(

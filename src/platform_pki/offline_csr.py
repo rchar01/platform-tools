@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import NoReturn
 
+from .confirmation import confirm_action
 from .csr_history import CsrHistoryAuthentication, CsrHistoryError, authenticate_active_predecessor
 from .csr_protocol import (
     CsrApproval,
@@ -571,17 +572,6 @@ def _recheck_preflight(
     context.state_recheck()
 
 
-def _confirm(expected: str, yes: bool) -> None:
-    if yes:
-        return
-    if not sys.stdin.isatty():
-        _die("Interactive confirmation requires a TTY; use --yes only after review")
-    print(f"Confirmation required: type '{expected}'", file=sys.stderr)
-    sys.stderr.flush()
-    if sys.stdin.readline().rstrip("\n") != expected:
-        _die("Confirmation did not match")
-
-
 def _approval_summary(context: _ApprovalPreflight) -> None:
     record = context.request.record
     print("Authenticated offline CSR approval review:", file=sys.stderr)
@@ -720,9 +710,12 @@ def _approve(arguments: ParseResult, environment: Mapping[str, str]) -> int:
                     environment,
                 )
                 _approval_summary(context)
-                _confirm(
-                    f"approve {service} {request_id}",
-                    "--yes" in arguments.provided,
+                confirm_action(
+                    "approve",
+                    service,
+                    request_id,
+                    operation=operation,
+                    yes="--yes" in arguments.provided,
                 )
                 existing.recheck("Existing offline CSR approval")
                 _json(
@@ -763,9 +756,12 @@ def _approve(arguments: ParseResult, environment: Mapping[str, str]) -> int:
                     creating=True,
                 )
                 _approval_summary(context)
-                _confirm(
-                    f"approve {service} {request_id}",
-                    "--yes" in arguments.provided,
+                confirm_action(
+                    "approve",
+                    service,
+                    request_id,
+                    operation=operation,
+                    yes="--yes" in arguments.provided,
                 )
                 created = int(datetime.datetime.now(datetime.UTC).timestamp())
                 if (
@@ -1037,9 +1033,12 @@ def _sign(arguments: ParseResult, environment: Mapping[str, str]) -> int:
                 "  warning=request ID and nonce will be permanently consumed",
                 file=sys.stderr,
             )
-            _confirm(
-                f"sign {operation} {service} {request_id}",
-                "--yes" in arguments.provided,
+            confirm_action(
+                "sign",
+                service,
+                request_id,
+                operation=operation,
+                yes="--yes" in arguments.provided,
             )
             source.recheck("Offline CSR approved source")
             stage_snapshot.recheck("Offline CSR protected signing stage")

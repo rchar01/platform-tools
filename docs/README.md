@@ -18,13 +18,13 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 
 ## Docs In This Tree
 
-- [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, downstream repository patterns, private config storage, and CI/CD expectations.
+- [`ssh-identity-helper.md`](./ssh-identity-helper.md): How to use `platform-ssh-init` with CLI flags or config files, including stable protected PKI operator keys, downstream repository patterns, private config storage, and CI/CD expectations.
 - [`platform-vm-env-collect.md`](./platform-vm-env-collect.md): How to use `platform-vm-env-collect`, inspect generated archives, and avoid committing collected VM data.
 - [`platform-runtime-evidence.md`](./platform-runtime-evidence.md): How to collect and review secret-free PKI runtime and installation evidence without reading PKI state.
-- [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local security-sensitive namespace under `~/.config/platform-infrastructure/`.
+- [`platform-config-init.md`](./platform-config-init.md): How to create the outside-Git local security-sensitive namespace and distinguish its current PKI state from workflow-owned and external PKI roots.
 - [`bastion-policy.md`](./bastion-policy.md): How to validate and render Kubernetes bastion access-policy documents.
-- [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers and keep generated PKI state outside Git.
-- [`pki-offline-workspace.md`](./pki-offline-workspace.md): How to initialize an owner-only removable-media custody and staging workspace without creating signer state.
+- [`pki-openssl.md`](./pki-openssl.md): How to use the OpenSSL PKI helpers, apply the canonical one-workstation path and key conventions, and keep generated PKI state outside Git.
+- [`pki-offline-workspace.md`](./pki-offline-workspace.md): How to initialize a generation-specific owner-only custody and staging workspace without creating signer state or keys.
 - [`pki-direct-exchange.md`](./pki-direct-exchange.md): How to move exact public PKI packages through the pinned restricted target SSH endpoint.
 - [`pki-gitlab-package-exchange.md`](./pki-gitlab-package-exchange.md): Implemented GitLab 18.11.3 Generic Package exchange and its remaining production gates.
 - [`pki-host-local-csr-development-runbook.md`](./pki-host-local-csr-development-runbook.md): Pointer to the implemented cross-repository host-local registry PKI workflow and its signer-side references.
@@ -40,12 +40,14 @@ cleanup list in the [upgrade section](../README.md#upgrade-from-v230).
 
 - Install shared platform tools: use [`../README.md`](../README.md).
 - Generate a purpose-specific SSH keypair: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
+- Generate stable protected PKI approval and response keys: use [`ssh-identity-helper.md`](./ssh-identity-helper.md#pki-operator-keys).
 - Create a cloud-init public key for `platform-infra`: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Decide where real SSH configs live: use [`ssh-identity-helper.md`](./ssh-identity-helper.md).
 - Collect VM rebuild facts: use [`platform-vm-env-collect.md`](./platform-vm-env-collect.md).
 - Collect PKI runtime and installation evidence: use [`platform-runtime-evidence.md`](./platform-runtime-evidence.md).
 - Create the outside-Git local security-sensitive namespace: use [`platform-config-init.md`](./platform-config-init.md).
 - Create internal TLS certificates: use [`pki-openssl.md`](./pki-openssl.md).
+- Set up the canonical one-workstation PKI paths: use [`pki-openssl.md`](./pki-openssl.md#canonical-one-workstation-layout).
 - Approve and sign an exact removable-media CSR directory: use [`pki-openssl.md`](./pki-openssl.md#offline-csr-approval-and-signing).
 - Initialize removable-media custody and staging directories: use [`pki-offline-workspace.md`](./pki-offline-workspace.md).
 - Publish or resolve an exact certificate-only CSR export: use [`pki-openssl.md`](./pki-openssl.md#immutable-certificate-only-export).

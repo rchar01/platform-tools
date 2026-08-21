@@ -23,6 +23,18 @@ The initializer creates only the major namespaces and its README. Concrete
 subdirectories and files are owned by the consuming project, helper, or explicit
 workflow.
 
+The canonical PKI-related roots use the same configuration home but do not all
+belong to this initializer:
+
+```bash
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+PLATFORM_INFRASTRUCTURE_ROOT="$CONFIG_HOME/platform-infrastructure"
+AUTHORITATIVE_PKI_ROOT="$PLATFORM_INFRASTRUCTURE_ROOT/pki"
+PKI_EXCHANGE_ROOT="$PLATFORM_INFRASTRUCTURE_ROOT/pki-exchange"
+OFFLINE_PKI_ROOT="$CONFIG_HOME/platform-pki-offline"
+PKI_KEY_ROOT="$CONFIG_HOME/platform-pki-keys"
+```
+
 ## Install
 
 Clone the canonical `platform-tools` repository and install maintained tools into `~/.local/bin`:
@@ -82,7 +94,22 @@ Existing `README.md` is not overwritten and is chmodded to `600`. Existing names
 | `infra/` | Infrastructure bootstrap secrets, especially Proxmox/OpenTofu token material used by `platform-infra` and `platform-proxmox-token-init`. |
 | `config/` | Ansible and service secrets consumed by `platform-config`. |
 | `pki/` | CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers. |
+| `pki-exchange/` | Workflow-owned controller and transport workspace sibling; not created by `platform-config-init`. |
 | `config/<project-or-service>/...` | The consuming project or service that knows the concrete secret file semantics. |
+
+The generation-specific offline workspace is external at
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-offline/<exact-protocol-service>`.
+Stable operator signing keys are also external at
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-keys/<trust-domain>/`. For
+example, service `registry-dev-01` uses offline workspace `registry-dev-01` but
+stable trust-domain directory `registry-dev`.
+
+`pki/` contains current authoritative state. `pki-exchange/` contains current
+workflow-owned exchange state and retained workflow history. Material removed
+from current use for investigation must be quarantined in a separate owner-only
+path outside both trees; do not mix quarantine into current state merely for
+path convenience. `platform-config-init` creates none of `pki-exchange/`, the
+external offline and key roots, or a quarantine tree.
 
 Examples of project-owned paths include:
 
@@ -96,6 +123,11 @@ Examples of project-owned paths include:
 ```
 
 `platform-config-init` intentionally does not create those concrete files. Empty placeholder secrets can accidentally satisfy file-exists checks while still being invalid.
+
+It also does not generate PKI operator keys or initialize offline workspaces.
+Use `platform-ssh-init` once per explicit protected key without
+`--empty-passphrase`, and use `platform-pki offline-workspace init` for only the
+generation-specific workspace skeleton and README.
 
 ## Proxmox/OpenTofu Example
 

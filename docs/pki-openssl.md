@@ -6,10 +6,11 @@ only `platform-pki`; legacy v2 alias executables are not part of the current
 command surface. See the exact manual cleanup procedure in the
 [upgrade section](../README.md#upgrade-from-v230).
 
-Generated CA keys, service keys, CSRs, issued certificates, CA database files, exports, and backups live outside Git under:
+Generated CA keys, service keys, CSRs, issued certificates, CA database files,
+exports, and backups live outside Git under the authoritative default:
 
 ```text
-~/.config/platform-infrastructure/pki/
+${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/pki/
 ```
 
 ## Responsibility Split
@@ -18,9 +19,67 @@ Generated CA keys, service keys, CSRs, issued certificates, CA database files, e
 | --- | --- |
 | `platform-tools` | Reusable PKI helper scripts, templates, and documentation. |
 | `platform-private` | Private environment-specific references and operator config; no raw private keys. |
-| `~/.config/platform-infrastructure/pki/` | Real CA state, service keys, issued certificates, CSRs, exports, and backups. |
+| `${XDG_CONFIG_HOME:-$HOME/.config}/platform-infrastructure/pki/` | Real CA state, service keys, issued certificates, CSRs, exports, and backups. |
 | `platform-config` | Ansible deployment of certs/keys, CA trust, permissions, and service reloads. |
 | Monitoring | Live endpoint expiry checks and alerts. |
+
+## Canonical One-Workstation Layout
+
+Use these path conventions when one reviewed workstation performs the online,
+approval, and signing roles:
+
+```bash
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+PKI_DIR="$CONFIG_HOME/platform-infrastructure/pki"
+PROTOCOL_SERVICE=registry-dev-01
+TRUST_DOMAIN=registry-dev
+OFFLINE_ROOT="$CONFIG_HOME/platform-pki-offline"
+OFFLINE_WORKSPACE="$OFFLINE_ROOT/$PROTOCOL_SERVICE"
+PKI_KEY_ROOT="$CONFIG_HOME/platform-pki-keys"
+PKI_KEY_DIR="$PKI_KEY_ROOT/$TRUST_DOMAIN"
+APPROVAL_KEY="$PKI_KEY_DIR/offline-approver"
+RESPONSE_KEY="$PKI_KEY_DIR/offline-response"
+```
+
+The authoritative PKI default is `$PKI_DIR`. The offline workspace is named for
+the exact protocol service, so this example uses `registry-dev-01`. Operator
+approval and response keys are instead grouped by the stable `registry-dev`
+trust domain. This distinction lets node-specific services change without making
+key selection implicit.
+
+The `platform-pki-keys` root and each trust-domain directory are mode `0700`.
+Private keys are mode `0600`; their `.pub` files are mode `0644`. Generate each
+dedicated key explicitly with `platform-ssh-init` and do not pass
+`--empty-passphrase`:
+
+```bash
+install -d -m 0700 -- "$PKI_KEY_ROOT" "$PKI_KEY_DIR"
+
+platform-ssh-init \
+  --key-path "$APPROVAL_KEY" \
+  --comment "$TRUST_DOMAIN offline approver"
+
+platform-ssh-init \
+  --key-path "$RESPONSE_KEY" \
+  --comment "$TRUST_DOMAIN offline response"
+```
+
+These external keys are not included in `platform-pki backup`, which protects
+the authoritative PKI tree. Maintain a separate encrypted recovery procedure
+for the key tree; do not store that recovery credential beside the keys or the
+PKI backup. `platform-pki offline-workspace init "$PROTOCOL_SERVICE"` creates
+only the workspace skeleton and README, never keys or trust enrollment.
+
+Signing, recovery, and outcome commands retain explicit `--approval-key`,
+`--response-key`, and `--outcome-key` arguments. No command chooses a key from
+the service or trust-domain name, and package content does not enroll trust;
+install reviewed public trust separately with `platform-pki csr-trust-install`.
+
+The path and signature boundaries remain useful on one workstation, but the
+layout is not an air gap and does not provide an independent machine. A
+workstation compromise has a larger blast radius because authoritative state,
+workspaces, and operator keys may all be reachable. One person using distinct
+role keys must not be described as independent-human approval.
 
 ## Architecture
 
@@ -528,18 +587,23 @@ boundary. Generate the dedicated approval and response Ed25519 keys with
 the trust policy, and install that public trust separately with
 `platform-pki csr-trust-install`. Package content never selects trust.
 
+The commands below use the canonical variables from
+[Canonical One-Workstation Layout](#canonical-one-workstation-layout). The
+workspace initializer must already have created `$OFFLINE_WORKSPACE`; it does
+not populate any of these payload directories.
+
 Approval accepts an untrusted directory containing exactly `tls.csr`, `request`,
 and `request.sig`. It snapshots those bytes into protected local staging,
 authenticates the request and current inventory, displays its review on stderr,
 and no-clobber-publishes the exact five-file protected destination:
 
 ```bash
-platform-pki offline-csr approve external \
+platform-pki offline-csr approve "$PROTOCOL_SERVICE" \
   --operation issue \
   --request-id 0123456789abcdef0123456789abcdef \
-  --input-dir /media/reviewed-request \
-  --approval-key /secure/offline-approval \
-  --output-dir /secure/approved/0123456789abcdef0123456789abcdef
+  --input-dir "$OFFLINE_WORKSPACE/media-in/request/0123456789abcdef0123456789abcdef" \
+  --approval-key "$APPROVAL_KEY" \
+  --output-dir "$OFFLINE_WORKSPACE/work/approved/0123456789abcdef0123456789abcdef"
 ```
 
 `--output-dir` is the exact destination, not a parent from which the command
@@ -559,17 +623,20 @@ trust, predecessor, replay, CA, response, journal, and recovery behavior to the
 authoritative host-local writer:
 
 ```bash
-platform-pki offline-csr sign external \
+platform-pki offline-csr sign "$PROTOCOL_SERVICE" \
   --operation issue \
   --request-id 0123456789abcdef0123456789abcdef \
-  --input-dir /secure/approved/0123456789abcdef0123456789abcdef \
-  --response-key /secure/offline-response \
+  --input-dir "$OFFLINE_WORKSPACE/work/approved/0123456789abcdef0123456789abcdef" \
+  --response-key "$RESPONSE_KEY" \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass
 ```
 
-Both commands require the exact confirmation shown on the TTY unless `--yes` is
-supplied; `--yes` skips only that prompt. Successful stdout is one compact JSON
-object, while reviews, prompts, and diagnostics use stderr. Protected Ed25519
+Both commands show the exact service, request ID, and operation, then use a
+default-deny `Do you want to approve? [y/N]` or
+`Do you want to sign? [y/N]` TTY prompt. Only `y` or `yes`, case-insensitive,
+continues; Enter, EOF, `n`, or any other input cancels. `--yes` skips only that
+prompt. Successful stdout is one compact JSON object, while reviews, prompts,
+and diagnostics use stderr. Protected Ed25519
 keys prompt through the inherited terminal, and passphrases are not placed in
 arguments, the environment, or output. Trust checks, signing, and race-safe key
 rechecks are separate OpenSSH operations, so a protected key can prompt more
@@ -591,23 +658,23 @@ migration use `platform-pki service-issue`; renewal uses
 certificate:
 
 ```bash
-platform-pki service-issue external \
+platform-pki service-issue "$PROTOCOL_SERVICE" \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
   --csr-file ./tls.csr \
   --request-file ./request \
   --request-signature ./request.sig \
   --approval-file ./approval \
   --approval-signature ./approval.sig \
-  --response-key /secure/offline-response
+  --response-key "$RESPONSE_KEY"
 
-platform-pki service-renew external \
+platform-pki service-renew "$PROTOCOL_SERVICE" \
   --intermediate-pass-file /run/secrets/platform-pki-intermediate-pass \
   --csr-file ./tls.csr \
   --request-file ./request \
   --request-signature ./request.sig \
   --approval-file ./approval \
   --approval-signature ./approval.sig \
-  --response-key /secure/offline-response \
+  --response-key "$RESPONSE_KEY" \
   --current-cert-file ./current-tls.crt
 ```
 
@@ -725,7 +792,7 @@ journal:
 ```bash
 platform-pki csr-recover \
   --transaction csr-0123456789abcdef0123456789abcdef \
-  --response-key /secure/offline-response
+  --response-key "$RESPONSE_KEY"
 ```
 
 Pre-commit recovery restores exact original CA database state, removes only
@@ -854,8 +921,10 @@ live-state discovery.
 
 `finalize` and `abandon` additionally require the exact artifact-manifest digest
 and canonical deployment evidence plus its detached schema-2 deployer
-signature. Unless `--yes` is used, a TTY must confirm the exact action, service,
-and request ID. Evidence binds the request, response, response signature,
+signature. Unless `--yes` is used, the command shows the exact service and
+request ID, then asks `Do you want to finalize? [y/N]` or
+`Do you want to abandon? [y/N]`. Only `y` or `yes`, case-insensitive, continues;
+all other input cancels. Evidence binds the request, response, response signature,
 candidate, export, canonical 64-lowercase-hex nonce, certificate, certificate
 SPKI, chain, full chain, inventory
 validation boundary, target, action, result, and deployment principal. Its
@@ -942,9 +1011,9 @@ Only after `csr-candidate finalize` or `csr-candidate abandon` has published a
 fully authenticated immutable terminal outcome, publish its host-local export:
 
 ```bash
-platform-pki csr-outcome publish platform-example \
+platform-pki csr-outcome publish "$PROTOCOL_SERVICE" \
   --request-id 0123456789abcdef0123456789abcdef \
-  --outcome-key /absolute/path/to/response-signing-key
+  --outcome-key "$RESPONSE_KEY"
 ```
 
 Pending candidates and all recovery-required state are rejected. Publication

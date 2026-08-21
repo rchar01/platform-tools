@@ -2,7 +2,25 @@
 
 This file gives a short, release-oriented view of what changed between versions.
 
-## Unreleased
+## v3.0.3 - 2026-08-21
+
+- Simplified human confirmation for offline CSR approval/signing and candidate
+  finalization/abandonment. Commands now display the exact coordinates and use a
+  default-deny `[y/N]` prompt instead of requiring the full action phrase.
+- Documented the canonical one-workstation PKI layout: exact-service
+  offline workspaces, stable external approval/response key paths, explicit key
+  selection and trust enrollment, separate encrypted key recovery, and the
+  absence of air-gap or independent-human guarantees. The generated
+  `platform-config-init` README source now distinguishes current authoritative
+  state from workflow-owned exchange, external workspace/key, and quarantine
+  paths while continuing to create only `infra/`, `config/`, and `pki/`.
+- Documented encrypted operator-key backup and fail-closed recovery for missing
+  public keys, recoverable private keys, and irrecoverable replacement. Current
+  examples use node-specific `registry-dev-01` protocol custody while retaining
+  the stable `registry-dev` operator trust domain.
+- Fixed host-local signing when certificate `notBefore` advances past the
+  original signing-journal timestamp. The response, retained journal, and
+  candidate now bind one certificate-valid creation epoch.
 
 ## v3.0.2 - 2026-08-20
 

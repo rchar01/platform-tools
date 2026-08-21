@@ -160,6 +160,98 @@ def prepare(workspace: CsrWorkspace) -> tuple[Path, str]:
     return artifact, digest(artifact / "artifact")
 
 
+def interactive_candidate_arguments(
+    workspace: CsrWorkspace,
+    action: str,
+    manifest_digest: str,
+    evidence: Path,
+    signature: Path,
+) -> list[object]:
+    arguments = candidate_arguments(
+        workspace,
+        action,
+        manifest_digest,
+        evidence,
+        signature,
+    )
+    arguments.remove("--yes")
+    return arguments
+
+
+@pytest.mark.parametrize(
+    ("action", "evidence_result", "answer"),
+    (("finalize", "activated", "y\n"), ("abandon", "not-activated", "YES\n")),
+)
+def test_candidate_decision_uses_default_deny_confirmation(
+    csr_workspace: CsrWorkspace,
+    action: str,
+    evidence_result: str,
+    answer: str,
+) -> None:
+    artifact, manifest_digest = prepare(csr_workspace)
+    evidence, signature = write_evidence(
+        csr_workspace,
+        artifact,
+        action=action,
+        result=evidence_result,
+    )
+
+    result = csr_workspace.runner(
+        interactive_candidate_arguments(
+            csr_workspace,
+            action,
+            manifest_digest,
+            evidence,
+            signature,
+        ),
+        env=csr_workspace.env,
+        input=answer,
+        pty_mode="canonical",
+        controlling_terminal=True,
+        timeout=120,
+    )
+
+    assert_result(result, 0)
+    assert f"Confirmation for external {REQUEST_ID}" in result.stderr
+    assert f"Do you want to {action}? [y/N] " in result.stderr
+
+
+@pytest.mark.parametrize("action", ("finalize", "abandon"))
+def test_candidate_decision_confirmation_defaults_to_no_before_state_access(
+    csr_workspace: CsrWorkspace,
+    action: str,
+) -> None:
+    before = tree_snapshot(csr_workspace.pki)
+    result = csr_workspace.runner(
+        [
+            *CANDIDATE_COMMAND,
+            action,
+            "external",
+            "--request-id",
+            REQUEST_ID,
+            "--artifact-manifest-sha256",
+            "a" * 64,
+            "--evidence-file",
+            csr_workspace.namespace.parent / "missing-evidence",
+            "--evidence-signature",
+            csr_workspace.namespace.parent / "missing-signature",
+            "--namespace",
+            csr_workspace.namespace,
+        ],
+        env=csr_workspace.env,
+        input="\n",
+        pty_mode="canonical",
+        controlling_terminal=True,
+        timeout=120,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert f"Do you want to {action}? [y/N] " in result.stderr
+    assert "[ERROR] Confirmation declined" in result.stderr
+    assert tree_snapshot(csr_workspace.pki) == before
+
+
 def _normalize_case_root(root: Path, value: str) -> str:
     return value.replace(os.fspath(root), "<case>")
 

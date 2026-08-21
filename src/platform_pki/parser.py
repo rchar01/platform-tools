@@ -1097,12 +1097,25 @@ _ROUTE_FOOTERS: dict[tuple[str, ...], str] = {
     ("offline-csr", "approve"): (
         "Authenticates an exact three-file request snapshot, requires explicit "
         "review, and no-clobber-publishes one protected five-file approval "
-        "directory without mutating CA, replay, candidate, or target state."
+        "directory without mutating CA, replay, candidate, or target state. "
+        "Interactive approval uses a default-deny [y/N] prompt; --yes skips "
+        "only that prompt."
     ),
     ("offline-csr", "sign"): (
         "Authenticates an exact five-file approval snapshot and delegates every "
         "signing mutation to the host-local writer. Recovery remains exclusively "
-        "through platform-pki csr-recover."
+        "through platform-pki csr-recover. Interactive signing uses a "
+        "default-deny [y/N] prompt; --yes skips only that prompt."
+    ),
+    ("csr-candidate", "finalize"): (
+        "Records authenticated activation evidence as finalized historical state. "
+        "Interactive finalization uses a default-deny [y/N] prompt; --yes skips "
+        "only that prompt."
+    ),
+    ("csr-candidate", "abandon"): (
+        "Records authenticated non-activation evidence as abandoned historical "
+        "state. Interactive abandonment uses a default-deny [y/N] prompt; --yes "
+        "skips only that prompt."
     ),
     ("offline-workspace", "init"): (
         "Creates only an owner-only custody and staging directory skeleton. "

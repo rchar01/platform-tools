@@ -1,11 +1,14 @@
 # Offline PKI Workspace
 
 `platform-pki offline-workspace init` creates an owner-only, outside-Git
-custody and staging skeleton for one service:
+custody and staging skeleton for one exact protocol service:
 
 ```bash
-platform-pki offline-workspace init registry-dev
-platform-pki offline-workspace init registry-dev --root /absolute/offline/root
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+OFFLINE_ROOT="$CONFIG_HOME/platform-pki-offline"
+PROTOCOL_SERVICE=registry-dev-01
+
+platform-pki offline-workspace init "$PROTOCOL_SERVICE"
 ```
 
 The default root is
@@ -14,6 +17,22 @@ absolute, canonical, non-root path. When the configuration home is known, the
 root must be component-wise disjoint from the default authoritative
 `<config-home>/platform-infrastructure/pki` tree: it may not equal, contain, or
 be contained by that tree. The service workspace is `<root>/<service>`.
+Therefore the example creates
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-offline/registry-dev-01`.
+
+`registry-dev-01` is the exact node-specific protocol service and
+workspace name. The stable trust domain is `registry-dev`; dedicated approval
+and response keys remain under the stable trust-domain path
+`${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-keys/registry-dev/` so a new
+protocol generation does not silently select or create new operator keys.
+
+For a reviewed non-default location, override the root explicitly:
+
+```bash
+# Explicit custom-root example; this is not the canonical workstation default.
+platform-pki offline-workspace init "$PROTOCOL_SERVICE" \
+  --root /absolute/offline/root
+```
 
 ## Created Tree
 
@@ -38,7 +57,9 @@ Directories created by the command are current-user-owned mode `0700`; the
 README is mode `0600`. The command never creates private keys, public keys,
 secret placeholders, transactions, protocol files, or symlinks. Approval and
 response key paths remain explicit operator inputs to the commands that use
-them and are not part of this tree.
+them and are not part of this tree. In the separate key hierarchy, the
+`platform-pki-keys` root and each trust-domain directory are mode `0700`,
+private keys are mode `0600`, and public keys are mode `0644`.
 
 The directories have these intended roles:
 
@@ -87,4 +108,15 @@ Without `--root`, one of those environment variables is required.
 
 Initialization does not authorize approval, signing, transport, CA mutation,
 deployment, finalization, or recovery. Operators still supply exact reviewed
-inputs and key paths to each separate command.
+inputs and key paths to each separate command. `offline-workspace init` creates
+only this skeleton and README; it does not generate or enroll trust keys.
+
+## One-Workstation Tradeoff
+
+On a one-workstation deployment, the authoritative PKI tree, offline workspace,
+and external operator-key tree remain logically separate. Exact paths, explicit
+key flags, protocol signatures, digest pins, and approval/signing stages still
+apply. This layout does not provide an air gap or an independent machine, and a
+compromise of the workstation has a larger blast radius because it may reach
+all three trees. Separate keys operated by one person are role separation, not
+independent-human approval.

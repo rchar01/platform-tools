@@ -739,15 +739,20 @@ PKI_RUNTIME_OPTION_RELATIONSHIPS = (
         "Offline CSR renewal requires --current-cert-file",
     ),
     RuntimeOptionRelationship(
+        ("offline-csr", "approve"), "confirmation", "--yes is absent",
+        ("--operation", "--request-id", "--yes"), "src/platform_pki/offline_csr.py",
+        "confirm_action(",
+    ),
+    RuntimeOptionRelationship(
         ("offline-csr", "sign"), "confirmation", "--yes is absent",
         ("--operation", "--request-id", "--yes"), "src/platform_pki/offline_csr.py",
-        'f"sign {operation} {service} {request_id}"',
+        "confirm_action(",
     ),
     *(
         RuntimeOptionRelationship(
             ("csr-candidate", action), "confirmation", "--yes is absent",
             ("--yes", "--request-id"), "src/platform_pki/csr_candidate.py",
-            'sys.stdin.readline().rstrip("\\n") != f"{action} {service_name} {request_id}"',
+            "confirm_action(",
         )
         for action in ("finalize", "abandon")
     ),

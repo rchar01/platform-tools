@@ -1001,8 +1001,8 @@ exec "$REAL_OPENSSL" "$@"
             / f"state/csr/responses/external/{REQUEST_ID}/response"
         ).read_text(encoding="ascii").splitlines()
     )
-    assert int(response["not_before_epoch"]) > int(candidate["created_epoch"])
     assert response["created_epoch"] == response["not_before_epoch"]
+    assert candidate["created_epoch"] == response["created_epoch"]
 
 
 def test_python_writer_rejects_request_and_nonce_replay_retries(

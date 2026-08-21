@@ -52,9 +52,17 @@ Shared namespaces:
 
 - `infra/`: OpenTofu and infrastructure bootstrap material, for example tokens and reviewed local CA files.
 - `config/`: Ansible and service inputs, for example keys, kubeconfigs, passwords, and pinned endpoint records.
-- `pki/`: CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers.
+- `pki/`: current authoritative CA state, issued certificates, service private keys, exports, and backups managed by PKI helpers.
 
-This initializer creates only the shared root namespaces and this README. Each downstream platform project, helper, or explicit workflow owns its concrete subdirectories and files.
+This initializer creates only `infra/`, `config/`, `pki/`, and this README. Each downstream platform project, helper, or explicit workflow owns its concrete subdirectories and files.
+
+Related PKI paths are intentionally not created here:
+
+- `pki-exchange/`: workflow-owned controller and transport workspace beside `pki/`.
+- `${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-offline/<exact-protocol-service>/`: generation-specific offline custody and staging workspaces.
+- `${XDG_CONFIG_HOME:-$HOME/.config}/platform-pki-keys/<trust-domain>/`: stable approval and response operator keys external to authoritative PKI backups.
+
+Keep `pki/` for current authoritative state. Keep `pki-exchange/` for current workflow state and retained exchange history. Quarantine retired, suspect, or unmanaged material in a separate owner-only path outside both trees; do not mix quarantine with current state.
 
 Common environment variables:
 

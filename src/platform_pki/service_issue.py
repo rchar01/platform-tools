@@ -3811,6 +3811,10 @@ def _run_host_local_csr(
                     fullchain_identity = _write_new_file(
                         f"{signing}/fullchain.crt", fullchain, 0o600
                     )
+                    response_created_epoch = max(
+                        int(control.values["created_epoch"]), not_before
+                    )
+                    control.values["created_epoch"] = str(response_created_epoch)
                     response = serialize_csr_response(
                         {
                             "schema": "1",
@@ -3834,9 +3838,7 @@ def _run_host_local_csr(
                             "not_after_epoch": str(not_after),
                             "candidate_state": "pending",
                             "response_principal": trust.response_principal,
-                            "created_epoch": str(
-                                max(int(control.values["created_epoch"]), not_before)
-                            ),
+                            "created_epoch": str(response_created_epoch),
                         }
                     )
                     response_identity = _write_new_file(

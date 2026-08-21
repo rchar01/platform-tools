@@ -302,15 +302,42 @@ def test_approval_confirmation_uses_real_tty_and_keeps_stdout_machine_only(
         request,
         output,
         yes=False,
-        input=f"approve external {REQUEST_ID}\n",
+        input="YES\n",
         pty=True,
     )
 
     assert_result(result, 0)
     assert json.loads(result.stdout)["status"] == "created"
     assert "Authenticated offline CSR approval review:" in result.stderr
-    assert f"Confirmation required: type 'approve external {REQUEST_ID}'" in result.stderr
+    assert f"Confirmation for external {REQUEST_ID}" in result.stderr
+    assert "Operation: issue" in result.stderr
+    assert "Do you want to approve? [y/N] " in result.stderr
     assert "Authenticated" not in result.stdout
+
+
+@pytest.mark.parametrize("answer", ("\n", "n\n", "approve\n"))
+def test_approval_confirmation_defaults_to_no_without_publication(
+    offline_workspace: CsrWorkspace,
+    answer: str,
+) -> None:
+    request = request_directory(offline_workspace)
+    output = offline_workspace.namespace.parent / "approved"
+
+    result = approve(
+        offline_workspace,
+        request,
+        output,
+        yes=False,
+        input=answer,
+        pty=True,
+    )
+
+    assert result.status == 1
+    assert result.stdout == ""
+    assert "Do you want to approve? [y/N] " in result.stderr
+    assert "[ERROR] Confirmation declined" in result.stderr
+    assert not output.exists()
+    assert not (offline_workspace.pki / "state/csr").exists()
 
 
 def test_approve_supports_protected_key_without_polluting_stdout(
@@ -499,7 +526,7 @@ def test_sign_rechecks_sources_and_absences_after_interactive_confirmation(
         controlling_terminal=True,
         timeout=120,
     )
-    expected = f"Confirmation required: type 'sign issue external {REQUEST_ID}'"
+    expected = "Do you want to sign? [y/N] "
     deadline = time.monotonic() + 30
     while expected not in process.observe().stderr:
         observation = process.observe()
@@ -528,7 +555,7 @@ def test_sign_rechecks_sources_and_absences_after_interactive_confirmation(
         replay.chmod(0o600)
     else:
         transaction.mkdir(mode=0o700, parents=True)
-    process.write(f"sign issue external {REQUEST_ID}\n")
+    process.write("y\n")
     result = process.wait()
 
     assert result.status == 1
@@ -573,13 +600,30 @@ def test_sign_fails_closed_on_source_or_trust_change_after_confirmation(
         else offline_workspace.pki
         / "inventory/csr-trust/responses.allowed_signers"
     )
-    confirm = offline_csr_module._confirm
+    confirm = offline_csr_module.confirm_action
 
-    def confirm_then_mutate(expected: str, yes: bool) -> None:
-        confirm(expected, yes)
+    def confirm_then_mutate(
+        action: str,
+        service: str,
+        request_id: str,
+        *,
+        operation: str | None = None,
+        yes: bool = False,
+    ) -> None:
+        confirm(
+            action,
+            service,
+            request_id,
+            operation=operation,
+            yes=yes,
+        )
         changed.write_bytes(changed.read_bytes() + b"\n")
 
-    monkeypatch.setattr(offline_csr_module, "_confirm", confirm_then_mutate)
+    monkeypatch.setattr(
+        offline_csr_module,
+        "confirm_action",
+        confirm_then_mutate,
+    )
     arguments = parse_route(
         ("offline-csr", "sign"),
         (
